@@ -96,8 +96,8 @@ export function readSecret(
           if (code >= 0x40 && code <= 0x7e) {
             continue; // final byte ends the sequence
           }
-          // ECMA-48: a C0 control (or anything else) aborts the sequence and is
-          // handled normally, so Enter / Ctrl-C always work.
+          // A C0 control (or anything else) aborts the sequence and is handled
+          // normally, so Enter and Ctrl-C always work at a key prompt.
         }
         if (escapeState === "ss3") {
           escapeState = "none";

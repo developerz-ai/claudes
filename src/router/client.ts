@@ -149,6 +149,14 @@ function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterE
  * class name — so no underlying message text can reach the user.
  */
 function diagnostic(err: unknown): string {
+  try {
+    return classify(err);
+  } catch {
+    return errorName(err); // an exotic object must not escape the RouterError contract
+  }
+}
+
+function classify(err: unknown): string {
   if (err instanceof Error) {
     // An errno wins: a DNS or TLS failure can mention "redirect" in its text
     // (a hostname, a certificate SAN), and must still be reported by code.
