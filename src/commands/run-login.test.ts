@@ -205,7 +205,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.code).toBe(1);
     // The prompt was already written (newline-free) before the stream closed;
     // the closing message itself is a whole line.
-    expect(driven.errCalls).toEqual(["Router key: ", "claudes login: stdin closed\n"]);
+    expect(driven.errCalls).toEqual(["Router key: ", "\n", "claudes login: stdin closed\n"]);
     expect(driven.out).toBe("");
     expect(rawModes).toEqual([true, false]);
     expect(existsSync(configPath())).toBe(false);
