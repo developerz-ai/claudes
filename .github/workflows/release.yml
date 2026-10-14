@@ -1,0 +1,232 @@
+name: Release
+
+# ---------------------------------------------------------------------------
+# npm trusted publishing (OIDC) settings this workflow depends on.
+#
+# On npmjs.com, the @developerz.ai/claudes package must have a trusted
+# publisher configured with exactly:
+#   organization: developerz-ai
+#   repository:   claudes
+#   workflow:     release.yml
+#   environment:  npm
+#   allowed:      npm publish (configs created after 2026-09-03 default to
+#                 `npm stage publish` only, which refuses this workflow)
+# npm calls the environment field optional, but it is MANDATORY here: left
+# blank, npm accepts a token from ANY run of release.yml on ANY ref, and the
+# v* restriction on the GitHub "npm" environment protects nothing. A config
+# must complete its first successful publish within 2 days or it expires.
+#   npm trust github @developerz.ai/claudes --file release.yml \
+#     --repo developerz-ai/claudes --env npm --allow-publish
+#
+# On GitHub, the "npm" environment (Settings -> Environments) must be
+# restricted to v* tags so that only published releases can enter the
+# publish job.
+# ---------------------------------------------------------------------------
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # dry-run only; a dispatch can never publish for real
+
+# One group per event type, so a dispatched dry run can never displace a
+# release (and vice versa). Nothing is cancelled mid-run, but a newer
+# release cut inside the same publish window still replaces a pending
+# (queued, not yet started) release run.
+concurrency:
+  group: release-${{ github.event_name }}
+  cancel-in-progress: false
+
+# The npm that publishes (and that the dry run rehearses): one definition.
+env:
+  NPM_VERSION: 12.2.0
+  NPM_SHA512: ZsJjKpTnlmSXOLLXiU1xDCzC4Wlok4IwZmh/aw2KUuXytU7q6qMv/cUT7MoeSf95Slwuw/lRXYefGzGCspHPNQ==
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # no id-token: this job never talks to npm
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history: fetches all branches and tags, so origin/main exists
+          # for the ancestry guard below.
+          fetch-depth: 0
+      - name: Pre-releases are not published
+        if: github.event_name == 'release' && github.event.release.prerelease
+        run: |
+          echo "::error title=Pre-release refused::this workflow publishes stable releases only; a GitHub pre-release would move the npm 'latest' tag. Delete this release (the tag stays) and create a new, non-pre-release release from the same tag. Editing this release in place or re-running this run will not work: neither fires a new 'published' event." >&2
+          exit 1
+      - name: Release tag must equal v + package.json version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          expected="v$version"
+          if [ "$RELEASE_TAG" != "$expected" ]; then
+            echo "::error title=Tag/version mismatch::release tag '$RELEASE_TAG' does not match package.json version '$version' (expected tag '$expected'). Bump the version in package.json and re-cut the release." >&2
+            exit 1
+          fi
+      - name: Release commit must already be on main
+        if: github.event_name == 'release'
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error title=Release not on main::commit $GITHUB_SHA is not an ancestor of origin/main. A release must point at a commit already merged to main." >&2
+            exit 1
+          fi
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.3
+          # This job builds the artifact that gets provenance-signed: never
+          # restore a Bun binary from a cache another workflow could have written.
+          no-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # No registry-url: nothing in this job authenticates to npm.
+      - run: bun install --frozen-lockfile
+      - run: bin/check
+      - name: Pack and verify tarball
+        id: pack
+        run: |
+          tgz="$(npm pack | tail -n 1)"
+          expected="$(printf '%s\n' package/LICENSE package/README.md package/dist/claudes.js package/package.json | sort)"
+          actual="$(tar -tzf "$tgz" | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error title=Unexpected tarball contents::$tgz must contain exactly package/dist/claudes.js, package/package.json, package/README.md and package/LICENSE." >&2
+            echo "expected:" && printf '%s\n' "$expected"
+            echo "actual:" && printf '%s\n' "$actual"
+            exit 1
+          fi
+          echo "tarball=$tgz" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-tarball
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm # GitHub env restricted to v* tags; also the OIDC environment name on npmjs.com
+    permissions:
+      id-token: write # the only grant: OIDC trusted publishing; no NPM_TOKEN anywhere
+    env:
+      TARBALL: ${{ needs.build.outputs.tarball }}
+    steps:
+      # No checkout, no bun, no project dependencies: this job only ships
+      # the tarball the build job verified.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # No registry-url: auth comes from OIDC trusted publishing.
+      # Trusted publishing (OIDC) needs npm >= 11.5.1. Install a pinned,
+      # digest-verified npm rather than whatever node ships. Pin 12.2.0 to be
+      # clear of the packed-bundle sigstore regression, where `npm publish
+      # --provenance` died on "Cannot find module 'sigstore'":
+      # https://github.com/npm/cli/issues/9722, fixed by
+      # https://github.com/npm/cli/pull/9740 (merged 2026-07-10). Only npm@12.0.0
+      # (2026-07-08) shipped broken; from 12.0.1 onward the tarball bundles
+      # node_modules/sigstore again, and in npm@12.2.0 the require.resolve chain
+      # from libnpmpublish through sigstore and @sigstore/* was verified against
+      # the actual packed tarball.
+      - name: Install pinned npm ${{ env.NPM_VERSION }} from a verified tarball
+        run: |
+          curl -fsSLo npm.tgz "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
+          expected="$NPM_SHA512"
+          actual="$(openssl dgst -sha512 -binary npm.tgz | openssl base64 -A)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error title=npm tarball digest mismatch::expected sha512 (base64) $expected but got $actual. Refusing to install an unverified npm." >&2
+            exit 1
+          fi
+          npm install -g ./npm.tgz
+          if [ "$(npm --version)" != "$NPM_VERSION" ]; then
+            echo "::error title=npm version mismatch::installed npm $(npm --version), expected $NPM_VERSION." >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: artifact
+      # Publishing the packed tarball (not the working directory) means
+      # prepublishOnly cannot re-run and nothing outside the verified
+      # artifact reaches the registry.
+      - name: Publish
+        run: npm publish "./artifact/$TARBALL" --access public --provenance --loglevel verbose
+
+  verify:
+    needs: [build, publish]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {} # read-only public registry check; no token of any kind
+    env:
+      TARBALL: ${{ needs.build.outputs.tarball }}
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: artifact
+      # Separate job so "Re-run failed jobs" repeats only this check: the
+      # publish itself is immutable and must never be re-run.
+      - name: Confirm the version is visible on the registry
+        run: |
+          version="$(tar -xzOf "./artifact/$TARBALL" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).version')"
+          for _ in $(seq 1 30); do
+            if [ "$(npm view "@developerz.ai/claudes@$version" version)" = "$version" ]; then
+              echo "visible: @developerz.ai/claudes@$version"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Not yet visible::the publish job succeeded, but @developerz.ai/claudes@$version is not visible on the registry after 5 minutes. This is usually registry propagation lag. Check 'npm view @developerz.ai/claudes versions' manually, and re-run only this verify job. Do NOT re-run publish: the version is immutable." >&2
+          exit 1
+
+  dry-run:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {} # same as publish minus id-token: a dry run can never publish
+    env:
+      TARBALL: ${{ needs.build.outputs.tarball }}
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # No registry-url: a dry run does not authenticate to npm.
+      # Same digest-verified npm install as the publish job; see that job
+      # for why npm 12.2.0 specifically (npm/cli#9722, npm/cli#9740).
+      - name: Install pinned npm ${{ env.NPM_VERSION }} from a verified tarball
+        run: |
+          curl -fsSLo npm.tgz "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
+          expected="$NPM_SHA512"
+          actual="$(openssl dgst -sha512 -binary npm.tgz | openssl base64 -A)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error title=npm tarball digest mismatch::expected sha512 (base64) $expected but got $actual. Refusing to install an unverified npm." >&2
+            exit 1
+          fi
+          npm install -g ./npm.tgz
+          if [ "$(npm --version)" != "$NPM_VERSION" ]; then
+            echo "::error title=npm version mismatch::installed npm $(npm --version), expected $NPM_VERSION." >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: artifact
+      - name: Publish (dry run)
+        run: npm publish "./artifact/$TARBALL" --dry-run --access public --loglevel verbose
