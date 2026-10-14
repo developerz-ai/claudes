@@ -8,6 +8,7 @@ const result = await Bun.build({
   outdir: "dist",
   naming: "claudes.js",
   minify: false,
+  throw: false,
 });
 
 if (!result.success) {

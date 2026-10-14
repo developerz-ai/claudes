@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dispatch } from "./main";
+import { dispatch } from "./dispatch";
 
 describe("dispatch", () => {
   test("--version and -v request the version", () => {
@@ -8,7 +8,7 @@ describe("dispatch", () => {
   });
 
   test("reserved words are claimed only as the first argument", () => {
-    for (const word of ["login", "doctor", "key"]) {
+    for (const word of ["login", "doctor", "key"] as const) {
       expect(dispatch([word])).toEqual({ kind: "reserved", word });
     }
     expect(dispatch(["login", "--version"])).toEqual({ kind: "reserved", word: "login" });
