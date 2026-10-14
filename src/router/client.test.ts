@@ -225,6 +225,26 @@ describe("health", () => {
     }
   });
 
+  test("an exotic thrown value (prototype trap) still becomes a RouterError, key-free", async () => {
+    // A proxy whose getPrototypeOf trap throws makes every `instanceof` check
+    // throw; the diagnostic guard must still produce a RouterError.
+    const failure = new Proxy(new TypeError("fetch failed"), {
+      getPrototypeOf() {
+        throw new Error(`trap exploded ${KEY}`);
+      },
+    });
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      const message = (err as RouterError).message;
+      expect(message).toBe(`could not reach ${BASE}/healthz (Error)`);
+      assertNoKeyFragment(message, KEY);
+    }
+  });
+
   test("a throwing err.cause getter never escapes the diagnostic", async () => {
     const failure = new TypeError("fetch failed");
     Object.defineProperty(failure, "cause", {
