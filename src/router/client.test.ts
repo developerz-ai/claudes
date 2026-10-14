@@ -165,12 +165,10 @@ describe("health", () => {
   });
 
   test("a refused redirect is named, never quoted (Node shape: the cause says it)", async () => {
-    // The shape Node's undici really rejects with: a bare "fetch failed"
-    // TypeError whose cause carries the word "redirect".
+    // The shape Node's undici really rejects with (probed on Node 24): a bare
+    // "fetch failed" TypeError whose code-less cause is exactly "unexpected redirect".
     const { fetchImpl } = stubFetch({
-      failWith: new TypeError("fetch failed", {
-        cause: new Error(`unexpected redirect to https://evil.example.test/${KEY}`),
-      }),
+      failWith: new TypeError("fetch failed", { cause: new Error("unexpected redirect") }),
     });
     try {
       await health(BASE, fetchImpl);
@@ -179,9 +177,38 @@ describe("health", () => {
       const message = (err as RouterError).message;
       expect(message).toBe(`could not reach ${BASE}/healthz (refused a redirect)`);
       expect(message).not.toContain("unexpected redirect");
-      expect(message).not.toContain("evil.example.test");
       assertNoKeyFragment(message, KEY);
     }
+  });
+
+  test("an errno wins over the word 'redirect' in a DNS or TLS cause (no misdiagnosis)", async () => {
+    // A hostname or certificate SAN can contain "redirect"; the real code must still show.
+    const cases: Array<[string, string]> = [
+      ["getaddrinfo ENOTFOUND redirect.example.test", "ENOTFOUND"],
+      [
+        "Hostname/IP does not match certificate's altnames: DNS:redirect.test",
+        "ERR_TLS_CERT_ALTNAME_INVALID",
+      ],
+    ];
+    for (const [text, code] of cases) {
+      const failure = new TypeError("fetch failed", {
+        cause: Object.assign(new Error(text), { code }),
+      });
+      const { fetchImpl } = stubFetch({ failWith: failure });
+      await expect(health(BASE, fetchImpl)).rejects.toThrow(
+        `could not reach ${BASE}/healthz (${code})`,
+      );
+    }
+  });
+
+  test("a code-less cause that merely mentions redirect is not a refused redirect", async () => {
+    const failure = new TypeError("fetch failed", {
+      cause: new Error("something about redirect.example"),
+    });
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    await expect(health(BASE, fetchImpl)).rejects.toThrow(
+      `could not reach ${BASE}/healthz (TypeError)`,
+    );
   });
 
   test("a refused redirect is named, never quoted (Bun shape: the message says it)", async () => {

@@ -65,7 +65,7 @@ export function readSecret(
     let line = "";
     let lineBytes = 0;
     /** Terminal-escape sequence state: nothing pending, ESC seen, inside a CSI sequence. */
-    let escapeState: "none" | "esc" | "csi" = "none";
+    let escapeState: "none" | "esc" | "csi" | "ss3" = "none";
     let settled = false;
     const finish = (settle: () => void) => {
       if (settled) {
@@ -89,10 +89,21 @@ export function readSecret(
         // state lives outside the loop so a sequence split across chunks is
         // swallowed just as completely as one delivered whole.
         if (escapeState === "csi") {
-          if (code >= 0x40 && code <= 0x7e) {
-            escapeState = "none";
+          if (code >= 0x20 && code <= 0x3f) {
+            continue; // parameter / intermediate byte
           }
-          continue;
+          escapeState = "none";
+          if (code >= 0x40 && code <= 0x7e) {
+            continue; // final byte ends the sequence
+          }
+          // ECMA-48: a C0 control (or anything else) aborts the sequence and is
+          // handled normally, so Enter / Ctrl-C always work.
+        }
+        if (escapeState === "ss3") {
+          escapeState = "none";
+          if (code >= 0x20) {
+            continue; // ESC O <byte>: application-mode arrows, F1-F4
+          }
         }
         if (code === 0x1b) {
           escapeState = "esc";
@@ -102,6 +113,10 @@ export function readSecret(
           escapeState = "none";
           if (code === 0x5b) {
             escapeState = "csi";
+            continue;
+          }
+          if (code === 0x4f) {
+            escapeState = "ss3";
             continue;
           }
           // A lone ESC prefixes a two-byte escape; drop the ESC and treat the
@@ -116,6 +131,7 @@ export function readSecret(
         if (code === 0x04) {
           // Ctrl-D: EOF on an empty line, submit on a typed one.
           if (line === "") {
+            write("\n");
             finish(() => reject(new StdinClosedError()));
             return;
           }
@@ -149,6 +165,7 @@ export function readSecret(
         }
         const size = Buffer.byteLength(char, "utf8");
         if (lineBytes + size > MAX_INPUT_BYTES) {
+          write("\n");
           finish(() => reject(new InputTooLongError()));
           return;
         }
@@ -156,7 +173,10 @@ export function readSecret(
         line += char;
       }
     };
-    const onClose = () => finish(() => reject(new StdinClosedError()));
+    const onClose = () => {
+      write("\n");
+      finish(() => reject(new StdinClosedError()));
+    };
     input.setRawMode(true);
     write(prompt);
     input.on("data", onData);

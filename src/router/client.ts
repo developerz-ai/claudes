@@ -44,15 +44,15 @@ const ERROR_NAME_PATTERN = /^[A-Z][A-Za-z0-9_]{0,63}$/;
  * not a string, or produced by a throwing getter is never printed.
  */
 export function errorName(err: unknown): string {
-  if (err instanceof Error) {
-    try {
+  try {
+    if (err instanceof Error) {
       const name = err.name;
       if (typeof name === "string" && ERROR_NAME_PATTERN.test(name)) {
         return name;
       }
-    } catch {
-      // a throwing name getter is not printable either
     }
+  } catch {
+    // an exotic object (throwing getter or prototype trap) is not printable
   }
   return "Error";
 }
@@ -150,25 +150,30 @@ function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterE
  */
 function diagnostic(err: unknown): string {
   if (err instanceof Error) {
-    // fetch(…, {redirect: "error"}) rejects with a TypeError naming the
-    // redirect. Bun puts the word in err.message; Node buries it in
-    // err.cause.message ("fetch failed" outside). Only the match is used —
-    // the cause text itself is never printed.
-    if (err instanceof TypeError && saysRedirect(err)) {
-      return "refused a redirect";
-    }
+    // An errno wins: a DNS or TLS failure can mention "redirect" in its text
+    // (a hostname, a certificate SAN), and must still be reported by code.
     const code = causeCodeOf(err);
     if (code !== undefined) {
       return code;
+    }
+    // fetch(…, {redirect: "error"}): Node rejects with TypeError("fetch
+    // failed") whose code-less cause is exactly "unexpected redirect"; Bun
+    // puts a fixed phrase at the start of err.message. Matched exactly, never
+    // printed.
+    if (err instanceof TypeError && saysRedirect(err)) {
+      return "refused a redirect";
     }
   }
   return errorName(err);
 }
 
-/** True when the error or its cause names a redirect; never throws. */
+/** True only for the runtimes' exact refused-redirect shapes; never throws. */
 function saysRedirect(err: Error): boolean {
   try {
-    return /redirect/i.test(`${err.message}\n${causeMessageOf(err)}`);
+    if (causeMessageOf(err) === "unexpected redirect") {
+      return true;
+    }
+    return /^(UnexpectedRedirect\b|redirect mode is set to error\b)/.test(err.message);
   } catch {
     return false;
   }

@@ -98,6 +98,35 @@ describe("readSecret (real hidden reader)", () => {
     await expect(secret).resolves.toBe("x");
   });
 
+  test("an unterminated CSI never swallows Ctrl-C (ECMA-48: C0 aborts the sequence)", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    tty.emit(
+      "data",
+      Buffer.concat([
+        Buffer.from("key"),
+        Buffer.from([0x1b]),
+        Buffer.from("["),
+        Buffer.from([0x03]),
+      ]),
+    );
+    await expect(secret).resolves.toBeUndefined();
+  });
+
+  test("an unterminated CSI never swallows Enter", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    tty.emit("data", Buffer.concat([Buffer.from("ab"), Buffer.from([0x1b]), Buffer.from("[\r")]));
+    await expect(secret).resolves.toBe("ab");
+  });
+
+  test("an SS3 sequence (ESC O <byte>, e.g. application-mode arrows) is swallowed whole", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    tty.emit("data", Buffer.concat([Buffer.from([0x1b]), Buffer.from("OA"), Buffer.from("x\r")]));
+    await expect(secret).resolves.toBe("x");
+  });
+
   test("a lone ESC is dropped; the byte after it still types", async () => {
     const tty = new FakeTty();
     const secret = readSecret(asTty(tty), () => {}, "P: ");
