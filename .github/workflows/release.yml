@@ -59,6 +59,11 @@ jobs:
           # Full history: fetches all branches and tags, so origin/main exists
           # for the ancestry guard below.
           fetch-depth: 0
+      - name: Pre-releases are not published
+        if: github.event_name == 'release' && github.event.release.prerelease
+        run: |
+          echo "::error title=Pre-release refused::this workflow publishes stable releases only; a GitHub pre-release would move the npm 'latest' tag. Untick pre-release or publish manually with an explicit --tag." >&2
+          exit 1
       - name: Release tag must equal v + package.json version
         if: github.event_name == 'release'
         env:
@@ -80,6 +85,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.3
+          # This job builds the artifact that gets provenance-signed: never
+          # restore a Bun binary from a cache another workflow could have written.
+          no-cache: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
