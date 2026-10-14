@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+# Never use bunx here: it silently auto-installs the unrelated npm packages
+# "biome" and "tsc". Require the pinned devDependencies instead.
+for tool in biome tsc; do
+  if [ ! -x "node_modules/.bin/$tool" ]; then
+    echo "bin/check: node_modules/.bin/$tool not found — run bun install first" >&2
+    exit 1
+  fi
+done
+
+node_modules/.bin/biome check --error-on-warnings .
+
+node_modules/.bin/tsc --noEmit -p tsconfig.json
+node_modules/.bin/tsc --noEmit -p tsconfig.build.json
+
+bun test
+
+bun scripts/build.ts
+
+# The shipped file must be directly executable, with the exact shebang.
+if [ ! -x dist/claudes.js ]; then
+  echo "bin/check: dist/claudes.js is not executable" >&2
+  exit 1
+fi
+shebang="$(head -n 1 dist/claudes.js)"
+if [ "$shebang" != "#!/usr/bin/env node" ]; then
+  echo "bin/check: dist/claudes.js first line is '$shebang', expected '#!/usr/bin/env node'" >&2
+  exit 1
+fi
+
+# Version must come from package.json; nothing is hardcoded here.
+expected="$(node -p "require('./package.json').version")"
+actual="$(./dist/claudes.js --version)"
+if [ "$actual" != "$expected" ]; then
+  echo "bin/check: ./dist/claudes.js --version printed '$actual', expected '$expected'" >&2
+  exit 1
+fi
+
+for arg in login some-prompt; do
+  rc=0
+  ./dist/claudes.js "$arg" 2>/dev/null || rc=$?
+  if [ "$rc" -ne 64 ]; then
+    echo "bin/check: ./dist/claudes.js $arg exited $rc, expected 64" >&2
+    exit 1
+  fi
+done
