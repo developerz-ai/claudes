@@ -18,8 +18,18 @@ describe("configDir", () => {
     );
   });
 
-  test("throws when neither XDG_CONFIG_HOME nor HOME is set", () => {
-    expect(() => configDir({})).toThrow("neither XDG_CONFIG_HOME nor HOME is set");
+  test("ignores a relative HOME exactly like a relative XDG_CONFIG_HOME", () => {
+    expect(() => configDir({ HOME: "relative/home" })).toThrow();
+    expect(configDir({ XDG_CONFIG_HOME: "/xdg", HOME: "relative/home" })).toBe("/xdg/claudes");
+    expect(() => configDir({ XDG_CONFIG_HOME: "relative", HOME: "relative/home" })).toThrow();
+  });
+
+  test("throws when no absolute base remains", () => {
+    for (const env of [{}, { HOME: "" }, { HOME: "relative" }, { XDG_CONFIG_HOME: "" }]) {
+      expect(() => configDir(env)).toThrow(
+        "cannot find the config directory: set XDG_CONFIG_HOME or HOME to an absolute path",
+      );
+    }
   });
 });
 

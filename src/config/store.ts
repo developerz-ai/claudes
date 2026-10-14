@@ -5,6 +5,7 @@ import {
   constants as fsConstants,
   fstatSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -64,6 +65,13 @@ export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}
   }
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // chmod follows symlinks, so a symlinked config dir would tighten somebody
+  // else's directory; refuse it before touching the mode.
+  if (lstatSync(dir).isSymbolicLink()) {
+    throw new ConfigError(
+      `refusing to write config: ${dir} is a symbolic link — remove it and re-run "claudes login"`,
+    );
+  }
   // mkdir's mode is filtered by the umask, so pin the mode explicitly — also
   // for a directory that already existed.
   chmodSync(dir, 0o700);
@@ -109,15 +117,22 @@ export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}
 
 /**
  * Reads and validates the config at `path`. The file is opened with O_NOFOLLOW
- * and every check runs on the fd's own fstat, so a symlink swap or a chmod
- * between the check and the read cannot slide a different file in. Ownership is
- * checked before permissions: a foreign-owned file is replaced, not chmodded.
+ * (and O_NONBLOCK, so a FIFO at the path cannot hang the open) and every check
+ * runs on the fd's own fstat, so a symlink swap or a chmod between the check
+ * and the read cannot slide a different file in. Ownership is checked before
+ * permissions: a foreign-owned file or directory is replaced, not chmodded.
  */
 export function readConfig(path: string, options: ReadOptions = {}): Config {
   const getuid = options.getuid ?? (() => process.getuid?.());
+  const uid = getuid();
   const dir = dirname(path);
 
   const dirStat = statOrConfigError(dir, path);
+  if (uid !== undefined && dirStat.uid !== uid) {
+    throw new InsecureConfigError(
+      `refusing to read config: directory ${dir} is owned by uid ${dirStat.uid}, not by you (uid ${uid}) — remove it and re-run "claudes login"`,
+    );
+  }
   if ((dirStat.mode & 0o077) !== 0) {
     throw new InsecureConfigError(
       `refusing to read config: directory ${dir} is accessible by group or other users — fix it with: chmod 700 ${dir}`,
@@ -128,14 +143,15 @@ export function readConfig(path: string, options: ReadOptions = {}): Config {
   try {
     const fileStat = fstatSync(fd);
     if (fileStat.isDirectory()) {
-      if ((fileStat.mode & 0o077) !== 0) {
-        throw new InsecureConfigError(
-          `refusing to read config: ${path} is a directory accessible by group or other users — fix it with: chmod 700 ${path}`,
-        );
-      }
-      throw new ConfigError(`config path ${path} is a directory, not a file`);
+      throw new ConfigError(
+        `config path ${path} is a directory, not a file — remove it and re-run "claudes login"`,
+      );
     }
-    const uid = getuid();
+    if (!fileStat.isFile()) {
+      throw new ConfigError(
+        `config path ${path} is not a regular file — remove it and re-run "claudes login"`,
+      );
+    }
     if (uid !== undefined && fileStat.uid !== uid) {
       throw new InsecureConfigError(
         `refusing to read config: ${path} is owned by uid ${fileStat.uid}, not by you (uid ${uid}) — run "claudes login" again to replace it`,
@@ -168,8 +184,9 @@ export function readConfig(path: string, options: ReadOptions = {}): Config {
 
 function openConfigFile(path: string): number {
   try {
-    // O_NOFOLLOW turns a symlinked config into an immediate ELOOP refusal.
-    return openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    // O_NOFOLLOW turns a symlinked config into an immediate ELOOP refusal;
+    // O_NONBLOCK keeps a FIFO at the path from blocking the open forever.
+    return openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
@@ -180,6 +197,11 @@ function openConfigFile(path: string): number {
         `refusing to read config: ${path} is a symbolic link — run "claudes login" again to replace it`,
       );
     }
+    if (code !== undefined) {
+      throw new ConfigError(
+        `cannot read config at ${path} (${code}) — remove it and re-run "claudes login"`,
+      );
+    }
     throw err;
   }
 }
@@ -188,8 +210,14 @@ function statOrConfigError(target: string, forPath: string): Stats {
   try {
     return statSync(target);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
       throw new ConfigError(`no config at ${forPath} — run "claudes login" first`);
+    }
+    if (code !== undefined) {
+      throw new ConfigError(
+        `cannot read the config directory ${target} (${code}) — remove it and re-run "claudes login"`,
+      );
     }
     throw err;
   }

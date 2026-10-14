@@ -72,5 +72,12 @@ export type Config = z.infer<typeof configSchema>;
 
 /** Formats a failed parse into one stable, single-line message. */
 export function formatZodIssues(error: z.ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+  // A root-level issue has no path; printing it as ": message" would leave a
+  // dangling separator, so the prefix is added only when there is a path.
+  return error.issues
+    .map((issue) => {
+      const at = issue.path.join(".");
+      return at === "" ? issue.message : `${at}: ${issue.message}`;
+    })
+    .join("; ");
 }

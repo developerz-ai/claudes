@@ -33,11 +33,17 @@ export type FetchLike = (
 const TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 2 ** 20; // 1 MiB is far more than either endpoint returns
 const VERSION_PATTERN = /^[0-9A-Za-z.+_-]{1,64}$/;
+/** Errno-looking tokens only (`ECONNREFUSED`, `EAI_AGAIN`); never free text. */
+const CAUSE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
 
 /** GET `${baseUrl}/healthz`; resolves the router's version string. */
-export async function health(baseUrl: string, fetchImpl: FetchLike): Promise<string> {
+export async function health(
+  baseUrl: string,
+  fetchImpl: FetchLike,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<string> {
   const endpoint = `${baseUrl}/healthz`;
-  const res = await request(endpoint, {}, fetchImpl);
+  const res = await request(endpoint, {}, fetchImpl, timeoutMs);
   if (res.status !== 200) {
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
@@ -62,9 +68,10 @@ export async function models(
   baseUrl: string,
   key: string,
   fetchImpl: FetchLike,
+  timeoutMs: number = TIMEOUT_MS,
 ): Promise<string[]> {
   const endpoint = `${baseUrl}/v1/models`;
-  const res = await request(endpoint, { Authorization: `Bearer ${key}` }, fetchImpl);
+  const res = await request(endpoint, { Authorization: `Bearer ${key}` }, fetchImpl, timeoutMs);
   if (res.status !== 200) {
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
@@ -94,24 +101,45 @@ async function request(
   endpoint: string,
   headers: Record<string, string>,
   fetchImpl: FetchLike,
+  timeoutMs: number,
 ): Promise<Response> {
   try {
     return await fetchImpl(endpoint, {
       headers,
       redirect: "error",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    throw unreachable(endpoint, err);
+    throw unreachable(endpoint, err, timeoutMs);
   }
 }
 
-function unreachable(endpoint: string, err: unknown): RouterError {
+function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterError {
   const name = err instanceof Error ? err.name : "Error";
   if (name === "TimeoutError" || name === "AbortError") {
-    return new RouterError(`GET ${endpoint} timed out after ${TIMEOUT_MS / 1000}s`);
+    return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`);
   }
-  return new RouterError(`could not reach ${endpoint} (${name})`);
+  return new RouterError(`could not reach ${endpoint} (${diagnostic(err)})`);
+}
+
+/**
+ * The short token in the parentheses of an unreachable-endpoint error. Only
+ * machine-readable shapes are eligible — an errno from `err.cause.code`, or a
+ * class name — so no underlying message text can reach the user.
+ */
+function diagnostic(err: unknown): string {
+  if (err instanceof Error) {
+    // fetch(…, {redirect: "error"}) rejects with a TypeError naming the
+    // redirect; the wording varies by runtime, the class does not.
+    if (err instanceof TypeError && /redirect/i.test(err.message)) {
+      return "refused a redirect";
+    }
+    const causeCode = (err.cause as { code?: unknown } | undefined)?.code;
+    if (typeof causeCode === "string" && CAUSE_CODE_PATTERN.test(causeCode)) {
+      return causeCode;
+    }
+  }
+  return err instanceof Error ? err.name : "Error";
 }
 
 async function parseJson(endpoint: string, res: Response): Promise<unknown> {
@@ -140,17 +168,13 @@ async function readBodyCapped(endpoint: string, res: Response): Promise<string> 
       throw new RouterError(`GET ${endpoint} response body exceeds ${MAX_BODY_BYTES} bytes`);
     }
   }
-  if (res.body === null) {
-    const text = await res.text();
-    if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) {
-      throw new RouterError(`GET ${endpoint} response body exceeds ${MAX_BODY_BYTES} bytes`);
-    }
-    return text;
-  }
-  const reader = res.body.getReader();
+  // Only null-body statuses (204/205/304) carry a null body, and those never
+  // reach here — the 200 gate above already rejected them — so a null body
+  // from an off-spec fetch is simply empty, not a second code path.
+  const reader = res.body?.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
+  while (reader !== undefined) {
     const { done, value } = await reader.read();
     if (done) {
       break;

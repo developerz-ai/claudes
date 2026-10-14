@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { assertNoKeyFragment } from "../test-support/redact";
 import { type FetchLike, health, models, RouterError, scrub } from "./client";
 
 const BASE = "https://router.example.test";
@@ -107,6 +108,7 @@ describe("health", () => {
       expect(message).toContain(`could not reach ${BASE}/healthz (Error)`);
       expect(message).not.toContain(KEY);
       expect(message).not.toContain("invalid header value");
+      assertNoKeyFragment(message, KEY);
     }
   });
 
@@ -115,6 +117,65 @@ describe("health", () => {
     timeout.name = "TimeoutError";
     const { fetchImpl } = stubFetch({ failWith: timeout });
     await expect(health(BASE, fetchImpl)).rejects.toThrow("timed out after 10s");
+  });
+
+  test("the timeout really aborts: an injected timeoutMs fires the signal", async () => {
+    const signals: AbortSignal[] = [];
+    const fetchImpl: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        signals.push(init.signal);
+        init.signal.addEventListener("abort", () => {
+          const reason = init.signal.reason;
+          const aborted = new Error("the operation timed out");
+          aborted.name =
+            reason instanceof Error && reason.name === "TimeoutError"
+              ? "TimeoutError"
+              : "AbortError";
+          reject(aborted);
+        });
+      });
+    await expect(health(BASE, fetchImpl, 25)).rejects.toThrow("timed out after 0.025s");
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  test("appends err.cause.code for socket-level failures, never the message", async () => {
+    const failure = new TypeError("fetch failed");
+    (failure as { cause?: unknown }).cause = Object.assign(
+      new Error("connect ECONNREFUSED 127.0.0.1:443 — also quotes stuff"),
+      { code: "ECONNREFUSED" },
+    );
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect((err as RouterError).message).toBe(`could not reach ${BASE}/healthz (ECONNREFUSED)`);
+    }
+  });
+
+  test("ignores a cause code that is not an errno-looking token", async () => {
+    for (const code of ["not a code", "lower_case", "X", `BAD${"X".repeat(64)}`, "OK; rm -rf /"]) {
+      const failure = new TypeError("fetch failed");
+      (failure as { cause?: unknown }).cause = { code };
+      const { fetchImpl } = stubFetch({ failWith: failure });
+      await expect(health(BASE, fetchImpl)).rejects.toThrow(
+        `could not reach ${BASE}/healthz (TypeError)`,
+      );
+    }
+  });
+
+  test("a refused redirect is named, never quoted", async () => {
+    const { fetchImpl } = stubFetch({
+      failWith: new TypeError(`redirect mode is set to error: ${KEY}`),
+    });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      const message = (err as RouterError).message;
+      expect(message).toBe(`could not reach ${BASE}/healthz (refused a redirect)`);
+      assertNoKeyFragment(message, KEY);
+    }
   });
 
   test("refuses a body whose declared content-length exceeds the 1 MiB cap", async () => {
@@ -197,6 +258,7 @@ describe("models", () => {
       const message = (err as RouterError).message;
       expect(message).toBe(`could not reach ${BASE}/v1/models (TypeError)`);
       expect(message).not.toContain(KEY);
+      assertNoKeyFragment(message, KEY);
     }
   });
 });

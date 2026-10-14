@@ -11,6 +11,13 @@ export interface ParsedArgs {
   overrides: Partial<Record<TierName, string>>;
 }
 
+/**
+ * Tier values are opaque router model ids, but bounded, printable, shell-safe
+ * ones: no whitespace, control bytes, quotes, or anything else that could make
+ * the stored (or echoed) config a trap.
+ */
+const MODEL_ID_PATTERN = /^[A-Za-z0-9._:[\]-]{1,100}$/;
+
 export type ArgsResult =
   | { readonly ok: true; readonly args: ParsedArgs }
   | { readonly ok: false; readonly exitCode: number; readonly message: string };
@@ -49,8 +56,12 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
       }
       if (name === "--url") {
         url = value;
-      } else {
+      } else if (MODEL_ID_PATTERN.test(value)) {
         overrides[name.slice(2) as TierName] = value;
+      } else {
+        // Names the flag, never the value: a model id slot is exactly where a
+        // pasted key or other junk would otherwise be echoed back.
+        return usageError(`claudes login: ${name} is not a valid model id`);
       }
       continue;
     }

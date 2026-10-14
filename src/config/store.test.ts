@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   closeSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
@@ -67,6 +69,20 @@ describe("writeConfig", () => {
     const bad = { ...sampleConfig(), baseUrl: "http://not-loopback.example.com" } as Config;
     expect(() => writeConfig(path, bad)).toThrow(ConfigError);
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("refuses a symlinked config dir before chmodding its target", () => {
+    const target = join(dir, "target");
+    mkdirSync(target);
+    chmodSync(target, 0o755); // deliberately loose, so a chmod would be visible
+    const link = join(dir, "link");
+    symlinkSync(target, link);
+    expect(() => writeConfig(join(link, "config.json"), sampleConfig())).toThrow(
+      `${link} is a symbolic link`,
+    );
+    // The chmod never ran: the target still carries group/other read bits.
+    expect(statSync(target).mode & 0o077).not.toBe(0);
+    expect(readdirSync(target)).toEqual([]);
   });
 
   test("an interrupted write keeps the previous config and leaves no temp file", () => {
@@ -166,6 +182,52 @@ describe("readConfig", () => {
     }
   });
 
+  test("refuses a config dir owned by another uid, saying to remove it, not chmod", () => {
+    writeConfig(path, sampleConfig());
+    try {
+      readConfig(path, { getuid: () => 12345 });
+      throw new Error("expected readConfig to refuse");
+    } catch (err) {
+      expect(err).toBeInstanceOf(InsecureConfigError);
+      const message = (err as InsecureConfigError).message;
+      expect(message).toContain(`directory ${dir} is owned by uid`);
+      expect(message).toContain('remove it and re-run "claudes login"');
+      expect(message).not.toContain("chmod");
+    }
+  });
+
+  test("wraps every other open/stat errno in ConfigError with the path and a fix", () => {
+    // EACCES on the open: an unreadable file inside a readable dir.
+    writeConfig(path, sampleConfig());
+    chmodSync(path, 0o000);
+    try {
+      readConfig(path);
+      throw new Error("expected readConfig to refuse");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      const message = (err as ConfigError).message;
+      expect(message).toContain(`cannot read config at ${path} (EACCES)`);
+      expect(message).toContain('remove it and re-run "claudes login"');
+    } finally {
+      chmodSync(path, 0o600);
+    }
+
+    // ENOTDIR on the open: a plain file where a config-dir component should be
+    // (the dir stat sees the plain file and succeeds, the open cannot).
+    const notDir = join(dir, "plainfile");
+    const fd = openSync(notDir, "w", 0o600);
+    closeSync(fd);
+    try {
+      readConfig(join(notDir, "config.json"));
+      throw new Error("expected readConfig to refuse");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      const message = (err as ConfigError).message;
+      expect(message).toContain(`cannot read config at ${join(notDir, "config.json")} (ENOTDIR)`);
+      expect(message).toContain('remove it and re-run "claudes login"');
+    }
+  });
+
   test("explains that a missing config means running login", () => {
     try {
       readConfig(join(dir, "absent.json"));
@@ -176,9 +238,35 @@ describe("readConfig", () => {
     }
   });
 
-  test("refuses a directory at the config path", () => {
-    const nested = join(dir, "subdir");
-    expect(() => readConfig(nested)).toThrow();
+  test("refuses a directory at the config path with the exact message", () => {
+    const asDir = join(dir, "asdir");
+    mkdirSync(asDir);
+    try {
+      readConfig(asDir);
+      throw new Error("expected readConfig to refuse");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      const message = (err as ConfigError).message;
+      expect(message).toBe(
+        `config path ${asDir} is a directory, not a file — remove it and re-run "claudes login"`,
+      );
+      expect(message).not.toContain("chmod");
+    }
+  });
+
+  test("refuses a FIFO at the config path instead of hanging on the open", () => {
+    const fifo = join(dir, "fifo");
+    execFileSync("mkfifo", [fifo]);
+    chmodSync(fifo, 0o600);
+    try {
+      readConfig(fifo);
+      throw new Error("expected readConfig to refuse");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as ConfigError).message).toContain(
+        `config path ${fifo} is not a regular file — remove it and re-run "claudes login"`,
+      );
+    }
   });
 
   test("refuses invalid JSON and schema-invalid payloads", () => {
