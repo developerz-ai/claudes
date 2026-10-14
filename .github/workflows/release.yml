@@ -62,7 +62,7 @@ jobs:
       - name: Pre-releases are not published
         if: github.event_name == 'release' && github.event.release.prerelease
         run: |
-          echo "::error title=Pre-release refused::this workflow publishes stable releases only; a GitHub pre-release would move the npm 'latest' tag. Untick pre-release or publish manually with an explicit --tag." >&2
+          echo "::error title=Pre-release refused::this workflow publishes stable releases only; a GitHub pre-release would move the npm 'latest' tag. Delete this release (the tag stays) and create a new, non-pre-release release from the same tag. Editing this release in place or re-running this run will not work: neither fires a new 'published' event." >&2
           exit 1
       - name: Release tag must equal v + package.json version
         if: github.event_name == 'release'
