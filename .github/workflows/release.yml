@@ -112,8 +112,7 @@ jobs:
     timeout-minutes: 15
     environment: npm # GitHub env restricted to v* tags; also the OIDC environment name on npmjs.com
     permissions:
-      contents: read
-      id-token: write # OIDC trusted publishing; no NPM_TOKEN is used anywhere.
+      id-token: write # the only grant: OIDC trusted publishing; no NPM_TOKEN anywhere
     env:
       TARBALL: ${{ needs.build.outputs.tarball }}
     steps:
@@ -133,7 +132,7 @@ jobs:
       # node_modules/sigstore again, and in npm@12.2.0 the require.resolve chain
       # from libnpmpublish through sigstore and @sigstore/* was verified against
       # the actual packed tarball.
-      - name: Install pinned npm 12.2.0 from a verified tarball
+      - name: Install pinned npm (NPM_VERSION) from a verified tarball
         run: |
           curl -fsSLo npm.tgz "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
           expected="$NPM_SHA512"
@@ -156,6 +155,20 @@ jobs:
       # artifact reaches the registry.
       - name: Publish
         run: npm publish "./artifact/$TARBALL" --access public --provenance --loglevel verbose
+      # A config that only allows `npm stage publish` can report success while
+      # nothing becomes installable. Prove the version is live on the registry.
+      - name: Verify the version is published
+        run: |
+          version="$(tar -xzOf "./artifact/$TARBALL" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).version')"
+          for _ in 1 2 3 4 5 6; do
+            if [ "$(npm view "@developerz.ai/claudes@$version" version 2>/dev/null)" = "$version" ]; then
+              echo "published @developerz.ai/claudes@$version"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Not published::npm reported success but @developerz.ai/claudes@$version is not installable after 60s (a stage-only trusted publisher stages instead of publishing)." >&2
+          exit 1
 
   dry-run:
     needs: build
@@ -173,7 +186,7 @@ jobs:
           # No registry-url: a dry run does not authenticate to npm.
       # Same digest-verified npm install as the publish job; see that job
       # for why npm 12.2.0 specifically (npm/cli#9722, npm/cli#9740).
-      - name: Install pinned npm 12.2.0 from a verified tarball
+      - name: Install pinned npm (NPM_VERSION) from a verified tarball
         run: |
           curl -fsSLo npm.tgz "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
           expected="$NPM_SHA512"
