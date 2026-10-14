@@ -48,8 +48,8 @@ export type StdinLike = ReadableLike & { readonly isTTY?: boolean };
  * nowhere. Enter submits; Ctrl-C resolves undefined, which the caller maps to
  * exit code 130; Ctrl-D rejects with StdinClosedError on an empty line and
  * submits a typed one; Ctrl-U clears the line; every other control byte is
- * ignored, and terminal escape sequences (ESC [ … final byte 0x40-0x7e) are
- * swallowed whole so arrow keys cannot leave their tail on the line. Raw mode
+ * ignored, and terminal escape sequences (CSI: ESC [ … final byte 0x40-0x7e; SS3: ESC O
+ * <byte>) are swallowed whole so arrow keys cannot leave their tail on the line. Raw mode
  * is taken BEFORE the prompt is written, so nothing can echo in the gap. A
  * stream 'end'/'error' — or SIGHUP — restores the terminal and rejects with
  * StdinClosedError, which the caller maps to exit 1; more than
@@ -64,7 +64,7 @@ export function readSecret(
     const decoder = new TextDecoder("utf-8");
     let line = "";
     let lineBytes = 0;
-    /** Terminal-escape sequence state: nothing pending, ESC seen, inside a CSI sequence. */
+    /** Terminal-escape state: nothing pending, ESC seen, inside CSI, or inside SS3 (ESC O). */
     let escapeState: "none" | "esc" | "csi" | "ss3" = "none";
     let settled = false;
     const finish = (settle: () => void) => {
