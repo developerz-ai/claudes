@@ -1,22 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configDir, configFile } from "../config/paths";
 import { readConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
-import {
-  type LoginDeps,
-  login,
-  type ReadableLike,
-  readFirstLine,
-  readSecret,
-  type TtyStdin,
-} from "./login";
+import { type LoginDeps, login, redactKey } from "./login";
 
 const ROUTER = "https://router.example.test";
-const KEY = "mar_live_FAKEKEYabcdef0123456789";
+const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
 
 let home: string;
 
@@ -36,8 +28,10 @@ interface StubOptions {
   failWith?: Error;
 }
 
-function stubFetch(options: StubOptions = {}): FetchLike {
-  return async (url) => {
+function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; calls: string[] } {
+  const calls: string[] = [];
+  const fetchImpl: FetchLike = async (url) => {
+    calls.push(url);
     if (options.failWith !== undefined) {
       throw options.failWith;
     }
@@ -58,6 +52,7 @@ function stubFetch(options: StubOptions = {}): FetchLike {
       { status: options.modelsStatus ?? 200 },
     );
   };
+  return { fetchImpl, calls };
 }
 
 interface Harness {
@@ -66,13 +61,18 @@ interface Harness {
   stderr: string[];
   prompts: string[];
   writeConfigCalls: { path: string; config: unknown }[];
+  fetchCalls: string[];
+  failWrite?: Error;
 }
 
 function harness(overrides?: {
   fetch?: FetchLike;
   stdinIsTTY?: boolean;
   stdin?: string;
+  stdinError?: Error;
   ttyKey?: string | undefined;
+  env?: Record<string, string | undefined>;
+  failWrite?: Error;
   /** Omit the injected store writer so the real store writes to the temp HOME. */
   realStore?: boolean;
 }): Harness {
@@ -80,9 +80,15 @@ function harness(overrides?: {
   const stderr: string[] = [];
   const prompts: string[] = [];
   const writeConfigCalls: { path: string; config: unknown }[] = [];
+  const fetchCalls: string[] = [];
+  const inner = overrides?.fetch ?? stubFetch().fetchImpl;
   const deps: LoginDeps = {
-    env: { HOME: home },
-    fetch: overrides?.fetch ?? stubFetch(),
+    env: overrides?.env ?? { HOME: home },
+    // Wrapped so tests can assert on whether the network was touched at all.
+    fetch: async (url, init) => {
+      fetchCalls.push(url);
+      return inner(url, init);
+    },
     stdinIsTTY: overrides?.stdinIsTTY ?? false,
     readSecret: async (prompt) => {
       prompts.push(prompt);
@@ -92,6 +98,9 @@ function harness(overrides?: {
     },
     // Like the real reader: only the first line of stdin ever arrives.
     readStdinLine: async () => {
+      if (overrides?.stdinError !== undefined) {
+        throw overrides.stdinError;
+      }
       if (overrides?.stdin === undefined) {
         return KEY;
       }
@@ -101,22 +110,32 @@ function harness(overrides?: {
     stdout: (text) => {
       stdout.push(text);
     },
-    stderr: (text) => {
-      stderr.push(text);
-    },
-    ...(overrides?.realStore
-      ? {}
-      : {
-          writeConfig: (path: string, config: unknown) => {
-            writeConfigCalls.push({ path, config });
+    ...(overrides?.failWrite !== undefined
+      ? {
+          writeConfig: () => {
+            throw overrides.failWrite;
           },
-        }),
+        }
+      : overrides?.realStore
+        ? {}
+        : {
+            writeConfig: (path: string, config: unknown) => {
+              writeConfigCalls.push({ path, config });
+            },
+          }),
   };
-  return { deps, stdout, stderr, prompts, writeConfigCalls };
+  return { deps, stdout, stderr, prompts, writeConfigCalls, fetchCalls };
 }
 
 function configPath(): string {
   return configFile(configDir({ HOME: home }));
+}
+
+/** The whole point: nothing the command produces may carry the full key. */
+function expectNoKeyLeak(h: Harness, result: { ok: boolean; message?: string }): void {
+  expect(result.message ?? "").not.toContain(KEY);
+  expect(h.stdout.join("\n")).not.toContain(KEY);
+  expect(h.stderr.join("\n")).not.toContain(KEY);
 }
 
 describe("login argument handling", () => {
@@ -143,21 +162,74 @@ describe("login argument handling", () => {
     }
   });
 
-  test("refuses a positional argument that looks like a key", async () => {
-    const h = harness();
-    const result = await login(["--url", ROUTER, KEY], h.deps);
-    expect(result).toMatchObject({ ok: false, exitCode: 64 });
-    const message = result.ok === false ? (result.message ?? "") : "";
-    expect(message).toContain("looks like a router key");
-    expect(message).not.toContain(KEY);
+  test("refuses a mar_live_ key in ANY argv position or --x=value form", async () => {
+    for (const argv of [
+      ["--url", KEY], // as the --url value
+      ["--url", ROUTER, "--opus", KEY], // as a tier value
+      [`--unknown=${KEY}`], // inline value of an unknown option
+      [`--url=${ROUTER}`, `--haiku=${KEY}`],
+      ["--url", ROUTER, KEY], // positional
+    ]) {
+      const h = harness();
+      const result = await login(argv, h.deps);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      const message = result.ok === false ? (result.message ?? "") : "";
+      expect(message).toContain("looks like a router key");
+      expect(message).not.toContain(KEY);
+      expect(h.prompts).toEqual([]);
+    }
   });
 
-  test("rejects an invalid --url before any I/O", async () => {
+  test("rejects an invalid --url before any I/O, without echoing the value", async () => {
     const h = harness();
-    const result = await login(["--url", "http://router.example.test/subpath/"], h.deps);
+    const result = await login(["--url", "https://x?not-a-key-but-secret"], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 64 });
-    expect(result.ok === false && result.message).toContain("invalid --url");
+    const message = result.ok === false ? (result.message ?? "") : "";
+    expect(message).toContain("invalid --url");
+    expect(message).not.toContain("not-a-key-but-secret");
     expect(h.stdout.length + h.stderr.length).toBe(0);
+    expect(h.prompts).toEqual([]);
+  });
+
+  test("unexpected and unknown arguments are named by position, never by value", async () => {
+    const positional = harness();
+    const positionalResult = await login(["--url", ROUTER, "s3cret-positional"], positional.deps);
+    expect(positionalResult).toMatchObject({ ok: false, exitCode: 64 });
+    expect(positionalResult.ok === false && positionalResult.message).toContain(
+      "unexpected argument #3",
+    );
+    expect(positionalResult.ok === false && positionalResult.message).not.toContain(
+      "s3cret-positional",
+    );
+
+    const unknown = harness();
+    const unknownResult = await login(["--url", ROUTER, "--s3cret-flag", "v"], unknown.deps);
+    expect(unknownResult).toMatchObject({ ok: false, exitCode: 64 });
+    expect(unknownResult.ok === false && unknownResult.message).toContain("unknown option #3");
+    expect(unknownResult.ok === false && unknownResult.message).not.toContain("s3cret-flag");
+  });
+});
+
+describe("login environment", () => {
+  test("resolves the config path first: no HOME means exit 78 before any prompt or fetch", async () => {
+    const h = harness({ env: {} });
+    const result = await login(["--url", ROUTER], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 78 });
+    const message = result.ok === false ? (result.message ?? "") : "";
+    expect(message).toContain("cannot find the config directory");
+    expect(message.split("\n").length).toBe(1); // one line, no stack trace
+    expect(h.prompts).toEqual([]);
+    expect(h.fetchCalls).toEqual([]);
+    expect(existsSync(configPath())).toBe(false);
+  });
+
+  test("a stream error while reading the key exits 1 with a clean one-line message", async () => {
+    const h = harness({ stdinError: new Error("EPIPE: broken pipe") });
+    const result = await login(["--url", ROUTER], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 1 });
+    const message = result.ok === false ? (result.message ?? "") : "";
+    expect(message).toContain("could not read the key from stdin");
+    expect(message.split("\n").length).toBe(1); // one line, no stack trace
   });
 });
 
@@ -180,8 +252,34 @@ describe("login key acquisition", () => {
     const h = harness({ stdin: "sk-something-else" });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 64 });
-    expect(result.ok === false && result.message).toContain('must start with "mar_live_"');
+    const message = result.ok === false ? (result.message ?? "") : "";
+    expect(message).not.toContain("sk-something-else");
   });
+
+  const MALFORMED_KEYS: [string, string][] = [
+    [`mar_live_${"A".repeat(31)}\0`, "an embedded NUL byte"],
+    [`mar_live_${"A".repeat(31)}\r`, "a carriage return"],
+    [`mar_live_${"A".repeat(31)}\t`, "a tab"],
+    [`mar_live_${"A".repeat(16)} ${"A".repeat(15)}`, "an inner space"],
+    [`mar_live_${"A".repeat(16)}é${"A".repeat(15)}`, "a non-ASCII character"],
+    [`mar_live_${"A".repeat(31)}`, "one character too short"],
+    [`mar_live_${"A".repeat(33)}`, "one character too long"],
+  ];
+
+  for (const [badKey, why] of MALFORMED_KEYS) {
+    test(`never calls fetch for a malformed key (${why})`, async () => {
+      const h = harness({ stdin: badKey });
+      const result = await login(["--url", ROUTER], h.deps);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      expect(h.fetchCalls).toEqual([]);
+      expect(existsSync(configPath())).toBe(false);
+      // The refusal is a fixed sentence: no part of the input is echoed back
+      // (the prefix in the message is itself scrubbed to the ellipsis form).
+      expect(result.ok === false && result.message).toBe(
+        "claudes login: that is not a valid router key (expected mar_live_… followed by 32 characters)",
+      );
+    });
+  }
 
   test("TTY: prompts on stderr and never echoes the key", async () => {
     const h = harness({ stdinIsTTY: true, ttyKey: KEY });
@@ -204,20 +302,34 @@ describe("login key acquisition", () => {
 
 describe("login validation and output", () => {
   test("health failure names the endpoint and exits 1", async () => {
-    const h = harness({ fetch: stubFetch({ healthStatus: 503, healthBody: "overloaded" }) });
+    const h = harness({
+      fetch: stubFetch({ healthStatus: 503, healthBody: "overloaded" }).fetchImpl,
+    });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 1 });
     expect(result.ok === false && result.message).toContain("HTTP 503");
+    expectNoKeyLeak(h, result);
   });
 
   test("models 401 maps to 'router rejected the key'", async () => {
-    const h = harness({ fetch: stubFetch({ modelsStatus: 401, modelsBody: "denied" }) });
+    const h = harness({ fetch: stubFetch({ modelsStatus: 401, modelsBody: "denied" }).fetchImpl });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 1 });
     const message = result.ok === false ? (result.message ?? "") : "";
     expect(message).toContain("router rejected the key");
     expect(message).toContain("401");
-    expect(message).not.toContain(KEY);
+    expectNoKeyLeak(h, result);
+  });
+
+  test("an invalid router version string is refused, not printed", async () => {
+    const h = harness({
+      fetch: stubFetch({ healthBody: JSON.stringify({ version: "1.4.2\nrm -rf /" }) }).fetchImpl,
+    });
+    const result = await login(["--url", ROUTER], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 1 });
+    const message = result.ok === false ? (result.message ?? "") : "";
+    expect(message).toContain("invalid version string");
+    expect(message).not.toContain("rm -rf");
   });
 
   test("tier overrides win over the advertised ids", async () => {
@@ -241,6 +353,13 @@ describe("login validation and output", () => {
     expect(out).toContain("haiku  claude-haiku-4-5");
     expect(out).toContain(configPath());
   });
+
+  test("stores the origin form of --url", async () => {
+    const h = harness();
+    const result = await login(["--url", "http://127.0.0.1:3000"], h.deps);
+    expect(result).toMatchObject({ ok: true });
+    expect(h.writeConfigCalls[0]?.config).toMatchObject({ baseUrl: "http://127.0.0.1:3000" });
+  });
 });
 
 describe("login REDACTION end to end", () => {
@@ -250,7 +369,7 @@ describe("login REDACTION end to end", () => {
     const deps: LoginDeps = {
       // No injected writeConfig: the real store writes to the temp HOME.
       env: { HOME: home },
-      fetch: stubFetch(),
+      fetch: stubFetch().fetchImpl,
       stdinIsTTY: false,
       readStdinLine: async () => KEY,
       readSecret: async () => {
@@ -258,9 +377,6 @@ describe("login REDACTION end to end", () => {
       },
       stdout: (text) => {
         stdout.push(text);
-      },
-      stderr: (text) => {
-        stderr.push(text);
       },
     };
     const result = await login(["--url", ROUTER], deps);
@@ -285,74 +401,74 @@ describe("login REDACTION end to end", () => {
     const first = harness({ realStore: true });
     await login(["--url", ROUTER], first.deps);
     const second = harness({
-      stdin: "mar_live_SECONDKEYabcdef01",
-      fetch: stubFetch(),
+      stdin: "mar_live_SECONDKEYabcdef0123456789abcdefg",
+      fetch: stubFetch().fetchImpl,
       realStore: true,
     });
     const result = await login(["--url", "https://other.example.test"], second.deps);
     expect(result).toMatchObject({ ok: true });
     const config = readConfig(configPath());
-    expect(config.key).toBe("mar_live_SECONDKEYabcdef01");
+    expect(config.key).toBe("mar_live_SECONDKEYabcdef0123456789abcdefg");
     expect(config.baseUrl).toBe("https://other.example.test");
     expect(readdirSync(configDir({ HOME: home }))).toEqual(["config.json"]);
   });
+
+  test("every failure branch leaves the key out of the message and all output", async () => {
+    const branches: { name: string; h: Harness }[] = [
+      {
+        name: "401 from the router",
+        h: harness({ fetch: stubFetch({ modelsStatus: 401, modelsBody: "denied" }).fetchImpl }),
+      },
+      {
+        name: "5xx from the router",
+        h: harness({ fetch: stubFetch({ healthStatus: 503, healthBody: "overloaded" }).fetchImpl }),
+      },
+      {
+        name: "network error quoting the key",
+        h: harness({
+          fetch: stubFetch({
+            failWith: new TypeError(`Headers.append: "Bearer ${KEY}" is an invalid header value`),
+          }).fetchImpl,
+        }),
+      },
+      { name: "write failure", h: harness({ failWrite: new Error("ENOSPC: no space left") }) },
+      { name: "bad argv", h: harness() },
+      { name: "malformed key", h: harness({ stdin: `mar_live_${"A".repeat(31)}\0` }) },
+    ];
+    for (const branch of branches) {
+      const argv = branch.name === "bad argv" ? ["--url", KEY] : ["--url", ROUTER];
+      const result = await login(argv, branch.h.deps);
+      expect(result.ok).toBe(false);
+      expect(result.ok === false ? (result.message ?? "") : "").not.toContain(KEY);
+      expect(branch.h.stdout.join("\n")).not.toContain(KEY);
+      expect(branch.h.stderr.join("\n")).not.toContain(KEY);
+    }
+  });
+
+  test("a fetch error quoting the key produces key-free output", async () => {
+    const h = harness({
+      fetch: stubFetch({
+        failWith: new Error(`Headers.append: "Bearer ${KEY}" is an invalid header value`),
+      }).fetchImpl,
+    });
+    const result = await login(["--url", ROUTER], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 1 });
+    const message = result.ok === false ? (result.message ?? "") : "";
+    expect(message).toContain("could not reach");
+    expect(message).toContain("(Error)");
+    expectNoKeyLeak(h, result);
+  });
 });
 
-class FakeTty extends EventEmitter {
-  readonly rawModes: boolean[] = [];
-
-  setRawMode(mode: boolean): void {
-    this.rawModes.push(mode);
-  }
-}
-
-function asTty(tty: FakeTty): TtyStdin {
-  return tty;
-}
-
-describe("readSecret (real hidden reader)", () => {
-  test("writes only the prompt and a newline — never the typed characters", async () => {
-    const tty = new FakeTty();
-    const writes: string[] = [];
-    const secret = readSecret(asTty(tty), (text) => writes.push(text), "Router key: ");
-    tty.emit("data", Buffer.from("mar_live_"));
-    tty.emit("data", Buffer.from("SECRET"));
-    tty.emit("data", Buffer.from("\r"));
-    await expect(secret).resolves.toBe("mar_live_SECRET");
-    expect(writes).toEqual(["Router key: ", "\n"]);
-    expect(tty.rawModes).toEqual([true, false]);
+describe("redactKey", () => {
+  test("shows at most the prefix plus four characters", () => {
+    expect(redactKey(KEY)).toBe("mar_live_FAKE…");
+    expect(redactKey("mar_live_ABCDEFGH")).toBe("mar_live_ABCD…");
   });
 
-  test("Ctrl-C resolves undefined and restores the terminal", async () => {
-    const tty = new FakeTty();
-    const writes: string[] = [];
-    const secret = readSecret(asTty(tty), (text) => writes.push(text), "Router key: ");
-    tty.emit("data", Buffer.concat([Buffer.from("abc"), Buffer.from([0x03])]));
-    await expect(secret).resolves.toBeUndefined();
-    expect(writes).toEqual(["Router key: ", "\n"]);
-    expect(tty.rawModes).toEqual([true, false]);
-  });
-});
-
-class FakeReadable extends EventEmitter {}
-
-function asReadable(stream: FakeReadable): ReadableLike {
-  return stream;
-}
-
-describe("readFirstLine (real stdin reader)", () => {
-  test("stops at the first newline, even mid-chunk", async () => {
-    const stream = new FakeReadable();
-    const line = readFirstLine(asReadable(stream));
-    stream.emit("data", Buffer.from(`${KEY}\nrest is ignored`));
-    await expect(line).resolves.toBe(KEY);
-  });
-
-  test("resolves the whole buffer at EOF when there is no newline", async () => {
-    const stream = new FakeReadable();
-    const line = readFirstLine(asReadable(stream));
-    stream.emit("data", "mar_live_NOEOF");
-    stream.emit("end");
-    await expect(line).resolves.toBe("mar_live_NOEOF");
+  test("a key of 13 characters or fewer shows the prefix alone", () => {
+    expect(redactKey("mar_live_ABCD")).toBe("mar_live_…");
+    expect(redactKey("mar_live_")).toBe("mar_live_…");
+    expect(redactKey("mar_live")).toBe("mar_live_…");
   });
 });

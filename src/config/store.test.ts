@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
 import {
   chmodSync,
   closeSync,
@@ -7,6 +8,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,8 +23,8 @@ function sampleConfig(overrides: Partial<Config> = {}): Config {
   return {
     version: 1,
     baseUrl: "https://router.example.test",
-    key: "mar_live_TESTKEYabcdef012345",
-    tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5" },
+    key: "mar_live_TESTKEYabcdef0123456789abcdefghi",
+    tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
     ...overrides,
   };
 }
@@ -57,7 +59,7 @@ describe("writeConfig", () => {
     const nestedPath = join(nested, "config.json");
     writeConfig(nestedPath, sampleConfig());
     chmodSync(nested, 0o777);
-    writeConfig(nestedPath, sampleConfig({ key: "mar_live_SECONDKEYabcdef01" }));
+    writeConfig(nestedPath, sampleConfig({ key: "mar_live_SECONDKEYabcdef0123456789abcdefg" }));
     expect(statSync(nested).mode & 0o777).toBe(0o700);
   });
 
@@ -69,7 +71,7 @@ describe("writeConfig", () => {
 
   test("an interrupted write keeps the previous config and leaves no temp file", () => {
     writeConfig(path, sampleConfig());
-    const updated = sampleConfig({ key: "mar_live_SECONDKEYabcdef01" });
+    const updated = sampleConfig({ key: "mar_live_SECONDKEYabcdef0123456789abcdefg" });
     expect(() =>
       writeConfig(path, updated, {
         afterTempWrite: () => {
@@ -77,6 +79,22 @@ describe("writeConfig", () => {
         },
       }),
     ).toThrow("simulated crash between temp write and rename");
+    expect(readConfig(path)).toEqual(sampleConfig());
+    expect(readdirSync(dir)).toEqual(["config.json"]);
+  });
+
+  test("a short write throws, keeps the previous config, and cleans the temp file", () => {
+    writeConfig(path, sampleConfig());
+    const updated = sampleConfig({ key: "mar_live_SECONDKEYabcdef0123456789abcdefg" });
+    expect(() =>
+      writeConfig(path, updated, {
+        // Simulates a partial write: only half the payload reaches the fd.
+        writeFile: (fd, payload) => {
+          const bytes = Buffer.from(payload, "utf8");
+          writeSync(fd, bytes.subarray(0, Math.floor(bytes.length / 2)));
+        },
+      }),
+    ).toThrow("short write");
     expect(readConfig(path)).toEqual(sampleConfig());
     expect(readdirSync(dir)).toEqual(["config.json"]);
   });
@@ -95,7 +113,7 @@ describe("readConfig", () => {
     }
   });
 
-  test("refuses a file owned by another uid", () => {
+  test("refuses a file owned by another uid, saying to re-run login", () => {
     writeConfig(path, sampleConfig());
     try {
       readConfig(path, { getuid: () => 12345 });
@@ -103,6 +121,36 @@ describe("readConfig", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(InsecureConfigError);
       expect((err as InsecureConfigError).message).toContain("owned by uid");
+      expect((err as InsecureConfigError).message).toContain('run "claudes login"');
+      expect((err as InsecureConfigError).message).not.toContain("chmod");
+    }
+  });
+
+  test("checks ownership before permissions: a foreign-uid, world-readable file gets the uid message", () => {
+    writeConfig(path, sampleConfig());
+    chmodSync(path, 0o666);
+    try {
+      readConfig(path, { getuid: () => 12345 });
+      throw new Error("expected readConfig to refuse");
+    } catch (err) {
+      expect(err).toBeInstanceOf(InsecureConfigError);
+      expect((err as InsecureConfigError).message).toContain("owned by uid");
+      expect((err as InsecureConfigError).message).not.toContain("chmod 600");
+    }
+  });
+
+  test("refuses a symlinked config without following it", () => {
+    writeConfig(path, sampleConfig());
+    const victim = join(dir, "victim.json");
+    writeConfig(victim, sampleConfig({ key: "mar_live_VICTIMKEYabcdef0123456789bcdefgh" }));
+    const link = join(dir, "link.json");
+    symlinkSync(victim, link);
+    try {
+      readConfig(link);
+      throw new Error("expected readConfig to refuse");
+    } catch (err) {
+      expect(err).toBeInstanceOf(InsecureConfigError);
+      expect((err as InsecureConfigError).message).toContain("symbolic link");
     }
   });
 
@@ -126,6 +174,11 @@ describe("readConfig", () => {
       expect(err).toBeInstanceOf(ConfigError);
       expect((err as ConfigError).message).toContain('run "claudes login" first');
     }
+  });
+
+  test("refuses a directory at the config path", () => {
+    const nested = join(dir, "subdir");
+    expect(() => readConfig(nested)).toThrow();
   });
 
   test("refuses invalid JSON and schema-invalid payloads", () => {

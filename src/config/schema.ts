@@ -1,8 +1,22 @@
 import { z } from "zod";
 
+/** The prefix every router key starts with; the value after it is secret. */
+export const ROUTER_KEY_PREFIX = "mar_live_";
+
 /**
- * Router base URL: `https://` for any host, `http://` only for loopback, and
- * never with a path, query, fragment, trailing slash, or embedded credentials.
+ * The one shape the router issues and accepts: `mar_live_` plus exactly 32
+ * characters of `[A-Za-z0-9_-]`. Anything else — control bytes, spaces,
+ * non-ASCII, wrong length — is refused before it can reach a network call,
+ * because Node's fetch rejects such header values and names the value in the
+ * thrown error.
+ */
+export const ROUTER_KEY_PATTERN = /^mar_live_[A-Za-z0-9_-]{32}$/;
+
+/**
+ * Router base URL: `https://` for any host, `http://` only for loopback, and a
+ * bare origin only — no path, query, fragment, trailing slash, credentials,
+ * whitespace, or an explicit default port (the URL parser silently accepts all
+ * of those; requiring `value === url.origin` rejects them in one stroke).
  */
 export const baseUrlSchema = z.string().superRefine((value, ctx) => {
   let url: URL;
@@ -16,6 +30,12 @@ export const baseUrlSchema = z.string().superRefine((value, ctx) => {
     });
     return;
   }
+  if (value !== url.origin) {
+    ctx.addIssue({
+      code: "custom",
+      message: "baseUrl must be a bare origin (scheme, host, optional port) with nothing else",
+    });
+  }
   const loopback =
     url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
@@ -28,24 +48,12 @@ export const baseUrlSchema = z.string().superRefine((value, ctx) => {
   if (url.username !== "" || url.password !== "") {
     ctx.addIssue({ code: "custom", message: "baseUrl must not embed credentials" });
   }
-  if (url.pathname !== "/") {
-    ctx.addIssue({ code: "custom", message: "baseUrl must not include a path" });
-  }
-  if (value.endsWith("/")) {
-    ctx.addIssue({ code: "custom", message: "baseUrl must not end with a slash" });
-  }
-  if (url.search !== "") {
-    ctx.addIssue({ code: "custom", message: "baseUrl must not include a query string" });
-  }
-  if (url.hash !== "") {
-    ctx.addIssue({ code: "custom", message: "baseUrl must not include a fragment" });
-  }
 });
 
-/** Per-person router key. The prefix is what the router issues; the value is secret. */
+/** Per-person router key: `mar_live_` plus exactly 32 `[A-Za-z0-9_-]` characters. */
 export const keySchema = z
   .string()
-  .regex(/^mar_live_\S+$/, 'key must be a router key starting with "mar_live_"');
+  .regex(ROUTER_KEY_PATTERN, 'key must be "mar_live_" followed by 32 characters');
 
 export const configSchema = z.object({
   version: z.literal(1),

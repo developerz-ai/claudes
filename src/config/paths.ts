@@ -30,8 +30,3 @@ function homeConfigBase(env: Env): string {
 export function configFile(dir: string): string {
   return `${dir}/config.json`;
 }
-
-/** Reserved for future per-user settings: `${dir}/settings.json`. */
-export function settingsFile(dir: string): string {
-  return `${dir}/settings.json`;
-}

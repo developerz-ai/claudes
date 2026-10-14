@@ -1,6 +1,9 @@
+import { Buffer } from "node:buffer";
 import {
   chmodSync,
   closeSync,
+  constants as fsConstants,
+  fstatSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -9,7 +12,7 @@ import {
   type Stats,
   statSync,
   unlinkSync,
-  writeSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
 import { type Config, configSchema, formatZodIssues } from "./schema";
@@ -32,6 +35,11 @@ export class InsecureConfigError extends ConfigError {
 
 export interface WriteHooks {
   /**
+   * Test seam replacing the payload writer, e.g. to simulate a short write;
+   * the post-write size check still runs against whatever it left behind.
+   */
+  writeFile?: (fd: number, payload: string) => void;
+  /**
    * Test seam called after the temp file is fully written but before the
    * rename, so a crash between the two steps can be simulated.
    */
@@ -46,7 +54,8 @@ export interface ReadOptions {
 /**
  * Atomically replaces the config at `path`: the directory is created with mode
  * 0700 (and re-chmodded to 0700 if it already exists), the payload goes to a
- * sibling temp file with mode 0600, is fsynced, then renamed over `path`.
+ * sibling temp file with mode 0600, is fully written, fsynced, verified against
+ * the fd's own stat, then renamed over `path`.
  */
 export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}): void {
   const check = configSchema.safeParse(config);
@@ -63,10 +72,20 @@ export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}
     .toString(36)
     .slice(2, 8)}`;
   const payload = `${JSON.stringify(config, null, 2)}\n`;
+  const writeFile = hooks.writeFile ?? ((fd, data) => writeFileSync(fd, data, "utf8"));
   let fd: number | undefined = openSync(temp, "wx", 0o600);
   try {
-    writeSync(fd, payload, null, "utf8");
+    writeFile(fd, payload);
     fsyncSync(fd);
+    // Verify the write through the fd itself: a short write would otherwise be
+    // renamed over the good config as a silently truncated file.
+    const expectedBytes = Buffer.byteLength(payload, "utf8");
+    const writtenBytes = fstatSync(fd).size;
+    if (writtenBytes !== expectedBytes) {
+      throw new ConfigError(
+        `short write to ${temp}: wrote ${writtenBytes} of ${expectedBytes} bytes`,
+      );
+    }
     closeSync(fd);
     fd = undefined;
     hooks.afterTempWrite?.(temp);
@@ -89,9 +108,10 @@ export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}
 }
 
 /**
- * Reads and validates the config at `path`. Refuses — with the exact chmod fix
- * in the message — when the file, or its directory, is accessible by group or
- * other, or when the file is not owned by the current uid.
+ * Reads and validates the config at `path`. The file is opened with O_NOFOLLOW
+ * and every check runs on the fd's own fstat, so a symlink swap or a chmod
+ * between the check and the read cannot slide a different file in. Ownership is
+ * checked before permissions: a foreign-owned file is replaced, not chmodded.
  */
 export function readConfig(path: string, options: ReadOptions = {}): Config {
   const getuid = options.getuid ?? (() => process.getuid?.());
@@ -104,41 +124,64 @@ export function readConfig(path: string, options: ReadOptions = {}): Config {
     );
   }
 
-  const fileStat = statOrConfigError(path, path);
-  if (fileStat.isDirectory()) {
-    if ((fileStat.mode & 0o077) !== 0) {
+  const fd = openConfigFile(path);
+  try {
+    const fileStat = fstatSync(fd);
+    if (fileStat.isDirectory()) {
+      if ((fileStat.mode & 0o077) !== 0) {
+        throw new InsecureConfigError(
+          `refusing to read config: ${path} is a directory accessible by group or other users — fix it with: chmod 700 ${path}`,
+        );
+      }
+      throw new ConfigError(`config path ${path} is a directory, not a file`);
+    }
+    const uid = getuid();
+    if (uid !== undefined && fileStat.uid !== uid) {
       throw new InsecureConfigError(
-        `refusing to read config: ${path} is a directory accessible by group or other users — fix it with: chmod 700 ${path}`,
+        `refusing to read config: ${path} is owned by uid ${fileStat.uid}, not by you (uid ${uid}) — run "claudes login" again to replace it`,
       );
     }
-    throw new ConfigError(`config path ${path} is a directory, not a file`);
-  }
-  if ((fileStat.mode & 0o077) !== 0) {
-    throw new InsecureConfigError(
-      `refusing to read config: ${path} is readable by group or other users — fix it with: chmod 600 ${path}`,
-    );
-  }
-  const uid = getuid();
-  if (uid !== undefined && fileStat.uid !== uid) {
-    throw new InsecureConfigError(
-      `refusing to read config: ${path} is owned by uid ${fileStat.uid}, not by you (uid ${uid})`,
-    );
-  }
+    if ((fileStat.mode & 0o077) !== 0) {
+      throw new InsecureConfigError(
+        `refusing to read config: ${path} is readable by group or other users — fix it with: chmod 600 ${path}`,
+      );
+    }
 
-  const raw = readFileSync(path, "utf8");
-  let parsed: unknown;
+    const raw = readFileSync(fd, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new ConfigError(`${path} is not valid JSON`);
+    }
+    const result = configSchema.safeParse(parsed);
+    if (!result.success) {
+      throw new ConfigError(
+        `${path} is not a valid claudes config: ${formatZodIssues(result.error)}`,
+      );
+    }
+    return result.data;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function openConfigFile(path: string): number {
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new ConfigError(`${path} is not valid JSON`);
+    // O_NOFOLLOW turns a symlinked config into an immediate ELOOP refusal.
+    return openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new ConfigError(`no config at ${path} — run "claudes login" first`);
+    }
+    if (code === "ELOOP") {
+      throw new InsecureConfigError(
+        `refusing to read config: ${path} is a symbolic link — run "claudes login" again to replace it`,
+      );
+    }
+    throw err;
   }
-  const result = configSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new ConfigError(
-      `${path} is not a valid claudes config: ${formatZodIssues(result.error)}`,
-    );
-  }
-  return result.data;
 }
 
 function statOrConfigError(target: string, forPath: string): Stats {
