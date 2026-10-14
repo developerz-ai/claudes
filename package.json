@@ -1,0 +1,33 @@
+{
+  "name": "@developerz.ai/claudes",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "claudes": "dist/claudes.js"
+  },
+  "files": [
+    "dist/claudes.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/developerz-ai/claudes.git"
+  },
+  "scripts": {
+    "check": "bin/check",
+    "build": "bun scripts/build.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/bun": "1.4.3",
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2",
+    "zod": "4.6.7"
+  }
+}

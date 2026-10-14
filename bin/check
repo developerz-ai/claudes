@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+bunx biome check .
+bunx tsc --noEmit
+bun test
+bun scripts/build.ts
+
+actual="$(node dist/claudes.js --version)"
+if [ "$actual" != "0.1.0" ]; then
+  echo "bin/check: node dist/claudes.js --version printed '$actual', expected '0.1.0'" >&2
+  exit 1
+fi
