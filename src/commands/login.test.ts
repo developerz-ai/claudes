@@ -23,6 +23,7 @@ describe("login environment", () => {
     expect(result).toMatchObject({ ok: false, exitCode: 78 });
     const message = result.ok === false ? (result.message ?? "") : "";
     expect(message).toContain("cannot find the config directory");
+    expect(message).toContain("set $HOME or $XDG_CONFIG_HOME to an absolute path");
     expect(message.split("\n").length).toBe(1); // one line, no stack trace
     expect(h.prompts).toEqual([]);
     expect(h.fetchCalls).toEqual([]);
@@ -116,13 +117,11 @@ describe("login key acquisition", () => {
     });
   }
 
-  test("TTY: prompts on stderr and never echoes the key", async () => {
+  test("TTY: prompts once and never echoes the key", async () => {
     const h = harness(home, { stdinIsTTY: true, ttyKey: KEY });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: true });
     expect(h.prompts).toEqual(["Router key: "]);
-    expect(h.stderr.join("")).toContain("Router key: ");
-    expect(h.stderr.join("")).not.toContain(KEY);
     expect(h.stdout.join("")).not.toContain(KEY);
   });
 

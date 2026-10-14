@@ -65,7 +65,7 @@ describe("login argument handling", () => {
     expect(message).toContain("invalid --url (baseUrl must be a bare origin");
     expect(message).toContain("did you mean https://x?");
     expect(message).not.toContain("not-a-key-but-secret");
-    expect(h.stdout.length + h.stderr.length).toBe(0);
+    expect(h.stdout.length).toBe(0);
     expect(h.prompts).toEqual([]);
   });
 
@@ -77,6 +77,64 @@ describe("login argument handling", () => {
     expect(message).toContain("invalid --url (baseUrl must be a valid https:// URL");
     expect(message).not.toContain("did you mean");
     expect(message).not.toContain("definitely not a url");
+  });
+
+  test("an already-bare-origin-but-http --url gets no hint (it would echo the input)", async () => {
+    const h = harness(home);
+    const result = await login(["--url", "http://router.lan"], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 64 });
+    const message = result.ok === false ? (result.message ?? "") : "";
+    expect(message).toContain("invalid --url");
+    expect(message).toContain("must use https://");
+    expect(message).not.toContain("did you mean");
+  });
+
+  test("opaque origins (file:, data:, javascript:) get no hint and never print null", async () => {
+    for (const url of ["file:///etc/passwd", "data:text/plain,hello", "javascript:alert(1)"]) {
+      const h = harness(home);
+      const result = await login(["--url", url], h.deps);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      const message = result.ok === false ? (result.message ?? "") : "";
+      expect(message).toContain("invalid --url");
+      expect(message).not.toContain("did you mean");
+      expect(message).not.toContain("null");
+      expect(message).not.toContain(url);
+    }
+  });
+
+  test("a host that embeds the key prefix (%5F-encoded or uppercased) gets no hint", async () => {
+    const body = "FAKEKEYabcdef0123456789abcdefghi";
+    for (const url of [
+      `https://mar%5Flive_${body}.example.test`,
+      `https://MAR_LIVE_${body}.example.test`,
+    ]) {
+      const h = harness(home);
+      const result = await login(["--url", url], h.deps);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      const message = result.ok === false ? (result.message ?? "") : "";
+      expect(message).toContain("invalid --url");
+      // The URL parser decodes %5F and lowercases hosts, so the suppression
+      // branch must fire before the origin could be offered back.
+      expect(message).not.toContain("did you mean");
+      expect(message).not.toContain("FAKEKEY");
+      expect(message).not.toContain("mar_live_");
+    }
+  });
+
+  test("a duplicate --url is refused by flag name, never by value", async () => {
+    for (const argv of [
+      ["--url", ROUTER, "--url", "https://other.example.test"],
+      [`--url=${ROUTER}`, "--url", "https://other.example.test"],
+    ]) {
+      const h = harness(home);
+      const result = await login(argv, h.deps);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      const message = result.ok === false ? (result.message ?? "") : "";
+      expect(message.split("\n\n")[0]).toBe("claudes login: --url may only be given once");
+      expect(message).not.toContain("other.example.test");
+      expect(h.prompts).toEqual([]);
+      expect(h.fetchCalls).toEqual([]);
+    }
   });
 
   test("refuses a tier override that is not a bounded model id, without echoing it", async () => {

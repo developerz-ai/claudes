@@ -6,7 +6,7 @@ import { configDir } from "../config/paths";
 import { readConfig } from "../config/store";
 import { scrub } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
-import { type LoginDeps, login, redactKey } from "./login";
+import { type LoginDeps, login, REDACTED_KEY } from "./login";
 import {
   configPath,
   expectNoKeyLeak,
@@ -174,10 +174,9 @@ describe("login REDACTION end to end", () => {
       const result = await login(argv, branch.h.deps);
       expect(result.ok).toBe(false);
       const message = result.ok === false ? (result.message ?? "") : "";
-      const everything = `${message}\n${branch.h.stdout.join("\n")}\n${branch.h.stderr.join("\n")}`;
+      const everything = `${message}\n${branch.h.stdout.join("\n")}`;
       expect(message).not.toContain(KEY);
       expect(branch.h.stdout.join("\n")).not.toContain(KEY);
-      expect(branch.h.stderr.join("\n")).not.toContain(KEY);
       assertNoKeyFragment(everything, KEY);
     }
   });
@@ -197,18 +196,19 @@ describe("login REDACTION end to end", () => {
   });
 });
 
-describe("redactKey", () => {
-  test("every key — long or short, valid or not — redacts to exactly the prefix", () => {
-    expect(redactKey(KEY)).toBe("mar_live_…");
-    expect(redactKey("mar_live_ABCDEFGH")).toBe("mar_live_…");
-    expect(redactKey("mar_live_ABCD")).toBe("mar_live_…");
-    expect(redactKey("mar_live_")).toBe("mar_live_…");
-    expect(redactKey("mar_live")).toBe("mar_live_…");
+describe("REDACTED_KEY", () => {
+  test("is exactly the prefix plus an ellipsis — no length hint for any key", () => {
+    expect(REDACTED_KEY).toBe("mar_live_…");
   });
 
   test("agrees with scrub(): the printed form is a fixed point", () => {
-    for (const key of [KEY, "mar_live_SECONDKEYabcdef0123456789abcdefg"]) {
-      expect(redactKey(key)).toBe(scrub(key));
+    for (const key of [
+      KEY,
+      "mar_live_SECONDKEYabcdef0123456789abcdefg",
+      "mar_live_ABCDEFGH",
+      "mar_live_",
+    ]) {
+      expect(scrub(key)).toBe(REDACTED_KEY);
     }
   });
 });

@@ -48,3 +48,11 @@ for arg in login some-prompt; do
     exit 1
   fi
 done
+
+# The usage error on stderr must end with a newline (byte 10), or the shell
+# prompt would land on the error's last line.
+last_byte="$(./dist/claudes.js login 2>&1 >/dev/null | tail -c 1 | od -An -tu1 | tr -d ' \n')"
+if [ "$last_byte" != "10" ]; then
+  echo "bin/check: ./dist/claudes.js login stderr does not end with a newline (last byte: '$last_byte')" >&2
+  exit 1
+fi

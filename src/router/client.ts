@@ -35,6 +35,27 @@ const MAX_BODY_BYTES = 2 ** 20; // 1 MiB is far more than either endpoint return
 const VERSION_PATTERN = /^[0-9A-Za-z.+_-]{1,64}$/;
 /** Errno-looking tokens only (`ECONNREFUSED`, `EAI_AGAIN`); never free text. */
 const CAUSE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
+/** Class-shaped names only (`TypeError`, `TimeoutError`); never free text. */
+const ERROR_NAME_PATTERN = /^[A-Z][A-Za-z0-9_]{0,63}$/;
+
+/**
+ * The single error-name helper (login and client share it): `err.name` when it
+ * is a class-shaped token, "Error" for anything else — a name that is missing,
+ * not a string, or produced by a throwing getter is never printed.
+ */
+export function errorName(err: unknown): string {
+  if (err instanceof Error) {
+    try {
+      const name = err.name;
+      if (typeof name === "string" && ERROR_NAME_PATTERN.test(name)) {
+        return name;
+      }
+    } catch {
+      // a throwing name getter is not printable either
+    }
+  }
+  return "Error";
+}
 
 /** GET `${baseUrl}/healthz`; resolves the router's version string. */
 export async function health(
@@ -115,7 +136,7 @@ async function request(
 }
 
 function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterError {
-  const name = err instanceof Error ? err.name : "Error";
+  const name = errorName(err);
   if (name === "TimeoutError" || name === "AbortError") {
     return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`);
   }
@@ -130,16 +151,63 @@ function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterE
 function diagnostic(err: unknown): string {
   if (err instanceof Error) {
     // fetch(…, {redirect: "error"}) rejects with a TypeError naming the
-    // redirect; the wording varies by runtime, the class does not.
-    if (err instanceof TypeError && /redirect/i.test(err.message)) {
+    // redirect. Bun puts the word in err.message; Node buries it in
+    // err.cause.message ("fetch failed" outside). Only the match is used —
+    // the cause text itself is never printed.
+    if (err instanceof TypeError && saysRedirect(err)) {
       return "refused a redirect";
     }
-    const causeCode = (err.cause as { code?: unknown } | undefined)?.code;
-    if (typeof causeCode === "string" && CAUSE_CODE_PATTERN.test(causeCode)) {
-      return causeCode;
+    const code = causeCodeOf(err);
+    if (code !== undefined) {
+      return code;
     }
   }
-  return err instanceof Error ? err.name : "Error";
+  return errorName(err);
+}
+
+/** True when the error or its cause names a redirect; never throws. */
+function saysRedirect(err: Error): boolean {
+  try {
+    return /redirect/i.test(`${err.message}\n${causeMessageOf(err)}`);
+  } catch {
+    return false;
+  }
+}
+
+/** Reads `err.cause` defensively: a throwing getter must not escape. */
+function causeOf(err: Error): unknown {
+  try {
+    return (err as { readonly cause?: unknown }).cause;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The cause's message, when the cause is an Error; never throws. */
+function causeMessageOf(err: Error): string {
+  const cause = causeOf(err);
+  if (!(cause instanceof Error)) {
+    return "";
+  }
+  try {
+    return cause.message;
+  } catch {
+    return "";
+  }
+}
+
+/** The cause's errno-looking code, when it has one; never throws. */
+function causeCodeOf(err: Error): string | undefined {
+  const cause = causeOf(err);
+  if (cause === null || typeof cause !== "object") {
+    return undefined;
+  }
+  try {
+    const code = (cause as { readonly code?: unknown }).code;
+    return typeof code === "string" && CAUSE_CODE_PATTERN.test(code) ? code : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function parseJson(endpoint: string, res: Response): Promise<unknown> {
@@ -192,8 +260,4 @@ async function readBodyCapped(endpoint: string, res: Response): Promise<string> 
     chunks.push(value);
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-function errorName(err: unknown): string {
-  return err instanceof Error ? err.name : "Error";
 }

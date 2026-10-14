@@ -129,29 +129,44 @@ describe("readConfig", () => {
     }
   });
 
-  test("refuses a file owned by another uid, saying to re-run login", () => {
+  test("refuses a foreign-owned FILE inside an owned directory, saying to re-run login", () => {
     writeConfig(path, sampleConfig());
+    // getuid is consulted once per ownership check (directory, then file), so
+    // the seam answers with the directory's real uid first and a foreign uid
+    // for the file: exactly an owned dir holding a foreign-owned file.
+    const uids = [statSync(dir).uid, 12345];
+    let calls = 0;
     try {
-      readConfig(path, { getuid: () => 12345 });
+      readConfig(path, { getuid: () => uids[calls++] });
       throw new Error("expected readConfig to refuse");
     } catch (err) {
       expect(err).toBeInstanceOf(InsecureConfigError);
-      expect((err as InsecureConfigError).message).toContain("owned by uid");
-      expect((err as InsecureConfigError).message).toContain('run "claudes login"');
-      expect((err as InsecureConfigError).message).not.toContain("chmod");
+      const message = (err as InsecureConfigError).message;
+      expect(message).toContain(
+        `${path} is owned by uid ${statSync(path).uid}, not by you (uid 12345)`,
+      );
+      expect(message).toContain('run "claudes login" again');
+      expect(message).not.toContain("chmod");
+      expect(calls).toBe(2); // the directory check passed, the file check refused
     }
   });
 
-  test("checks ownership before permissions: a foreign-uid, world-readable file gets the uid message", () => {
+  test("checks file ownership before file permissions: a foreign-uid, world-readable file gets the uid message", () => {
     writeConfig(path, sampleConfig());
     chmodSync(path, 0o666);
+    const uids = [statSync(dir).uid, 12345];
+    let calls = 0;
     try {
-      readConfig(path, { getuid: () => 12345 });
+      readConfig(path, { getuid: () => uids[calls++] });
       throw new Error("expected readConfig to refuse");
     } catch (err) {
       expect(err).toBeInstanceOf(InsecureConfigError);
-      expect((err as InsecureConfigError).message).toContain("owned by uid");
-      expect((err as InsecureConfigError).message).not.toContain("chmod 600");
+      const message = (err as InsecureConfigError).message;
+      expect(message).toContain(
+        `${path} is owned by uid ${statSync(path).uid}, not by you (uid 12345)`,
+      );
+      expect(message).not.toContain("chmod 600");
+      expect(message).not.toContain("chmod 700");
     }
   });
 
@@ -196,24 +211,29 @@ describe("readConfig", () => {
     }
   });
 
-  test("wraps every other open/stat errno in ConfigError with the path and a fix", () => {
-    // EACCES on the open: an unreadable file inside a readable dir.
-    writeConfig(path, sampleConfig());
-    chmodSync(path, 0o000);
-    try {
-      readConfig(path);
-      throw new Error("expected readConfig to refuse");
-    } catch (err) {
-      expect(err).toBeInstanceOf(ConfigError);
-      const message = (err as ConfigError).message;
-      expect(message).toContain(`cannot read config at ${path} (EACCES)`);
-      expect(message).toContain('remove it and re-run "claudes login"');
-    } finally {
-      chmodSync(path, 0o600);
-    }
+  // root ignores file modes, so the EACCES refusal cannot be produced as root.
+  test.skipIf(process.getuid?.() === 0)(
+    "wraps an EACCES open in ConfigError with the path and a fix",
+    () => {
+      writeConfig(path, sampleConfig());
+      chmodSync(path, 0o000);
+      try {
+        readConfig(path);
+        throw new Error("expected readConfig to refuse");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError);
+        const message = (err as ConfigError).message;
+        expect(message).toContain(`cannot read config at ${path} (EACCES)`);
+        expect(message).toContain('remove it and re-run "claudes login"');
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 
-    // ENOTDIR on the open: a plain file where a config-dir component should be
-    // (the dir stat sees the plain file and succeeds, the open cannot).
+  test("wraps an ENOTDIR open in ConfigError with the path and a fix", () => {
+    // A plain file where a config-dir component should be (the dir stat sees
+    // the plain file and succeeds, the open cannot).
     const notDir = join(dir, "plainfile");
     const fd = openSync(notDir, "w", 0o600);
     closeSync(fd);

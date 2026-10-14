@@ -7,7 +7,7 @@ import {
   ROUTER_KEY_PREFIX,
 } from "../config/schema";
 import { writeConfig } from "../config/store";
-import { type FetchLike, health, models, RouterError, scrub } from "../router/client";
+import { errorName, type FetchLike, health, models, RouterError, scrub } from "../router/client";
 import { resolveTiers } from "../tiers";
 import { parseLoginArgs } from "./login-args";
 import {
@@ -24,9 +24,7 @@ import {
  * anything after the prefix anyway, so a hint could never survive the output
  * path; this way the two can never disagree.
  */
-export function redactKey(_key: string): string {
-  return `${ROUTER_KEY_PREFIX}…`;
-}
+export const REDACTED_KEY = `${ROUTER_KEY_PREFIX}…`;
 
 export interface LoginDeps {
   readonly env: Env;
@@ -70,7 +68,7 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
   } catch {
     return failure(
       78,
-      "claudes login: cannot find the config directory — set $HOME or $XDG_CONFIG_HOME",
+      "claudes login: cannot find the config directory — set $HOME or $XDG_CONFIG_HOME to an absolute path",
     );
   }
 
@@ -140,7 +138,7 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
   }
 
   deps.stdout(`logged in to ${url} (router version ${routerVersion})`);
-  deps.stdout(`key ${redactKey(key)}`);
+  deps.stdout(`key ${REDACTED_KEY}`);
   deps.stdout(`opus   ${tiers.opus}`);
   deps.stdout(`sonnet ${tiers.sonnet}`);
   deps.stdout(`haiku  ${tiers.haiku}`);
@@ -156,7 +154,10 @@ function resolveBaseUrl(value: string): string | { reason: string } {
     // When the input at least parses, its origin is the URL the user meant —
     // and an origin is scheme+host+port only. The argv scan already refused a
     // key anywhere on the command line; this re-check keeps the hint from ever
-    // becoming an echo if that changes.
+    // becoming an echo if that changes. The hint is offered only when the
+    // origin is itself a valid baseUrl: for an already-bare-origin-but-http
+    // URL it would echo the input back, and for opaque origins (file:, data:,
+    // javascript:) the URL parser yields the literal string "null".
     let parsed: URL;
     try {
       parsed = new URL(value);
@@ -166,6 +167,9 @@ function resolveBaseUrl(value: string): string | { reason: string } {
     if (parsed.origin.includes(ROUTER_KEY_PREFIX)) {
       return { reason };
     }
+    if (!baseUrlSchema.safeParse(parsed.origin).success) {
+      return { reason };
+    }
     return { reason: `${reason} — did you mean ${parsed.origin}?` };
   }
   return new URL(value).origin;
@@ -173,10 +177,6 @@ function resolveBaseUrl(value: string): string | { reason: string } {
 
 function describeRouterError(err: unknown, url: string): string {
   return err instanceof RouterError ? err.message : `could not reach ${url} (${errorName(err)})`;
-}
-
-function errorName(err: unknown): string {
-  return err instanceof Error ? err.name : "Error";
 }
 
 function errorMessage(err: unknown): string {
@@ -219,7 +219,10 @@ export async function runLogin(
     return 0;
   }
   if (result.message !== undefined) {
-    err(scrub(result.message));
+    // The prompt above may be newline-free, but the final write is a whole
+    // line: without this the shell prompt would land on the error's tail.
+    const text = scrub(result.message);
+    err(text.endsWith("\n") ? text : `${text}\n`);
   }
   return result.exitCode;
 }

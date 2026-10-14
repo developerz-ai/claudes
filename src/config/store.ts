@@ -48,7 +48,11 @@ export interface WriteHooks {
 }
 
 export interface ReadOptions {
-  /** Defaults to process.getuid; injectable so tests stay pure. */
+  /**
+   * Defaults to process.getuid; injectable so tests stay pure. Consulted once
+   * per ownership check — directory, then file — so the two can disagree
+   * exactly as they can on disk (an owned directory holding a foreign file).
+   */
   getuid?: () => number | undefined;
 }
 
@@ -124,13 +128,13 @@ export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}
  */
 export function readConfig(path: string, options: ReadOptions = {}): Config {
   const getuid = options.getuid ?? (() => process.getuid?.());
-  const uid = getuid();
   const dir = dirname(path);
 
+  const dirUid = getuid();
   const dirStat = statOrConfigError(dir, path);
-  if (uid !== undefined && dirStat.uid !== uid) {
+  if (dirUid !== undefined && dirStat.uid !== dirUid) {
     throw new InsecureConfigError(
-      `refusing to read config: directory ${dir} is owned by uid ${dirStat.uid}, not by you (uid ${uid}) — remove it and re-run "claudes login"`,
+      `refusing to read config: directory ${dir} is owned by uid ${dirStat.uid}, not by you (uid ${dirUid}) — remove it and re-run "claudes login"`,
     );
   }
   if ((dirStat.mode & 0o077) !== 0) {
@@ -152,9 +156,10 @@ export function readConfig(path: string, options: ReadOptions = {}): Config {
         `config path ${path} is not a regular file — remove it and re-run "claudes login"`,
       );
     }
-    if (uid !== undefined && fileStat.uid !== uid) {
+    const fileUid = getuid();
+    if (fileUid !== undefined && fileStat.uid !== fileUid) {
       throw new InsecureConfigError(
-        `refusing to read config: ${path} is owned by uid ${fileStat.uid}, not by you (uid ${uid}) — run "claudes login" again to replace it`,
+        `refusing to read config: ${path} is owned by uid ${fileStat.uid}, not by you (uid ${fileUid}) — run "claudes login" again to replace it`,
       );
     }
     if ((fileStat.mode & 0o077) !== 0) {

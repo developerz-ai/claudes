@@ -45,7 +45,6 @@ export function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; ca
 export interface Harness {
   deps: LoginDeps;
   stdout: string[];
-  stderr: string[];
   prompts: string[];
   writeConfigCalls: { path: string; config: unknown }[];
   fetchCalls: string[];
@@ -66,7 +65,6 @@ export interface HarnessOptions {
 
 export function harness(home: string, overrides: HarnessOptions = {}): Harness {
   const stdout: string[] = [];
-  const stderr: string[] = [];
   const prompts: string[] = [];
   const writeConfigCalls: { path: string; config: unknown }[] = [];
   const fetchCalls: string[] = [];
@@ -83,8 +81,6 @@ export function harness(home: string, overrides: HarnessOptions = {}): Harness {
       overrides.ttyError === undefined
         ? async (prompt) => {
             prompts.push(prompt);
-            // The real reader renders the prompt on stderr and echoes nothing else.
-            stderr.push(prompt);
             return overrides.ttyKey;
           }
         : async () => {
@@ -118,7 +114,7 @@ export function harness(home: string, overrides: HarnessOptions = {}): Harness {
             },
           }),
   };
-  return { deps, stdout, stderr, prompts, writeConfigCalls, fetchCalls };
+  return { deps, stdout, prompts, writeConfigCalls, fetchCalls };
 }
 
 export function configPath(home: string): string {
@@ -129,9 +125,8 @@ export function configPath(home: string): string {
 export function expectNoKeyLeak(h: Harness, result: { ok: boolean; message?: string }): void {
   const message = result.message ?? "";
   const out = h.stdout.join("\n");
-  const err = h.stderr.join("\n");
-  if (message.includes(KEY) || out.includes(KEY) || err.includes(KEY)) {
+  if (message.includes(KEY) || out.includes(KEY)) {
     throw new Error("the full key leaked into the output");
   }
-  assertNoKeyFragment(`${message}\n${out}\n${err}`, KEY);
+  assertNoKeyFragment(`${message}\n${out}`, KEY);
 }

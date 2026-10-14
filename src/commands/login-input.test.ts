@@ -81,6 +81,49 @@ describe("readSecret (real hidden reader)", () => {
     await expect(secret).resolves.toBe("ab");
   });
 
+  test("a CSI sequence is swallowed whole — its tail never lands on the line", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    // Shift+Left (ESC [ 1 ; 2 D), then plain typing: only the plain chars survive.
+    const csi = Buffer.concat([Buffer.from([0x1b]), Buffer.from("[1;2D")]);
+    tty.emit("data", Buffer.concat([csi, Buffer.from("x\r")]));
+    await expect(secret).resolves.toBe("x");
+  });
+
+  test("a CSI sequence split across chunks is swallowed just as completely", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    tty.emit("data", Buffer.concat([Buffer.from([0x1b]), Buffer.from("[1;2")]));
+    tty.emit("data", Buffer.from("Dx\r"));
+    await expect(secret).resolves.toBe("x");
+  });
+
+  test("a lone ESC is dropped; the byte after it still types", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    const esc = Buffer.concat([Buffer.from("a"), Buffer.from([0x1b]), Buffer.from("b")]);
+    tty.emit("data", Buffer.concat([esc, Buffer.from("\r")]));
+    await expect(secret).resolves.toBe("ab");
+  });
+
+  test("Ctrl-D on an empty line is stdin closed, not an empty submit", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    tty.emit("data", Buffer.from([0x04]));
+    await expect(secret).rejects.toBeInstanceOf(StdinClosedError);
+    expect(tty.rawModes).toEqual([true, false]);
+  });
+
+  test("Ctrl-D on a typed line submits it, like Enter", async () => {
+    const tty = new FakeTty();
+    const writes: string[] = [];
+    const secret = readSecret(asTty(tty), (text) => writes.push(text), "P: ");
+    tty.emit("data", Buffer.concat([Buffer.from("abc"), Buffer.from([0x04])]));
+    await expect(secret).resolves.toBe("abc");
+    expect(writes).toEqual(["P: ", "\n"]);
+    expect(tty.rawModes).toEqual([true, false]);
+  });
+
   test("backspace and DEL remove the last code point", async () => {
     const tty = new FakeTty();
     const secret = readSecret(asTty(tty), () => {}, "P: ");
@@ -157,6 +200,20 @@ describe("readFirstLine (real stdin reader)", () => {
     await expect(line).resolves.toBe("mar_live_X");
   });
 
+  test("a valid line followed by an 8 KiB tail in the SAME chunk resolves", async () => {
+    const stream = new FakeReadable();
+    const line = readFirstLine(asReadable(stream));
+    stream.emit("data", Buffer.concat([Buffer.from("mar_live_X\n"), Buffer.alloc(8 * 1024, 0x61)]));
+    await expect(line).resolves.toBe("mar_live_X");
+  });
+
+  test("a first line longer than the cap rejects even when newline-terminated", async () => {
+    const stream = new FakeReadable();
+    const line = readFirstLine(asReadable(stream));
+    stream.emit("data", Buffer.from(`${"a".repeat(4097)}\nignored tail`));
+    await expect(line).rejects.toBeInstanceOf(InputTooLongError);
+  });
+
   test("finds a newline that arrives in a later chunk (no whole-buffer rescans)", async () => {
     const stream = new FakeReadable();
     const line = readFirstLine(asReadable(stream));
@@ -201,6 +258,14 @@ describe("readFirstLine (real stdin reader)", () => {
     stream.emit("end");
     await expect(line).rejects.toBeInstanceOf(InputTooLongError);
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("a 1 MiB unterminated line in a single chunk is refused too", async () => {
+    const stream = new FakeReadable();
+    const line = readFirstLine(asReadable(stream));
+    stream.emit("data", Buffer.alloc(1024 * 1024, 0x61));
+    stream.emit("end");
+    await expect(line).rejects.toBeInstanceOf(InputTooLongError);
   });
 
   test("decodes a code point split across chunks", async () => {

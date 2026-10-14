@@ -46,10 +46,13 @@ export type StdinLike = ReadableLike & { readonly isTTY?: boolean };
 /**
  * Reads one line with echo off: the prompt goes to `write`, typed characters go
  * nowhere. Enter submits; Ctrl-C resolves undefined, which the caller maps to
- * exit code 130; Ctrl-U clears the line; every other control byte is ignored.
- * Raw mode is taken BEFORE the prompt is written, so nothing can echo in the
- * gap. A stream 'end'/'error' — or SIGHUP — restores the terminal and rejects
- * with StdinClosedError, which the caller maps to exit 1; more than
+ * exit code 130; Ctrl-D rejects with StdinClosedError on an empty line and
+ * submits a typed one; Ctrl-U clears the line; every other control byte is
+ * ignored, and terminal escape sequences (ESC [ … final byte 0x40-0x7e) are
+ * swallowed whole so arrow keys cannot leave their tail on the line. Raw mode
+ * is taken BEFORE the prompt is written, so nothing can echo in the gap. A
+ * stream 'end'/'error' — or SIGHUP — restores the terminal and rejects with
+ * StdinClosedError, which the caller maps to exit 1; more than
  * MAX_INPUT_BYTES rejects with InputTooLongError (exit 64).
  */
 export function readSecret(
@@ -61,6 +64,8 @@ export function readSecret(
     const decoder = new TextDecoder("utf-8");
     let line = "";
     let lineBytes = 0;
+    /** Terminal-escape sequence state: nothing pending, ESC seen, inside a CSI sequence. */
+    let escapeState: "none" | "esc" | "csi" = "none";
     let settled = false;
     const finish = (settle: () => void) => {
       if (settled) {
@@ -80,10 +85,42 @@ export function readSecret(
       const text = decoder.decode(bytes, { stream: true });
       for (const char of text) {
         const code = char.codePointAt(0) ?? 0;
+        // CSI sequences are consumed until their final byte (0x40-0x7e); the
+        // state lives outside the loop so a sequence split across chunks is
+        // swallowed just as completely as one delivered whole.
+        if (escapeState === "csi") {
+          if (code >= 0x40 && code <= 0x7e) {
+            escapeState = "none";
+          }
+          continue;
+        }
+        if (code === 0x1b) {
+          escapeState = "esc";
+          continue;
+        }
+        if (escapeState === "esc") {
+          escapeState = "none";
+          if (code === 0x5b) {
+            escapeState = "csi";
+            continue;
+          }
+          // A lone ESC prefixes a two-byte escape; drop the ESC and treat the
+          // next byte like any other input below.
+        }
         if (code === 0x03) {
           // Ctrl-C
           write("\n");
           finish(() => resolve(undefined));
+          return;
+        }
+        if (code === 0x04) {
+          // Ctrl-D: EOF on an empty line, submit on a typed one.
+          if (line === "") {
+            finish(() => reject(new StdinClosedError()));
+            return;
+          }
+          write("\n");
+          finish(() => resolve(line));
           return;
         }
         if (code === 0x0d || code === 0x0a) {
@@ -133,9 +170,11 @@ export function readSecret(
 
 /**
  * Reads everything up to the first newline (or to EOF when there is none), and
- * at most MAX_INPUT_BYTES: past the cap it rejects with InputTooLongError
- * instead of buffering. "\n" cannot straddle a UTF-8 chunk boundary, so the
- * newline search only ever scans the freshly decoded chunk.
+ * at most MAX_INPUT_BYTES of the FIRST LINE: past the cap it rejects with
+ * InputTooLongError instead of buffering, while a valid line followed by any
+ * amount of tail in the same chunk still resolves. "\n" cannot straddle a
+ * UTF-8 chunk boundary, so the newline search only ever scans the freshly
+ * decoded chunk, and only the bytes before it are charged to the cap.
  */
 export function readFirstLine(input: ReadableLike): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -149,17 +188,24 @@ export function readFirstLine(input: ReadableLike): Promise<string> {
     };
     const onData = (chunk: Buffer | string) => {
       const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
-      total += bytes.byteLength;
-      if (total > MAX_INPUT_BYTES) {
-        cleanup();
-        reject(new InputTooLongError());
-        return;
-      }
       const text = decoder.decode(bytes, { stream: true });
       const newline = text.indexOf("\n");
       if (newline !== -1) {
+        // Charge only the bytes of the line itself; the tail after the newline
+        // is discarded, however large, and never buffered.
+        total += Buffer.byteLength(text.slice(0, newline), "utf8");
         cleanup();
+        if (total > MAX_INPUT_BYTES) {
+          reject(new InputTooLongError());
+          return;
+        }
         resolve(line + text.slice(0, newline));
+        return;
+      }
+      total += Buffer.byteLength(text, "utf8");
+      if (total > MAX_INPUT_BYTES) {
+        cleanup();
+        reject(new InputTooLongError());
         return;
       }
       line += text;

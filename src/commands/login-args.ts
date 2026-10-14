@@ -55,6 +55,11 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
         return refusedKey("claudes login: refusing an argument that looks like a router key");
       }
       if (name === "--url") {
+        // Rejected by flag name, never by value: the second URL is as
+        // unprintable as the first.
+        if (url !== undefined) {
+          return usageError("claudes login: --url may only be given once");
+        }
         url = value;
       } else if (MODEL_ID_PATTERN.test(value)) {
         overrides[name.slice(2) as TierName] = value;

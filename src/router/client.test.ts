@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { assertNoKeyFragment } from "../test-support/redact";
-import { type FetchLike, health, models, RouterError, scrub } from "./client";
+import { errorName, type FetchLike, health, models, RouterError, scrub } from "./client";
 
 const BASE = "https://router.example.test";
 const KEY = "mar_live_TESTKEYabcdef0123456789abcdefghi";
@@ -164,7 +164,27 @@ describe("health", () => {
     }
   });
 
-  test("a refused redirect is named, never quoted", async () => {
+  test("a refused redirect is named, never quoted (Node shape: the cause says it)", async () => {
+    // The shape Node's undici really rejects with: a bare "fetch failed"
+    // TypeError whose cause carries the word "redirect".
+    const { fetchImpl } = stubFetch({
+      failWith: new TypeError("fetch failed", {
+        cause: new Error(`unexpected redirect to https://evil.example.test/${KEY}`),
+      }),
+    });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      const message = (err as RouterError).message;
+      expect(message).toBe(`could not reach ${BASE}/healthz (refused a redirect)`);
+      expect(message).not.toContain("unexpected redirect");
+      expect(message).not.toContain("evil.example.test");
+      assertNoKeyFragment(message, KEY);
+    }
+  });
+
+  test("a refused redirect is named, never quoted (Bun shape: the message says it)", async () => {
     const { fetchImpl } = stubFetch({
       failWith: new TypeError(`redirect mode is set to error: ${KEY}`),
     });
@@ -176,6 +196,32 @@ describe("health", () => {
       expect(message).toBe(`could not reach ${BASE}/healthz (refused a redirect)`);
       assertNoKeyFragment(message, KEY);
     }
+  });
+
+  test("a throwing err.cause getter never escapes the diagnostic", async () => {
+    const failure = new TypeError("fetch failed");
+    Object.defineProperty(failure, "cause", {
+      get() {
+        throw new Error("the cause getter exploded");
+      },
+    });
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    await expect(health(BASE, fetchImpl)).rejects.toThrow(
+      `could not reach ${BASE}/healthz (TypeError)`,
+    );
+  });
+
+  test("a cause whose code getter throws falls back to the class name", async () => {
+    const failure = new TypeError("fetch failed");
+    (failure as { cause?: unknown }).cause = {
+      get code(): string {
+        throw new Error("the code getter exploded");
+      },
+    };
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    await expect(health(BASE, fetchImpl)).rejects.toThrow(
+      `could not reach ${BASE}/healthz (TypeError)`,
+    );
   });
 
   test("refuses a body whose declared content-length exceeds the 1 MiB cap", async () => {
@@ -274,5 +320,45 @@ describe("scrub", () => {
     const err = new RouterError(`GET x failed with ${KEY} inside`);
     expect(err.message).not.toContain(KEY);
     expect(err.message).toContain("mar_live_…");
+  });
+});
+
+describe("errorName", () => {
+  test("returns class-shaped names, Error for everything else", () => {
+    expect(errorName(new TypeError("x"))).toBe("TypeError");
+    expect(errorName(new RangeError("x"))).toBe("RangeError");
+    expect(errorName("a plain string")).toBe("Error");
+    expect(errorName(undefined)).toBe("Error");
+    for (const name of [
+      "lower case",
+      "4StartsWithADigit",
+      "With Space",
+      "Bad!Name",
+      "",
+      `x${"N".repeat(63)}`,
+    ]) {
+      const err = new Error("x");
+      err.name = name;
+      expect(errorName(err)).toBe("Error");
+    }
+    const throwing = new Error("x");
+    Object.defineProperty(throwing, "name", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    expect(errorName(throwing)).toBe("Error");
+    const nonString = new Error("x");
+    Object.defineProperty(nonString, "name", { value: 42 });
+    expect(errorName(nonString)).toBe("Error");
+  });
+
+  test("a non-class-shaped err.name prints as plain Error in the unreachable message", async () => {
+    const failure = new Error("fetch failed");
+    failure.name = "suspicious name; rm -rf /";
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    await expect(health(BASE, fetchImpl)).rejects.toThrow(
+      `could not reach ${BASE}/healthz (Error)`,
+    );
   });
 });
