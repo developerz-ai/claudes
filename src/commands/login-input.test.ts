@@ -98,7 +98,7 @@ describe("readSecret (real hidden reader)", () => {
     await expect(secret).resolves.toBe("x");
   });
 
-  test("an unterminated CSI never swallows Ctrl-C (ECMA-48: C0 aborts the sequence)", async () => {
+  test("an unterminated CSI never swallows Ctrl-C (a C0 control aborts the sequence)", async () => {
     const tty = new FakeTty();
     const secret = readSecret(asTty(tty), () => {}, "P: ");
     tty.emit(
@@ -110,6 +110,7 @@ describe("readSecret (real hidden reader)", () => {
         Buffer.from([0x03]),
       ]),
     );
+    tty.emit("end"); // a regression rejects (StdinClosedError) instead of hanging
     await expect(secret).resolves.toBeUndefined();
   });
 
@@ -117,6 +118,7 @@ describe("readSecret (real hidden reader)", () => {
     const tty = new FakeTty();
     const secret = readSecret(asTty(tty), () => {}, "P: ");
     tty.emit("data", Buffer.concat([Buffer.from("ab"), Buffer.from([0x1b]), Buffer.from("[\r")]));
+    tty.emit("end"); // a regression rejects (StdinClosedError) instead of hanging
     await expect(secret).resolves.toBe("ab");
   });
 
@@ -124,7 +126,32 @@ describe("readSecret (real hidden reader)", () => {
     const tty = new FakeTty();
     const secret = readSecret(asTty(tty), () => {}, "P: ");
     tty.emit("data", Buffer.concat([Buffer.from([0x1b]), Buffer.from("OA"), Buffer.from("x\r")]));
+    tty.emit("end");
     await expect(secret).resolves.toBe("x");
+  });
+
+  test("an unterminated SS3 never swallows Enter", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    tty.emit("data", Buffer.concat([Buffer.from("ab"), Buffer.from([0x1b]), Buffer.from("O\r")]));
+    tty.emit("end"); // a regression rejects (StdinClosedError) instead of hanging
+    await expect(secret).resolves.toBe("ab");
+  });
+
+  test("an unterminated SS3 never swallows Ctrl-C", async () => {
+    const tty = new FakeTty();
+    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    tty.emit(
+      "data",
+      Buffer.concat([
+        Buffer.from("ab"),
+        Buffer.from([0x1b]),
+        Buffer.from("O"),
+        Buffer.from([0x03]),
+      ]),
+    );
+    tty.emit("end"); // a regression rejects (StdinClosedError) instead of hanging
+    await expect(secret).resolves.toBeUndefined();
   });
 
   test("a lone ESC is dropped; the byte after it still types", async () => {
@@ -137,10 +164,12 @@ describe("readSecret (real hidden reader)", () => {
 
   test("Ctrl-D on an empty line is stdin closed, not an empty submit", async () => {
     const tty = new FakeTty();
-    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    const writes: string[] = [];
+    const secret = readSecret(asTty(tty), (text) => writes.push(text), "P: ");
     tty.emit("data", Buffer.from([0x04]));
     await expect(secret).rejects.toBeInstanceOf(StdinClosedError);
     expect(tty.rawModes).toEqual([true, false]);
+    expect(writes).toEqual(["P: ", "\n"]); // the error never lands on the prompt line
   });
 
   test("Ctrl-D on a typed line submits it, like Enter", async () => {
@@ -199,10 +228,12 @@ describe("readSecret (real hidden reader)", () => {
 
   test("typing past 4096 bytes rejects with InputTooLongError and restores the tty", async () => {
     const tty = new FakeTty();
-    const secret = readSecret(asTty(tty), () => {}, "P: ");
+    const writes: string[] = [];
+    const secret = readSecret(asTty(tty), (text) => writes.push(text), "P: ");
     tty.emit("data", Buffer.from("a".repeat(4097)));
     await expect(secret).rejects.toBeInstanceOf(InputTooLongError);
     expect(tty.rawModes).toEqual([true, false]);
+    expect(writes).toEqual(["P: ", "\n"]); // the error never lands on the prompt line
   });
 
   test("exactly 4096 bytes is still accepted", async () => {
