@@ -132,7 +132,7 @@ jobs:
       # node_modules/sigstore again, and in npm@12.2.0 the require.resolve chain
       # from libnpmpublish through sigstore and @sigstore/* was verified against
       # the actual packed tarball.
-      - name: Install pinned npm (NPM_VERSION) from a verified tarball
+      - name: Install pinned npm ${{ env.NPM_VERSION }} from a verified tarball
         run: |
           curl -fsSLo npm.tgz "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
           expected="$NPM_SHA512"
@@ -155,19 +155,36 @@ jobs:
       # artifact reaches the registry.
       - name: Publish
         run: npm publish "./artifact/$TARBALL" --access public --provenance --loglevel verbose
-      # A config that only allows `npm stage publish` can report success while
-      # nothing becomes installable. Prove the version is live on the registry.
-      - name: Verify the version is published
+
+  verify:
+    needs: [build, publish]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {} # read-only public registry check; no token of any kind
+    env:
+      TARBALL: ${{ needs.build.outputs.tarball }}
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: artifact
+      # Separate job so "Re-run failed jobs" repeats only this check: the
+      # publish itself is immutable and must never be re-run.
+      - name: Confirm the version is visible on the registry
         run: |
           version="$(tar -xzOf "./artifact/$TARBALL" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).version')"
-          for _ in 1 2 3 4 5 6; do
-            if [ "$(npm view "@developerz.ai/claudes@$version" version 2>/dev/null)" = "$version" ]; then
-              echo "published @developerz.ai/claudes@$version"
+          for _ in $(seq 1 30); do
+            if [ "$(npm view "@developerz.ai/claudes@$version" version)" = "$version" ]; then
+              echo "visible: @developerz.ai/claudes@$version"
               exit 0
             fi
             sleep 10
           done
-          echo "::error title=Not published::npm reported success but @developerz.ai/claudes@$version is not installable after 60s (a stage-only trusted publisher stages instead of publishing)." >&2
+          echo "::error title=Not yet visible::the publish job succeeded, but @developerz.ai/claudes@$version is not visible on the registry after 5 minutes. This is usually registry propagation lag. Check 'npm view @developerz.ai/claudes versions' manually, and re-run only this verify job. Do NOT re-run publish: the version is immutable." >&2
           exit 1
 
   dry-run:
@@ -175,8 +192,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read # no id-token: a dry run must never be able to publish
+    permissions: {} # same as publish minus id-token: a dry run can never publish
     env:
       TARBALL: ${{ needs.build.outputs.tarball }}
     steps:
@@ -186,7 +202,7 @@ jobs:
           # No registry-url: a dry run does not authenticate to npm.
       # Same digest-verified npm install as the publish job; see that job
       # for why npm 12.2.0 specifically (npm/cli#9722, npm/cli#9740).
-      - name: Install pinned npm (NPM_VERSION) from a verified tarball
+      - name: Install pinned npm ${{ env.NPM_VERSION }} from a verified tarball
         run: |
           curl -fsSLo npm.tgz "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
           expected="$NPM_SHA512"
