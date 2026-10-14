@@ -6,3 +6,4 @@ node_modules/
 *.key
 *.tgz
 .DS_Store
+!.env.example
