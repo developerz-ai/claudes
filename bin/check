@@ -38,6 +38,8 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+# Bare "login" (no --url) must exit 64: that is the usage error. "some-prompt"
+# is a passthrough the launcher does not implement yet.
 for arg in login some-prompt; do
   rc=0
   ./dist/claudes.js "$arg" 2>/dev/null || rc=$?
