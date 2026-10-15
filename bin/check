@@ -51,13 +51,22 @@ fi
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-# Bare "doctor" is still an unimplemented reserved word: it must exit 64, in
-# the same env -i isolation as the key checks below (no ambient env leaks in).
+# "doctor" with no config behind an empty HOME: a real run now, so it must
+# exit non-zero, print a FAIL line, and print no key bytes — in the same env -i
+# isolation as the key checks below (no ambient env leaks in).
 rc=0
 env -i HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" PATH="$PATH" \
-  ./dist/claudes.js doctor 2>/dev/null || rc=$?
-if [ "$rc" -ne 64 ]; then
-  echo "bin/check: ./dist/claudes.js doctor exited $rc, expected 64" >&2
+  ./dist/claudes.js doctor >"$scratch/doctor.out" 2>/dev/null || rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "bin/check: ./dist/claudes.js doctor exited 0 with no config, expected non-zero" >&2
+  exit 1
+fi
+grep -q "FAIL" "$scratch/doctor.out" || {
+  echo "bin/check: ./dist/claudes.js doctor printed no FAIL line" >&2
+  exit 1
+}
+if grep -q "mar_live_[A-Za-z0-9_-]\{8\}" "$scratch/doctor.out"; then
+  echo "bin/check: ./dist/claudes.js doctor leaked key bytes" >&2
   exit 1
 fi
 
