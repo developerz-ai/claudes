@@ -75,3 +75,52 @@ if [ "$last_byte" != "10" ]; then
   echo "bin/check: ./dist/claudes.js login stderr does not end with a newline (last byte: '$last_byte')" >&2
   exit 1
 fi
+
+# `claudes key` through the shipped file: stdout must be the config's key bytes
+# exactly — no trailing newline — and the exit code must be 0. stdout here is a
+# file, not a TTY, so the helper path is the one being exercised. The scratch
+# HOME/XDG_CONFIG_HOME hold a hand-written 0700 dir and 0600 config.
+CHECK_KEY="mar_live_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
+mkdir -p "$scratch/keyhome" "$scratch/keyxdg/claudes"
+chmod 700 "$scratch/keyxdg/claudes"
+cat >"$scratch/keyxdg/claudes/config.json" <<JSON
+{
+  "version": 1,
+  "baseUrl": "https://router.example.test",
+  "key": "$CHECK_KEY",
+  "tiers": {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-4-5"
+  }
+}
+JSON
+chmod 600 "$scratch/keyxdg/claudes/config.json"
+rc=0
+HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ./dist/claudes.js key >"$scratch/key.out" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "bin/check: ./dist/claudes.js key exited $rc, expected 0" >&2
+  exit 1
+fi
+expected_key_od="$(printf '%s' "$CHECK_KEY" | od -An -c)"
+actual_key_od="$(od -An -c <"$scratch/key.out")"
+if [ "$actual_key_od" != "$expected_key_od" ]; then
+  echo "bin/check: ./dist/claudes.js key output is not exactly the key bytes (no trailing newline)" >&2
+  exit 1
+fi
+
+# And the same command under a TTY must refuse: exit 64, no key bytes. `script`
+# is present everywhere CI runs; if it is missing here, the pty tests in the
+# suite cover the same path instead.
+if command -v script >/dev/null 2>&1; then
+  rc=0
+  HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" script -qec "./dist/claudes.js key" /dev/null >"$scratch/key-tty.out" || rc=$?
+  if [ "$rc" -ne 64 ]; then
+    echo "bin/check: ./dist/claudes.js key under a pty exited $rc, expected 64" >&2
+    exit 1
+  fi
+  if grep -q "mar_live_" "$scratch/key-tty.out"; then
+    echo "bin/check: ./dist/claudes.js key under a pty leaked key bytes" >&2
+    exit 1
+  fi
+fi

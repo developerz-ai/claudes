@@ -1,4 +1,5 @@
 import type { Config } from "../config/schema";
+import { PROVIDER_SWITCHES } from "./provider-switches";
 import { denyRules, disabledEnv } from "./unsupported";
 
 /** Where the running claudes lives, so apiKeyHelper can call back into it. */
@@ -31,9 +32,12 @@ export function buildKeyHelper(self: SelfPaths): string {
  * The generated Claude Code settings, helper-only: the key never enters the
  * session env, `claudes key` serves it to Claude Code through the helper. The
  * credential vars are blanked (harmless, and it stops a leaked personal value
- * from winning over the helper), the three tier defaults pin every model name
- * to a router-served id (Haiku always pinned, so background work never runs on
- * Opus), and the deny list turns off what the router cannot serve.
+ * from winning over the helper), every provider switch is pinned to "" (Claude
+ * Code merges settings env per key, so a switch set in a user or project
+ * settings file would otherwise survive this file and reroute the session),
+ * the three tier defaults pin every model name to a router-served id (Haiku
+ * always pinned, so background work never runs on Opus), and the deny list
+ * turns off what the router cannot serve.
  */
 export function buildSettings(config: Config, self: SelfPaths): Settings {
   const env: Record<string, string> = {
@@ -44,6 +48,8 @@ export function buildSettings(config: Config, self: SelfPaths): Settings {
     ...disabledEnv(),
     ANTHROPIC_AUTH_TOKEN: "",
     ANTHROPIC_API_KEY: "",
+    // Empty string is falsy, so each pin reads as "switch off" to Claude Code.
+    ...Object.fromEntries(PROVIDER_SWITCHES.map((name) => [name, ""])),
   };
   if (config.subagentModel !== undefined) {
     env.CLAUDE_CODE_SUBAGENT_MODEL = config.subagentModel;

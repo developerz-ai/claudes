@@ -18,16 +18,26 @@ import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
-import { CLAUDE_NOT_FOUND_MESSAGE, ROUTER_UNREACHABLE_MESSAGE, run } from "./run";
+import {
+  type Child,
+  CLAUDE_NOT_FOUND_MESSAGE,
+  ROUTER_UNREACHABLE_MESSAGE,
+  run,
+  type SignalWiring,
+  type SpawnFn,
+} from "./run";
 
 const ROUTER = "https://router.example.test";
 const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
+/** Explicit timeout for every test that spawns a child; the default is too tight under load. */
+const SPAWN_TEST_TIMEOUT_MS = 30_000;
 
 /**
  * A real executable on PATH. It records its argv, the sorted names of its env,
  * and how many times the router key appears anywhere in argv or env values —
  * then exits with the code from FAKE_CLAUDE_EXIT, or waits to die by signal
- * when FAKE_CLAUDE_WAIT is set.
+ * when FAKE_CLAUDE_WAIT is set. The record is written to a temp file and
+ * renamed into place, so a reader never sees a half-written JSON file.
  */
 const FAKE_CLAUDE = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -45,7 +55,11 @@ for (const value of Object.values(process.env)) {
 }
 const record = { argv: process.argv, envNames: Object.keys(process.env).sort(), keyCount };
 const out = process.env.FAKE_CLAUDE_OUT;
-if (out !== undefined) fs.writeFileSync(out, JSON.stringify(record));
+if (out !== undefined) {
+  const tmp = \`\${out}.tmp\`;
+  fs.writeFileSync(tmp, JSON.stringify(record));
+  fs.renameSync(tmp, out);
+}
 if (process.env.FAKE_CLAUDE_WAIT === "1") setInterval(() => {}, 500);
 else process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? "0"));
 `;
@@ -61,6 +75,8 @@ let binDir: string;
 let outFile: string;
 let dir: string;
 let err: string[];
+/** Every child this file spawned, so afterEach can kill any survivor by PID. */
+let children: ChildProcess[];
 
 const healthyFetch: FetchLike = async () =>
   new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });
@@ -107,12 +123,20 @@ async function drive(
     env?: Record<string, string | undefined>;
     fetch?: FetchLike;
     wait?: boolean;
+    wiring?: SignalWiring;
+    stdinIsTTY?: boolean;
   } = {},
 ): Promise<number> {
   const env = parentEnv(options.env ?? {});
   if (options.wait === true) {
     env.FAKE_CLAUDE_WAIT = "1";
   }
+  // Wrap the spawn so every child is remembered for afterEach cleanup.
+  const spawnFn: SpawnFn = (command, argv, spawnOptions) => {
+    const child = spawn(command, [...argv], spawnOptions);
+    children.push(child);
+    return child as Child;
+  };
   return await run(args, {
     env,
     fetch: options.fetch ?? healthyFetch,
@@ -120,6 +144,9 @@ async function drive(
     nodePath: process.execPath,
     // A path with a space, so the e2e also exercises the helper quoting.
     scriptPath: join(home, "my claudes/claudes.js"),
+    stdinIsTTY: options.stdinIsTTY ?? false,
+    spawn: spawnFn,
+    signals: options.wiring,
   });
 }
 
@@ -145,62 +172,88 @@ beforeEach(() => {
   dir = configDir({ HOME: home });
   writeConfig(configFile(dir), sampleConfig());
   err = [];
+  children = [];
 });
 
 afterEach(() => {
+  // Kill any leftover fake child by PID — never a process-wide pkill — so one
+  // test's survivor cannot eat another test's signals.
+  for (const child of children) {
+    try {
+      if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+        process.kill(child.pid, "SIGKILL");
+      }
+    } catch {
+      // the child exited between the check and the kill
+    }
+  }
+  children = [];
   rmSync(home, { recursive: true, force: true });
 });
 
 describe("run e2e: the happy path", () => {
-  test("spawns the fake claude with the settings argv and a key-free env", async () => {
-    const code = await drive(["--model", "claude-opus", "-p", "hello"]);
-    expect(code).toBe(7); // FAKE_CLAUDE_EXIT passthrough
-    const record = await readRecord();
-    expect(record.argv.slice(2)).toEqual([
-      "--settings",
-      settingsFile(dir),
-      "--model",
-      "opus",
-      "-p",
-      "hello",
-    ]);
-    // The key appears nowhere: not in any argv element, not in any env value.
-    expect(record.keyCount).toBe(0);
-    // Personal credentials from the parent env are stripped by name.
-    for (const name of [
-      "ANTHROPIC_AUTH_TOKEN",
-      "ANTHROPIC_API_KEY",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "CLAUDE_CODE_USE_BEDROCK",
-      "AWS_ACCESS_KEY_ID",
-    ]) {
-      expect(record.envNames).not.toContain(name);
-    }
-    // The developer's environment survives.
-    expect(record.envNames).toContain("EDITOR");
-    expect(record.envNames).toContain("PATH");
-    // claudes itself printed nothing.
-    expect(err.join("")).toBe("");
-    assertNoKeyFragment(err.join(""), KEY);
-  });
+  test(
+    "spawns the fake claude with the settings argv and a key-free env",
+    async () => {
+      const code = await drive(["--model", "claude-opus", "-p", "hello"]);
+      expect(code).toBe(7); // FAKE_CLAUDE_EXIT passthrough
+      const record = await readRecord();
+      expect(record.argv.slice(2)).toEqual([
+        "--settings",
+        settingsFile(dir),
+        "--model",
+        "opus",
+        "-p",
+        "hello",
+      ]);
+      // The key appears nowhere: not in any argv element, not in any env value.
+      expect(record.keyCount).toBe(0);
+      // Router-relevant credentials from the parent env are stripped by name.
+      for (const name of [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_USE_BEDROCK",
+      ]) {
+        expect(record.envNames).not.toContain(name);
+      }
+      // The developer's AWS credentials are inert without a switch: they survive.
+      expect(record.envNames).toContain("AWS_ACCESS_KEY_ID");
+      // The developer's environment survives.
+      expect(record.envNames).toContain("EDITOR");
+      expect(record.envNames).toContain("PATH");
+      // claudes itself printed nothing.
+      expect(err.join("")).toBe("");
+      assertNoKeyFragment(err.join(""), KEY);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("exit 0 passes through too", async () => {
-    expect(await drive(["-p", "hi"], { env: { FAKE_CLAUDE_EXIT: "0" } })).toBe(0);
-    await readRecord();
-  });
+  test(
+    "exit 0 passes through too",
+    async () => {
+      expect(await drive(["-p", "hi"], { env: { FAKE_CLAUDE_EXIT: "0" } })).toBe(0);
+      await readRecord();
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("the settings file lands 0600 in the 0700 config dir, helper-quoted", async () => {
-    await drive(["-p", "hi"]);
-    await readRecord();
-    const path = settingsFile(dir);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(dir).mode & 0o777).toBe(0o700);
-    const settings = JSON.parse(readFileSync(path, "utf8"));
-    expect(settings.apiKeyHelper).toBe(
-      `'${process.execPath}' '${join(home, "my claudes/claudes.js")}' key`,
-    );
-    assertNoKeyFragment(readFileSync(path, "utf8"), KEY);
-  });
+  test(
+    "the settings file lands 0600 in the 0700 config dir, helper-quoted",
+    async () => {
+      await drive(["-p", "hi"]);
+      await readRecord();
+      const path = settingsFile(dir);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      const settings = JSON.parse(readFileSync(path, "utf8"));
+      expect(settings.apiKeyHelper).toBe(
+        `'${process.execPath}' '${join(home, "my claudes/claudes.js")}' key`,
+      );
+      assertNoKeyFragment(readFileSync(path, "utf8"), KEY);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("run e2e: refusals before exec", () => {
@@ -259,33 +312,58 @@ describe("run e2e: refusals before exec", () => {
 });
 
 describe("run e2e: signal deaths and forwarding", () => {
-  test("a child killed outright (SIGKILL) exits 137", async () => {
-    let killed: ChildProcess | undefined;
-    const pending = run(["-p", "hi"], {
-      env: parentEnv({ FAKE_CLAUDE_WAIT: "1" }),
-      fetch: healthyFetch,
-      stderr: (text) => err.push(text),
-      nodePath: process.execPath,
-      scriptPath: join(home, "my claudes/claudes.js"),
-      spawn: (command, argv, options) => {
-        killed = spawn(command, [...argv], options);
-        return killed;
-      },
-    });
-    await readRecord();
-    killed?.kill("SIGKILL");
-    expect(await pending).toBe(137);
-  });
+  test(
+    "a child killed outright (SIGKILL) exits 137",
+    async () => {
+      const pending = drive(["-p", "hi"], { wait: true });
+      await readRecord();
+      children[children.length - 1]?.kill("SIGKILL");
+      expect(await pending).toBe(137);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test.each([
+  // The signal is driven through the injected wiring, never by signalling this
+  // test process itself.
+  function captureWiring(): { wiring: SignalWiring; fired: Map<string, () => void> } {
+    const fired = new Map<string, () => void>();
+    const wiring: SignalWiring = {
+      on: (signal, handler) => fired.set(signal, handler),
+      off: (signal) => fired.delete(signal),
+    };
+    return { wiring, fired };
+  }
+
+  for (const [signal, expected] of [
     ["SIGINT", 130],
     ["SIGTERM", 143],
     ["SIGHUP", 129],
-  ] as const)("a %s to claudes is forwarded and exits %d", async (signal, expected) => {
-    const pending = drive(["-p", "hi"], { wait: true });
-    await readRecord(); // the child is up, so the handlers are wired
-    process.kill(process.pid, signal);
-    expect(await pending).toBe(expected);
-    expect(err.join("")).toBe("");
-  });
+  ] as const) {
+    test(
+      `a ${signal} to claudes is forwarded and exits ${expected}`,
+      async () => {
+        const { wiring, fired } = captureWiring();
+        const pending = drive(["-p", "hi"], { wait: true, wiring });
+        await readRecord(); // the child is up, so the handlers are wired
+        fired.get(signal)?.();
+        expect(await pending).toBe(expected);
+        expect(err.join("")).toBe("");
+      },
+      SPAWN_TEST_TIMEOUT_MS,
+    );
+  }
+
+  test(
+    "stdin a TTY: SIGINT is not wired, SIGTERM still is",
+    async () => {
+      const { wiring, fired } = captureWiring();
+      const pending = drive(["-p", "hi"], { wait: true, wiring, stdinIsTTY: true });
+      await readRecord();
+      expect(fired.has("SIGINT")).toBe(false);
+      expect(fired.has("SIGTERM")).toBe(true);
+      fired.get("SIGTERM")?.();
+      expect(await pending).toBe(143);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 });

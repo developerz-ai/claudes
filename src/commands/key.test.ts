@@ -6,6 +6,7 @@ import { MISSING_CONFIG_MESSAGE } from "../config/load";
 import { configDir, configFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
+import { PROVIDER_SWITCHES } from "../launch/provider-switches";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { runKey } from "./key";
 
@@ -34,9 +35,9 @@ function config(): Config {
   };
 }
 
-function drive(stdoutIsTTY: boolean): number {
+function drive(stdoutIsTTY: boolean, env: Record<string, string | undefined> = {}): number {
   return runKey({
-    env: { HOME: home },
+    env: { HOME: home, ...env },
     stdoutIsTTY,
     write: (text) => writes.push(text),
     stderr: (text) => err.push(text),
@@ -48,6 +49,45 @@ describe("runKey", () => {
     const code = drive(true);
     expect(code).toBe(64);
     expect(err).toEqual(["claudes key is for apiKeyHelper only\n"]);
+    expect(writes).toEqual([]);
+  });
+
+  test("refuses a truthy provider switch with exit 64, before any config is read", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    const code = drive(false, { CLAUDE_CODE_USE_BEDROCK: "1" });
+    expect(code).toBe(64);
+    // The variable is named; its value never is.
+    expect(err).toEqual([
+      "claudes key: refusing: CLAUDE_CODE_USE_BEDROCK is set, so this session would not go to the router\n",
+    ]);
+    expect(writes).toEqual([]);
+  });
+
+  test("refuses any provider switch, naming only the variable", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    for (const name of PROVIDER_SWITCHES) {
+      err = [];
+      writes = [];
+      expect(drive(false, { [name]: "true" })).toBe(64);
+      expect(err.join("")).toBe(
+        `claudes key: refusing: ${name} is set, so this session would not go to the router\n`,
+      );
+      expect(writes).toEqual([]);
+    }
+  });
+
+  test("a switch set to a falsy value does not trigger the refusal", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    for (const value of ["", "0", "false", "FALSE", "False"]) {
+      expect(drive(false, { CLAUDE_CODE_USE_VERTEX: value })).toBe(0);
+    }
+    expect(writes).toEqual([KEY, KEY, KEY, KEY, KEY]);
+    expect(err).toEqual([]);
+  });
+
+  test("the refusal fires even with no config at all", () => {
+    expect(drive(false, { CLAUDE_CODE_USE_FOUNDRY: "yes" })).toBe(64);
+    expect(err.join("")).toContain("CLAUDE_CODE_USE_FOUNDRY is set");
     expect(writes).toEqual([]);
   });
 

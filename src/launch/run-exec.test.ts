@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { settingsFile } from "../config/paths";
@@ -94,6 +94,41 @@ describe("run: signal forwarding", () => {
     expect(fired.size).toBe(0);
   });
 
+  test("stdin a TTY: SIGINT is not wired — the terminal already hits the process group", async () => {
+    const { wiring, fired } = fakeWiring();
+    const code = await h.drive(["-p", "hi"], {
+      wiring,
+      stdinIsTTY: true,
+      spawnScript: (child) => {
+        queueMicrotask(() => {
+          for (const signal of FORWARDED_SIGNALS) {
+            fired.get(signal)?.(); // SIGINT was never wired: only two kills land
+          }
+          child.emit("exit", null, "SIGHUP");
+        });
+      },
+    });
+    expect(code).toBe(129);
+    expect(h.children[0]?.kills).toEqual(["SIGTERM", "SIGHUP"]);
+    expect(fired.has("SIGINT")).toBe(false);
+  });
+
+  test("stdin not a TTY (the default): SIGINT is forwarded", async () => {
+    const { wiring, fired } = fakeWiring();
+    const code = await h.drive(["-p", "hi"], {
+      wiring,
+      stdinIsTTY: false,
+      spawnScript: (child) => {
+        queueMicrotask(() => {
+          fired.get("SIGINT")?.();
+          child.emit("exit", null, "SIGINT");
+        });
+      },
+    });
+    expect(code).toBe(130);
+    expect(h.children[0]?.kills).toEqual(["SIGINT"]);
+  });
+
   test("a signal arriving after the child exited changes nothing", async () => {
     const { wiring, fired } = fakeWiring();
     const code = await h.drive(["-p", "hi"], {
@@ -130,5 +165,22 @@ describe("resolveExecutable", () => {
   test("skips non-executable and missing candidates", () => {
     expect(resolveExecutable("claude", { PATH: "/nonexistent" })).toBeUndefined();
     expect(resolveExecutable("claude", {})).toBeUndefined();
+  });
+
+  test("a directory named claude never wins the lookup", () => {
+    const withDir = mkdtempSync(join(tmpdir(), "claudes-resolve-"));
+    const withFile = mkdtempSync(join(tmpdir(), "claudes-resolve-"));
+    try {
+      // A directory carries the executable bit too; only a regular file counts.
+      mkdirSync(join(withDir, "claude"), { recursive: true });
+      expect(resolveExecutable("claude", { PATH: withDir })).toBeUndefined();
+      const file = join(withFile, "claude");
+      writeFileSync(file, "#!/bin/sh\n", "utf8");
+      chmodSync(file, 0o755);
+      expect(resolveExecutable("claude", { PATH: `${withDir}:${withFile}` })).toBe(file);
+    } finally {
+      rmSync(withDir, { recursive: true, force: true });
+      rmSync(withFile, { recursive: true, force: true });
+    }
   });
 });

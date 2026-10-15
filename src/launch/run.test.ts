@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { MISSING_CONFIG_MESSAGE } from "../config/load";
 import { configFile, settingsFile } from "../config/paths";
+import { writeConfig } from "../config/store";
+import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
-import { ROUTER_UNREACHABLE_MESSAGE } from "./run";
+import { PROXY_NOTE_MESSAGE, preflightTimeoutMs, ROUTER_UNREACHABLE_MESSAGE } from "./run";
 import {
   cleanup,
   deadFetch,
@@ -91,6 +93,107 @@ describe("run: router pre-flight", () => {
     expect(h.spawnCalls).toEqual([]);
     expect(statSync(settingsFile(h.dir), { throwIfNoEntry: false })).toBeUndefined();
   });
+
+  /** A fetch seam whose attempt throws exactly what a timed-out probe throws. */
+  function timeoutFetch(behavior: (call: number) => "timeout" | "healthy"): FetchLike {
+    let calls = 0;
+    return async () => {
+      calls += 1;
+      if (behavior(calls) === "timeout") {
+        const err = new Error("the probe timed out");
+        err.name = "TimeoutError";
+        throw err;
+      }
+      return new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });
+    };
+  }
+
+  test("a timed-out probe is retried once, and a healthy second attempt launches", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      fetch: timeoutFetch((call) => (call === 1 ? "timeout" : "healthy")),
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(0);
+    expect(h.spawnCalls.length).toBe(1);
+  });
+
+  test("a probe timing out twice: exit 69 after exactly two attempts", async () => {
+    let calls = 0;
+    const alwaysTimeout: FetchLike = async () => {
+      calls += 1;
+      const err = new Error("the probe timed out");
+      err.name = "TimeoutError";
+      throw err;
+    };
+    expect(await h.drive(["-p", "hi"], { fetch: alwaysTimeout })).toBe(69);
+    expect(calls).toBe(2);
+    expect(h.spawnCalls).toEqual([]);
+  });
+
+  test("a hard connection error is not retried: one attempt, exit 69", async () => {
+    let calls = 0;
+    const deadOnce: FetchLike = async () => {
+      calls += 1;
+      throw new TypeError("fetch failed");
+    };
+    expect(await h.drive(["-p", "hi"], { fetch: deadOnce })).toBe(69);
+    expect(calls).toBe(1);
+  });
+
+  for (const proxy of ["HTTPS_PROXY", "HTTP_PROXY"] as const) {
+    test(`${proxy} set without NODE_USE_ENV_PROXY: the proxy note follows the message`, async () => {
+      const code = await h.drive(["-p", "hi"], {
+        env: { HOME: h.home, PATH: h.binDir, [proxy]: "http://proxy.corp.test:3128" },
+        fetch: deadFetch,
+      });
+      expect(code).toBe(69);
+      expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PROXY_NOTE_MESSAGE}\n`);
+    });
+  }
+
+  test("NODE_USE_ENV_PROXY set: the note is suppressed", async () => {
+    await h.drive(["-p", "hi"], {
+      env: {
+        HOME: h.home,
+        PATH: h.binDir,
+        HTTPS_PROXY: "http://proxy.corp.test:3128",
+        NODE_USE_ENV_PROXY: "1",
+      },
+      fetch: deadFetch,
+    });
+    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n`);
+  });
+
+  test("an empty-string proxy is not a proxy: no note", async () => {
+    await h.drive(["-p", "hi"], {
+      env: { HOME: h.home, PATH: h.binDir, HTTPS_PROXY: "" },
+      fetch: deadFetch,
+    });
+    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n`);
+  });
+
+  test("a reachable router prints nothing even when a proxy is set", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      env: { HOME: h.home, PATH: h.binDir, HTTPS_PROXY: "http://proxy.corp.test:3128" },
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(0);
+    expect(errText()).toBe("");
+  });
+});
+
+describe("preflightTimeoutMs", () => {
+  test("defaults to 1500 and honours CLAUDES_PREFLIGHT_TIMEOUT_MS", () => {
+    expect(preflightTimeoutMs({})).toBe(1500);
+    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "2500" })).toBe(2500);
+    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "0.5" })).toBe(0.5);
+  });
+
+  test("ignores invalid values in favor of the default", () => {
+    for (const invalid of ["", "  ", "abc", "0", "-5", "1e999"]) {
+      expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: invalid })).toBe(1500);
+    }
+  });
 });
 
 describe("run: settings file", () => {
@@ -108,7 +211,44 @@ describe("run: settings file", () => {
     expect(payload.permissions).toEqual({ deny: ["WebSearch"] });
     expect(payload.env.ANTHROPIC_BASE_URL).toBe(ROUTER);
     expect(payload.env.ANTHROPIC_AUTH_TOKEN).toBe("");
+    expect(payload.env.CLAUDE_CODE_USE_BEDROCK).toBe("");
     assertNoKeyFragment(text, KEY);
+  });
+
+  test("a symlinked config dir: the ConfigError's own message, exit 1, no spawn", async () => {
+    // The config stays readable through the symlink; only the settings write
+    // refuses it, because chmod through a symlink would tighten someone else's
+    // directory.
+    const real = `${h.home}/real-config-dir`;
+    mkdirSync(real, { recursive: true });
+    writeConfig(configFile(real), {
+      version: 1,
+      baseUrl: ROUTER,
+      key: KEY,
+      tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
+    });
+    rmSync(h.dir, { recursive: true, force: true });
+    symlinkSync(real, h.dir);
+    const code = await h.drive(["-p", "hi"], {
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(1);
+    expect(errText()).toBe(
+      `refusing to write settings: ${h.dir} is a symbolic link — remove it and re-run "claudes login"\n`,
+    );
+    expect(h.spawnCalls).toEqual([]);
+  });
+
+  test("a non-Config write failure names the errno code", async () => {
+    // A directory at the settings path makes the final rename fail with an
+    // errno (EISDIR/ENOTDIR), which is all the message may carry.
+    mkdirSync(settingsFile(h.dir));
+    const code = await h.drive(["-p", "hi"], {
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(1);
+    expect(errText()).toMatch(/^claudes: could not write the settings file at .+ \(E[A-Z]+\)\n$/);
+    expect(h.spawnCalls).toEqual([]);
   });
 });
 

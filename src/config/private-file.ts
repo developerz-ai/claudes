@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import {
   chmodSync,
   closeSync,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   lstatSync,
@@ -66,6 +67,9 @@ export function writePrivateFile(
   const writeFile = options.hooks?.writeFile ?? ((fd, data) => writeFileSync(fd, data, "utf8"));
   let fd: number | undefined = openSync(temp, "wx", 0o600);
   try {
+    // open's mode is filtered by the umask, so pin 0600 on the open fd itself;
+    // the file's permissions must not depend on the caller's umask.
+    fchmodSync(fd, 0o600);
     writeFile(fd, payload);
     fsyncSync(fd);
     // Verify the write through the fd itself: a short write would otherwise be

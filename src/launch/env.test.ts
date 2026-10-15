@@ -1,50 +1,86 @@
 import { describe, expect, test } from "bun:test";
-import { buildChildEnv, STRIPPED_ENV_NAMES, STRIPPED_ENV_PREFIXES } from "./env";
+import { buildChildEnv } from "./env";
 
+/**
+ * The expected survivors, hardcoded: the developer's own tooling environment
+ * must reach the child untouched — including their AWS, Google and Azure
+ * credentials, which are inert without a provider switch.
+ */
 const KEPT = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
   HOME: "/home/dev",
   EDITOR: "vim",
   SSH_AUTH_SOCK: "/tmp/agent.sock",
+  AWS_PROFILE: "dev",
+  AWS_REGION: "eu-west-1",
+  AWS_ACCESS_KEY_ID: "AKIADEVELOPER",
+  AWS_SECRET_ACCESS_KEY: "dev-secret",
+  AWS_SESSION_TOKEN: "dev-session",
+  AWS_DEFAULT_REGION: "eu-west-1",
+  GOOGLE_APPLICATION_CREDENTIALS: "/home/dev/sa.json",
+  AZURE_CLIENT_SECRET: "dev-azure-secret",
   GIT_DIR: "/repo/.git",
   LANG: "C.UTF-8",
 } as const;
 
-/** One offending variable per stripped prefix and per stripped name. */
+/**
+ * The expected strip set, hardcoded — one real-world name per stripped prefix
+ * and every stripped bare name — so this test pins the list itself rather than
+ * echoing whatever the module happens to export.
+ */
+const STRIPPED = [
+  // The ANTHROPIC_ namespace, whatever the name.
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  // The claude.ai OAuth namespace, whatever the name.
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_EXPIRY",
+  // Provider switches: the explicit list, not the whole CLAUDE_CODE_USE_ prefix.
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_MANTLE",
+  "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+  "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+  // The one Bedrock-only credential outside the namespaces above.
+  "AWS_BEARER_TOKEN_BEDROCK",
+] as const;
+
 function parentWithStrippedVars(): Record<string, string> {
   const parent: Record<string, string> = { ...KEPT };
-  for (const prefix of STRIPPED_ENV_PREFIXES) {
-    parent[`${prefix}STUFF`] = "leftover";
-  }
-  for (const name of STRIPPED_ENV_NAMES) {
+  for (const name of STRIPPED) {
     parent[name] = "leftover";
   }
-  // The three ways a personal Anthropic credential usually leaks in.
-  parent.ANTHROPIC_AUTH_TOKEN = "sk-ant-oauth01-personal";
-  parent.ANTHROPIC_API_KEY = "sk-ant-api03-personal";
-  parent.CLAUDE_CODE_OAUTH_TOKEN = "claude-ai-oauth-token";
   return parent;
 }
 
 describe("buildChildEnv", () => {
-  test("strips every prefix and name it defines", () => {
+  test("strips exactly the hardcoded strip set and nothing else", () => {
     expect(buildChildEnv(parentWithStrippedVars())).toEqual(KEPT);
   });
 
-  test("strips the real-world credential names, by name", () => {
-    const child = buildChildEnv(parentWithStrippedVars());
+  test("keeps the benign CLAUDE_CODE_USE_ toggles", () => {
+    const child = buildChildEnv({
+      ...KEPT,
+      CLAUDE_CODE_USE_POWERSHELL_TOOL: "1",
+      CLAUDE_CODE_USE_BASH_TOOL: "1",
+    });
+    expect(child.CLAUDE_CODE_USE_POWERSHELL_TOOL).toBe("1");
+    expect(child.CLAUDE_CODE_USE_BASH_TOOL).toBe("1");
+  });
+
+  test("keeps the developer's cloud credentials the router cannot use", () => {
+    const child = buildChildEnv({ ...KEPT });
     for (const name of [
-      "ANTHROPIC_AUTH_TOKEN",
-      "ANTHROPIC_API_KEY",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "CLAUDE_CODE_USE_BEDROCK",
+      "AWS_PROFILE",
+      "AWS_REGION",
       "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-      "AWS_SESSION_TOKEN",
       "GOOGLE_APPLICATION_CREDENTIALS",
-      "AZURE_CLIENT_SECRET",
-    ]) {
-      expect(name in child).toBe(false);
+    ] as const) {
+      expect(child[name]).toBe(KEPT[name]);
     }
   });
 

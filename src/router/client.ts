@@ -17,11 +17,14 @@ export function scrub(text: string): string {
 
 export class RouterError extends Error {
   readonly status: number | undefined;
+  /** True when the router was unreachable because the request timed out. */
+  readonly timedOut: boolean;
 
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, timedOut: boolean = false) {
     super(scrub(message));
     this.name = "RouterError";
     this.status = status;
+    this.timedOut = timedOut;
   }
 }
 
@@ -138,7 +141,7 @@ async function request(
 function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterError {
   const name = errorName(err);
   if (name === "TimeoutError" || name === "AbortError") {
-    return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`);
+    return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`, undefined, true);
   }
   return new RouterError(`could not reach ${endpoint} (${diagnostic(err)})`);
 }

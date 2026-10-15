@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import type { Config } from "../config/schema";
 import { assertNoKeyFragment } from "../test-support/redact";
+import { PROVIDER_SWITCHES } from "./provider-switches";
 import { buildKeyHelper, buildSettings, shellQuote } from "./settings";
 
 const SELF = { nodePath: "/usr/local/bin/node", scriptPath: "/opt/claudes/bin/claudes.js" };
@@ -58,6 +59,12 @@ describe("buildSettings", () => {
         CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
         ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_API_KEY: "",
+        CLAUDE_CODE_USE_BEDROCK: "",
+        CLAUDE_CODE_USE_VERTEX: "",
+        CLAUDE_CODE_USE_FOUNDRY: "",
+        CLAUDE_CODE_USE_MANTLE: "",
+        CLAUDE_CODE_USE_ANTHROPIC_AWS: "",
+        CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: "",
       },
     });
   });
@@ -67,6 +74,15 @@ describe("buildSettings", () => {
     expect("CLAUDE_CODE_SUBAGENT_MODEL" in settings.env).toBe(false);
     expect("CLAUDE_CODE_MAX_CONTEXT_TOKENS" in settings.env).toBe(false);
   });
+
+  // Claude Code merges settings env per key, so a provider switch set in a user
+  // or project settings file survives --settings; pinning each to "" (falsy)
+  // is what keeps the session on the router.
+  for (const name of PROVIDER_SWITCHES) {
+    test(`pins ${name} to "" so a settings-file switch cannot reroute the session`, () => {
+      expect(buildSettings(config(), SELF).env[name]).toBe("");
+    });
+  }
 
   test("carries no key material", () => {
     const settings = buildSettings(config({ subagentModel: "claude-haiku-4-5" }), SELF);
