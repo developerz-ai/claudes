@@ -268,13 +268,13 @@ describe("run: settings file", () => {
     expect(existsSync(seen.path)).toBe(true);
   });
 
-  test("the settings file stays behind when claude is missing from PATH", async () => {
+  test("no settings file is written when claude is missing from PATH", async () => {
     const code = await h.drive(["-p", "hi"], { env: { HOME: h.home, PATH: "/nonexistent" } });
     expect(code).toBe(127);
     expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n`);
-    // No child ever ran, but the write already happened: the file waits for a
-    // later launch's sweep, like any launch whose pid has since died.
-    expect(existsSync(launchSettings())).toBe(true);
+    // `claude` is resolved before the write, so a launch that can never run a
+    // session leaves no file (and no proxy credentials) behind.
+    expect(existsSync(launchSettings())).toBe(false);
   });
 
   test("the settings file stays behind when the spawn itself fails", async () => {

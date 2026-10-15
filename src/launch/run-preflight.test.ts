@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { FetchLike } from "../router/client";
+import { type FetchLike, TLS_VERIFY_CODES } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
 import {
   PREFLIGHT_TIMEOUT_NOTE_MESSAGE,
@@ -8,6 +8,7 @@ import {
   ROUTER_UNREACHABLE_MESSAGE,
   TLS_EXPIRED_NOTE_MESSAGE,
   TLS_HOSTNAME_NOTE_MESSAGE,
+  TLS_NOT_YET_VALID_NOTE_MESSAGE,
   TLS_VERIFY_NOTE_MESSAGE,
 } from "./preflight";
 import { cleanup, deadFetch, type Harness, harness, KEY } from "./run-harness";
@@ -154,16 +155,21 @@ describe("run: router pre-flight", () => {
 
   // The errno codes Node puts on err.cause.code when certificate verification
   // itself failed; each one earns its own note next to the unreachable
-  // message — the four trust errnos the CA hint, an expired certificate and a
-  // host-name mismatch their own words (no CA store fixes either).
+  // message — the four trust errnos the CA hint; an expired, a not-yet-valid
+  // certificate and a host-name mismatch their own words (no CA store fixes
+  // any of them).
   const TLS_NOTES: Readonly<Record<string, string>> = {
     UNABLE_TO_VERIFY_LEAF_SIGNATURE: TLS_VERIFY_NOTE_MESSAGE,
     UNABLE_TO_GET_ISSUER_CERT_LOCALLY: TLS_VERIFY_NOTE_MESSAGE,
     SELF_SIGNED_CERT_IN_CHAIN: TLS_VERIFY_NOTE_MESSAGE,
     DEPTH_ZERO_SELF_SIGNED_CERT: TLS_VERIFY_NOTE_MESSAGE,
     CERT_HAS_EXPIRED: TLS_EXPIRED_NOTE_MESSAGE,
+    CERT_NOT_YET_VALID: TLS_NOT_YET_VALID_NOTE_MESSAGE,
     ERR_TLS_CERT_ALTNAME_INVALID: TLS_HOSTNAME_NOTE_MESSAGE,
   };
+  test("the note table covers exactly the client's TLS verification errnos", () => {
+    expect(Object.keys(TLS_NOTES).sort()).toEqual([...TLS_VERIFY_CODES].sort());
+  });
   for (const [code, note] of Object.entries(TLS_NOTES)) {
     test(`a TLS verification failure (${code}): exit 69, message kept, its note appended`, async () => {
       const tlsFetch: FetchLike = async () => {

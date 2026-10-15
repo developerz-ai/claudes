@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { settingsFile } from "../config/paths";
@@ -41,6 +41,24 @@ describe("sweepStaleLaunchSettings", () => {
       sweepStaleLaunchSettings(dir);
       expect(existsSync(stale)).toBe(false);
       expect(existsSync(staleTemp)).toBe(false);
+    });
+  });
+
+  test("does not sweep through a symlinked config dir", () => {
+    withDir((dir) => {
+      // A stow-style link: the settings writer refuses it, so nothing in its
+      // target is the launcher's to delete.
+      const target = join(dir, "real");
+      mkdirSync(target);
+      const stale = settingsFile(target, DEAD_PID);
+      const legacy = join(target, "settings.json");
+      writeFileSync(stale, "{}\n", "utf8");
+      writeFileSync(legacy, "{}\n", "utf8");
+      const link = join(dir, "link");
+      symlinkSync(target, link);
+      sweepStaleLaunchSettings(link);
+      expect(existsSync(stale)).toBe(true);
+      expect(existsSync(legacy)).toBe(true);
     });
   });
 
