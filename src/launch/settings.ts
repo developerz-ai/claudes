@@ -74,8 +74,10 @@ export const PINNED_TRANSPORT_ENV = [
  * every subprocess, and the OpenSSL clients there (python urllib / pip, wget,
  * openssl, ruby) read "" as an empty CA store and fail every HTTPS request
  * with CERTIFICATE_VERIFY_FAILED. Claude Code 2.1.300 does not honour plants
- * of these two from a settings file anyway, so omitting them leaves nothing
- * unpinned.
+ * of these two from a settings file for its own TLS — but a planted value
+ * still reaches the session's subprocesses (the Bash tool), where it can
+ * break or widen their trust; the router key does not travel through those,
+ * so the parent-only rule leaves no such plant in place.
  */
 export const PARENT_ONLY_TRANSPORT_ENV = ["SSL_CERT_FILE", "SSL_CERT_DIR"] as const;
 
@@ -115,7 +117,11 @@ function proxyTwinOf(name: string): string | undefined {
  * subprocesses read either case, so a proxy exported through only one must
  * still reach both, and a twin left at "" would let a case-sensitive client
  * slip around the developer's no-proxy intent. Both names set keep their own
- * values; exactly one set pins BOTH to it; neither pins both to "".
+ * values; exactly one set pins BOTH to it; neither pins both to "". Side
+ * effect, accepted: mirroring an uppercase-only HTTP_PROXY into lowercase
+ * http_proxy makes curl in the session use a proxy it deliberately ignores
+ * in uppercase (the httpoxy convention) — the price of every client in the
+ * session following the developer's proxy.
  */
 function proxyPairValue(name: string, parentEnv: Env): string {
   const twin = proxyTwinOf(name);

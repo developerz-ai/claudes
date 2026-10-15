@@ -17,20 +17,25 @@ export class RouterError extends Error {
   readonly status: number | undefined;
   /** True when the router was unreachable because the request timed out. */
   readonly timedOut: boolean;
-  /** True when the router's TLS certificate itself failed verification. */
-  readonly tlsVerify: boolean;
+  /**
+   * The errno of the TLS certificate-verification failure, when the router's
+   * TLS certificate itself failed verification — the code that picks the
+   * launcher's TLS note (an expired cert and a host-name mismatch each carry
+   * their own).
+   */
+  readonly tlsVerifyCode: string | undefined;
 
   constructor(
     message: string,
     status?: number,
     timedOut: boolean = false,
-    tlsVerify: boolean = false,
+    tlsVerifyCode: string | undefined = undefined,
   ) {
     super(scrub(message));
     this.name = "RouterError";
     this.status = status;
     this.timedOut = timedOut;
-    this.tlsVerify = tlsVerify;
+    this.tlsVerifyCode = tlsVerifyCode;
   }
 }
 
@@ -48,7 +53,8 @@ const CAUSE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
 /**
  * The errno codes Node puts on `err.cause.code` when TLS certificate
  * verification itself failed (a "fetch failed" TypeError wrapping them): the
- * launcher appends its CA hint to the unreachable message for exactly these.
+ * launcher appends a TLS note to the unreachable message for exactly these —
+ * which note is the launcher's call, keyed off the code it reads here.
  */
 const TLS_VERIFY_CODES: ReadonlySet<string> = new Set([
   "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
@@ -147,16 +153,20 @@ function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterE
     `could not reach ${endpoint} (${diagnostic(err)})`,
     undefined,
     false,
-    isTlsVerifyFailure(err),
+    tlsVerifyCodeOf(err),
   );
 }
 
-/** True when the failure's cause carries a certificate-verification errno. */
-function isTlsVerifyFailure(err: unknown): boolean {
+/** The failure's certificate-verification errno, when its cause carries one. */
+function tlsVerifyCodeOf(err: unknown): string | undefined {
   try {
-    return err instanceof Error && TLS_VERIFY_CODES.has(causeCodeOf(err) ?? "");
+    if (!(err instanceof Error)) {
+      return undefined;
+    }
+    const code = causeCodeOf(err) ?? "";
+    return TLS_VERIFY_CODES.has(code) ? code : undefined;
   } catch {
-    return false; // an exotic object (prototype trap) decides nothing
+    return undefined; // an exotic object (prototype trap) decides nothing
   }
 }
 

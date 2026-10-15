@@ -16,7 +16,7 @@ import {
   preflightTimeoutMs,
   proxyNoteNeeded,
   ROUTER_UNREACHABLE_MESSAGE,
-  TLS_VERIFY_NOTE_MESSAGE,
+  tlsVerifyNote,
 } from "./preflight";
 import {
   firstHostManagedEnv,
@@ -24,12 +24,7 @@ import {
   isTruthyToggle,
 } from "./provider-switches";
 import { buildSettings } from "./settings";
-import {
-  launchSettingsPath,
-  removeLaunchSettings,
-  settingsWriteError,
-  sweepStaleLaunchSettings,
-} from "./settings-file";
+import { launchSettingsPath, settingsWriteError, sweepStaleLaunchSettings } from "./settings-file";
 
 export const CLAUDE_NOT_FOUND_MESSAGE = "claude not found on PATH";
 
@@ -67,12 +62,16 @@ export interface RunDeps {
 /**
  * Runs `claude` against the router: load the config (or refuse), build the
  * child argv (or refuse), refuse an env that would reroute the session or
- * print the key, pre-flight the router, sweep the settings files of dead
- * launches, write this launch's settings atomically at 0600 in the 0700 config
+ * print the key, sweep the settings files of dead launches (before any
+ * network probe, so it also runs when the router is down), pre-flight the
+ * router, write this launch's settings atomically at 0600 in the 0700 config
  * dir under a per-launch name, then spawn `claude` with the stripped env,
  * inherited stdio, forwarded signals, and the child's exit code (or 128+n for
- * a signal death) as the answer — removing the settings file on the way out,
- * whatever happened. Never prints or passes the key.
+ * a signal death) as the answer. The settings file is left in place when this
+ * launcher exits — Claude Code hands its --settings path to processes it
+ * starts later (/restart, --tmux, background agents), which may read it after
+ * this process is gone — and a later launch sweeps it once this pid is dead.
+ * Never prints or passes the key.
  */
 export async function run(userArgs: readonly string[], deps: RunDeps): Promise<number> {
   const loaded = loadConfig(deps.env);
@@ -115,19 +114,24 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     );
   }
 
+  // The sweep touches no network, so it runs before the router pre-flight:
+  // a stranded file is cleaned up even when the router is down and this
+  // launch never reaches its own write.
+  sweepStaleLaunchSettings(loaded.dir);
+
   try {
     await preflight(loaded.config.baseUrl, deps.fetch, preflightTimeoutMs(deps.env));
   } catch (err) {
     const routerError = err instanceof RouterError ? err : undefined;
+    const tlsNote = tlsVerifyNote(routerError?.tlsVerifyCode);
     return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, [
       ...(proxyNoteNeeded(deps.env) ? [PROXY_NOTE_MESSAGE] : []),
-      ...(routerError?.tlsVerify === true ? [TLS_VERIFY_NOTE_MESSAGE] : []),
+      ...(tlsNote !== undefined ? [tlsNote] : []),
       ...(routerError?.timedOut === true ? [PREFLIGHT_TIMEOUT_NOTE_MESSAGE] : []),
     ]);
   }
 
   const settings = buildSettings(loaded.config, deps, deps.env);
-  sweepStaleLaunchSettings(loaded.dir);
   try {
     writePrivateFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
       noun: "settings",
@@ -137,18 +141,14 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     return fail(deps, 1, settingsWriteError(err, settingsPath));
   }
 
-  // The settings env can carry the shell's proxy URL, userinfo included, so
-  // from here on every exit path — a missing `claude`, a failed spawn, a
-  // signalled child — removes the file again once the child is done with it.
-  try {
-    const claudePath = resolveExecutable("claude", deps.env);
-    if (claudePath === undefined) {
-      return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE);
-    }
-    return await execClaude(claudePath, argv.argv, deps);
-  } finally {
-    removeLaunchSettings(settingsPath);
+  // The settings file stays on disk after this launcher exits (see above), so
+  // there is no cleanup on any exit path from here on — a missing `claude` or
+  // a failed spawn leaves it for the next launch's sweep.
+  const claudePath = resolveExecutable("claude", deps.env);
+  if (claudePath === undefined) {
+    return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE);
   }
+  return await execClaude(claudePath, argv.argv, deps);
 }
 
 /** The shared shape of the two rerouting refusals: exit 64, the name only. */

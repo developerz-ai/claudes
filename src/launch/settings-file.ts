@@ -6,14 +6,23 @@ import { errorName } from "../router/errors";
 
 /**
  * The lifetime of the generated Claude Code settings file. Its env can carry
- * the shell's proxy URL — userinfo included — so the file must live exactly as
- * long as one launch: the launcher writes `settings.<pid>.json` into the same
- * 0700 config dir as before, and removes it once the child is done with it.
- * A launch that dies without cleaning up is covered by the next launch's sweep.
+ * the shell's proxy URL — userinfo included — and it is 0600 inside the 0700
+ * config dir that already holds the router key in config.json, so the file
+ * lives until a later launch sweeps it after the launching process has exited.
+ * It is deliberately NOT removed when the direct child exits: Claude Code
+ * hands the --settings path to processes it starts later (/restart, the inner
+ * claude of a --tmux session, background agents), which read the file fresh
+ * from disk, possibly after the launcher has exited. A descendant still
+ * running from a dead launcher's session loses the file at that sweep and
+ * fails closed ("Settings file not found").
  */
 
-/** Per-launch settings files: settings.<pid>.json (a positive pid). */
-const LAUNCH_SETTINGS_PATTERN = /^settings\.([1-9]\d*)\.json$/;
+/**
+ * Per-launch settings files: settings.<pid>.json (a positive pid), plus the
+ * stranded temp sibling settings.<pid>.json.tmp-* a SIGKILL can leave between
+ * the temp-open and the rename of an atomic write.
+ */
+const LAUNCH_SETTINGS_PATTERN = /^settings\.([1-9]\d*)\.json(\.tmp-.+)?$/;
 
 /** The fixed name an older build wrote on every launch; removed when found. */
 const LEGACY_SETTINGS_NAME = "settings.json";
@@ -25,11 +34,12 @@ export function launchSettingsPath(dir: string): string {
 
 /**
  * Removes the settings files of launches that can no longer be running: every
- * settings.<pid>.json whose pid is dead, and the fixed settings.json an older
- * build left behind. A file whose pid is alive is never touched — including a
- * pid this process may not signal (the liveness probe answers EPERM), which is
- * treated as alive. Anything else in the dir (config.json, another user's
- * files) is not the launcher's to remove.
+ * settings.<pid>.json — and its stranded settings.<pid>.json.tmp-* sibling —
+ * whose pid is dead, and the fixed settings.json an older build left behind.
+ * A file whose pid is alive is never touched — including a pid this process
+ * may not signal (the liveness probe answers EPERM), which is treated as
+ * alive. Anything else in the dir (config.json, another user's files) is not
+ * the launcher's to remove.
  */
 export function sweepStaleLaunchSettings(dir: string): void {
   let names: readonly string[];
@@ -48,11 +58,6 @@ export function sweepStaleLaunchSettings(dir: string): void {
       remove(join(dir, name));
     }
   }
-}
-
-/** Best-effort removal after the child exits; a missing file is fine. */
-export function removeLaunchSettings(path: string): void {
-  remove(path);
 }
 
 /**
