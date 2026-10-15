@@ -10,7 +10,7 @@ export type RemovedBy =
 export interface UnsupportedFeature {
   /** The Claude Code feature that is turned off. */
   readonly feature: string;
-  /** Why — quoted for the settings file's own readers, never a secret. */
+  /** Why — internal documentation only, never quoted into the generated settings. */
   readonly reason: string;
   /** How a claudes session turns the feature off. */
   readonly removedBy: RemovedBy;

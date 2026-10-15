@@ -29,9 +29,6 @@ export function buildKeyHelper(self: SelfPaths): string {
   return `${shellQuote(self.nodePath)} ${shellQuote(self.scriptPath)} key`;
 }
 
-/** The hosts a loopback router can live on; a proxy must never see their traffic. */
-const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]", "::1"] as const;
-
 /** The value pinned for NO_PROXY/no_proxy when the router is on loopback. */
 const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,::1";
 
@@ -61,6 +58,10 @@ export const PINNED_TRANSPORT_ENV = [
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NODE_EXTRA_CA_CERTS",
   "NODE_USE_ENV_PROXY",
+  // NODE_OPTIONS is merged into the apiKeyHelper subprocess env too, and Node
+  // applies a planted --require from it before the helper script even runs —
+  // so a cloned repo could otherwise run code inside the key helper.
+  "NODE_OPTIONS",
   "CLAUDE_CODE_CERT_STORE",
   // Bun's verbose fetch prints every request — headers included — so a truthy
   // plant would print the router key (x-api-key / Authorization) to stderr.
@@ -82,15 +83,36 @@ export const PINNED_TRANSPORT_ENV = [
 export const PARENT_ONLY_TRANSPORT_ENV = ["SSL_CERT_FILE", "SSL_CERT_DIR"] as const;
 
 /**
- * True when the router's base URL points at this machine: a proxy configured
- * in the user's or project's settings must not receive the plaintext key, and
- * loopback traffic never needs one. A URL that does not parse is not loopback.
+ * True when `hostname` is an IPv4 literal in 127.0.0.0/8: the whole block is
+ * this machine's loopback, not only 127.0.0.1, so 127.0.0.2 counts too. The
+ * URL parser has already canonicalised the spelling, so plain dotted quads.
  */
-function baseUrlIsLoopback(baseUrl: string): boolean {
+function isLoopbackIpv4(hostname: string): boolean {
+  const octets = hostname.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^(0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255)
+  );
+}
+
+/**
+ * The router's own host name when its base URL points at this machine: a proxy
+ * configured in the user's or project's settings must not receive the
+ * plaintext key, and loopback traffic never needs one. A URL that does not
+ * parse is not loopback.
+ */
+function loopbackHostname(baseUrl: string): string | undefined {
   try {
-    return (LOOPBACK_HOSTS as readonly string[]).includes(new URL(baseUrl).hostname);
+    const { hostname } = new URL(baseUrl);
+    return hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "[::1]" ||
+      isLoopbackIpv4(hostname)
+      ? hostname
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -145,12 +167,14 @@ function noProxyEntries(value: string | undefined): string[] {
 /**
  * The ONE merged NO_PROXY pinned to both names: the parent's uppercase entries
  * first, then its lowercase ones, deduped in order — and on a loopback router
- * the loopback hosts prepended (deduped too), so no settings-file proxy can
- * intercept the key's plaintext hop and the developer's own entries survive.
+ * the loopback hosts plus the router's own hostname prepended (deduped too),
+ * so no settings-file proxy can intercept the key's plaintext hop and the
+ * developer's own entries survive. The router's own name matters because not
+ * every proxy client honours 127.0.0.0/8 as a range, only literal hosts.
  */
-function mergedNoProxy(parentEnv: Env, loopback: boolean): string {
+function mergedNoProxy(parentEnv: Env, loopbackHost: string | undefined): string {
   const entries = [
-    ...(loopback ? LOOPBACK_NO_PROXY.split(",") : []),
+    ...(loopbackHost === undefined ? [] : [...LOOPBACK_NO_PROXY.split(","), loopbackHost]),
     ...noProxyEntries(parentEnv.NO_PROXY),
     ...noProxyEntries(parentEnv.no_proxy),
   ];
@@ -172,7 +196,7 @@ function mergedNoProxy(parentEnv: Env, loopback: boolean): string {
  * turns off what the router cannot serve.
  */
 export function buildSettings(config: Config, self: SelfPaths, parentEnv: Env): Settings {
-  const loopback = baseUrlIsLoopback(config.baseUrl);
+  const loopbackHost = loopbackHostname(config.baseUrl);
   const env: Record<string, string> = {
     ANTHROPIC_BASE_URL: config.baseUrl,
     ANTHROPIC_DEFAULT_OPUS_MODEL: config.tiers.opus,
@@ -189,7 +213,7 @@ export function buildSettings(config: Config, self: SelfPaths, parentEnv: Env): 
       PINNED_TRANSPORT_ENV.map((name) => [
         name,
         name === "NO_PROXY" || name === "no_proxy"
-          ? mergedNoProxy(parentEnv, loopback)
+          ? mergedNoProxy(parentEnv, loopbackHost)
           : proxyPairValue(name, parentEnv),
       ]),
     ),

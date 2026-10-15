@@ -50,6 +50,17 @@ fi
 # with the exact remedy, newline-terminated — without touching the network.
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
+
+# Bare "doctor" is still an unimplemented reserved word: it must exit 64, in
+# the same env -i isolation as the key checks below (no ambient env leaks in).
+rc=0
+env -i HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" PATH="$PATH" \
+  ./dist/claudes.js doctor 2>/dev/null || rc=$?
+if [ "$rc" -ne 64 ]; then
+  echo "bin/check: ./dist/claudes.js doctor exited $rc, expected 64" >&2
+  exit 1
+fi
+
 rc=0
 HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" ./dist/claudes.js some-prompt 2>"$scratch/err" || rc=$?
 if [ "$rc" -ne 78 ]; then

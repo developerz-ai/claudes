@@ -58,7 +58,8 @@ function mapModelValue(value: string): string {
  * `[1m]`) normalises to the bare family name. A user `--settings` or `--key` is
  * refused, as is any argument containing a router key — and no refused value is
  * ever echoed back. Everything after a `--` terminator is positional prompt
- * text, so the scan and the rewriting both stop there.
+ * text, so the rewriting stops there — but the key-shape refusal does not: a
+ * router-key-shaped token after `--` is still refused.
  */
 export function buildArgv(userArgs: readonly string[], settingsPath: string): ArgvResult {
   const argv: string[] = [];
