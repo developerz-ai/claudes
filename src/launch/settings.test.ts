@@ -4,7 +4,13 @@ import type { Env } from "../config/paths";
 import type { Config } from "../config/schema";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { PROVIDER_SWITCHES } from "./provider-switches";
-import { buildKeyHelper, buildSettings, shellQuote, TRANSPORT_ENV } from "./settings";
+import {
+  buildKeyHelper,
+  buildSettings,
+  PARENT_ONLY_TRANSPORT_ENV,
+  PINNED_TRANSPORT_ENV,
+  shellQuote,
+} from "./settings";
 
 const SELF = { nodePath: "/usr/local/bin/node", scriptPath: "/opt/claudes/bin/claudes.js" };
 
@@ -82,9 +88,8 @@ describe("buildSettings", () => {
         NODE_TLS_REJECT_UNAUTHORIZED: "",
         NODE_EXTRA_CA_CERTS: "",
         NODE_USE_ENV_PROXY: "",
-        SSL_CERT_FILE: "",
-        SSL_CERT_DIR: "",
         CLAUDE_CODE_CERT_STORE: "",
+        BUN_CONFIG_VERBOSE_FETCH: "",
       },
     });
   });
@@ -111,9 +116,10 @@ describe("buildSettings", () => {
 
   // A settings-file proxy or CA must not see the key: HTTPS_PROXY plus a
   // planted NODE_TLS_REJECT_UNAUTHORIZED/NODE_EXTRA_CA_CERTS would hand a
-  // proxy a TLS MITM on an https router. Each transport name carries the
-  // parent env's value, so the developer's own shell choices still apply.
-  for (const name of TRANSPORT_ENV) {
+  // proxy a TLS MITM on an https router. Each pinned name carries the parent
+  // env's value ("" verified to behave like unset), so the developer's own
+  // shell choices still apply and a plant never wins.
+  for (const name of PINNED_TRANSPORT_ENV) {
     test(`pins ${name} to the parent env's value`, () => {
       const parent: Env = { [name]: "parent-value" };
       expect(buildSettings(config(), SELF, parent).env[name]).toBe("parent-value");
@@ -124,6 +130,97 @@ describe("buildSettings", () => {
     });
   }
 
+  // An SSL pin of "" is NOT unset for the OpenSSL clients (python urllib, pip,
+  // wget, openssl, ruby) in every session subprocess: they would see an empty
+  // CA store and fail all HTTPS with CERTIFICATE_VERIFY_FAILED. So these two
+  // are emitted only when the parent has a real value.
+  for (const name of PARENT_ONLY_TRANSPORT_ENV) {
+    test(`emits ${name} pinned to the parent's value when the parent has one`, () => {
+      expect(buildSettings(config(), SELF, { [name]: "/corp/ssl.pem" }).env[name]).toBe(
+        "/corp/ssl.pem",
+      );
+    });
+
+    test(`never emits ${name} when the parent env has none`, () => {
+      expect(name in buildSettings(config(), SELF, {}).env).toBe(false);
+    });
+
+    test(`never emits ${name} when the parent's value is empty`, () => {
+      expect(name in buildSettings(config(), SELF, { [name]: "" }).env).toBe(false);
+    });
+  }
+
+  // A proxy is pinned per PAIR, never per name: tools export either case, and
+  // subprocesses read either case, so one name set and its twin "" would let a
+  // case-sensitive client slip around the developer's proxy intent.
+  for (const [upper, lower] of [
+    ["HTTP_PROXY", "http_proxy"],
+    ["HTTPS_PROXY", "https_proxy"],
+    ["ALL_PROXY", "all_proxy"],
+  ] as const) {
+    test(`${upper} only: both names pinned to its value`, () => {
+      const env = buildSettings(config(), SELF, { [upper]: "http://proxy.corp.test:3128" }).env;
+      expect(env[upper]).toBe("http://proxy.corp.test:3128");
+      expect(env[lower]).toBe("http://proxy.corp.test:3128");
+    });
+
+    test(`${lower} only: both names pinned to its value`, () => {
+      const env = buildSettings(config(), SELF, { [lower]: "http://proxy.corp.test:3128" }).env;
+      expect(env[upper]).toBe("http://proxy.corp.test:3128");
+      expect(env[lower]).toBe("http://proxy.corp.test:3128");
+    });
+
+    test(`${upper} and ${lower} both set: each keeps its own value`, () => {
+      const env = buildSettings(config(), SELF, {
+        [upper]: "http://upper.corp.test:3128",
+        [lower]: "http://lower.corp.test:3128",
+      }).env;
+      expect(env[upper]).toBe("http://upper.corp.test:3128");
+      expect(env[lower]).toBe("http://lower.corp.test:3128");
+    });
+
+    test(`neither ${upper} nor ${lower} set: both names pinned to ""`, () => {
+      const env = buildSettings(config(), SELF, {}).env;
+      expect(env[upper]).toBe("");
+      expect(env[lower]).toBe("");
+    });
+
+    test(`an empty-string ${upper} is no proxy: both names end up ""`, () => {
+      const env = buildSettings(config(), SELF, { [upper]: "" }).env;
+      expect(env[upper]).toBe("");
+      expect(env[lower]).toBe("");
+    });
+  }
+
+  // NO_PROXY/no_proxy merge instead: both names carry ONE value, so no client
+  // reading either case bypasses the developer's no-proxy list.
+  test("NO_PROXY only: both names pinned to the merged value", () => {
+    const env = buildSettings(config(), SELF, { NO_PROXY: "10.0.0.1,.corp.test" }).env;
+    expect(env.NO_PROXY).toBe("10.0.0.1,.corp.test");
+    expect(env.no_proxy).toBe("10.0.0.1,.corp.test");
+  });
+
+  test("no_proxy only: both names pinned to the merged value", () => {
+    const env = buildSettings(config(), SELF, { no_proxy: "10.0.0.2" }).env;
+    expect(env.NO_PROXY).toBe("10.0.0.2");
+    expect(env.no_proxy).toBe("10.0.0.2");
+  });
+
+  test("both parent cases: merged, deduped, uppercase entries first, in both names", () => {
+    const env = buildSettings(config(), SELF, {
+      NO_PROXY: "10.0.0.1,.corp.test",
+      no_proxy: ".corp.test,10.0.0.2",
+    }).env;
+    expect(env.NO_PROXY).toBe("10.0.0.1,.corp.test,10.0.0.2");
+    expect(env.no_proxy).toBe("10.0.0.1,.corp.test,10.0.0.2");
+  });
+
+  test('neither parent case: both names pinned to ""', () => {
+    const env = buildSettings(config(), SELF, {}).env;
+    expect(env.NO_PROXY).toBe("");
+    expect(env.no_proxy).toBe("");
+  });
+
   test("an https router freezes the whole transport set from the parent env", () => {
     const parent: Env = {
       HTTPS_PROXY: "http://proxy.corp.test:3128",
@@ -133,6 +230,7 @@ describe("buildSettings", () => {
       SSL_CERT_FILE: "/corp/ssl.pem",
       SSL_CERT_DIR: "/corp/certs",
       CLAUDE_CODE_CERT_STORE: "/corp/store",
+      BUN_CONFIG_VERBOSE_FETCH: "0",
     };
     const env = buildSettings(config(), SELF, parent).env;
     expect(env.HTTPS_PROXY).toBe("http://proxy.corp.test:3128");
@@ -142,6 +240,7 @@ describe("buildSettings", () => {
     expect(env.SSL_CERT_FILE).toBe("/corp/ssl.pem");
     expect(env.SSL_CERT_DIR).toBe("/corp/certs");
     expect(env.CLAUDE_CODE_CERT_STORE).toBe("/corp/store");
+    expect(env.BUN_CONFIG_VERBOSE_FETCH).toBe("0");
     // And a value some settings file planted cannot win: the pin is the
     // parent's (here, "").
     expect(env.HTTP_PROXY).toBe("");
@@ -161,16 +260,24 @@ describe("buildSettings", () => {
     }
   });
 
-  test("a loopback baseUrl appends the parent's NO_PROXY entries, never drops them", () => {
+  test("a loopback baseUrl with a parent NO_PROXY only puts the entries into BOTH names", () => {
     const env = buildSettings(config({ baseUrl: "http://127.0.0.1:8787" }), SELF, {
       NO_PROXY: "10.0.0.1,.corp.test",
-      no_proxy: "10.0.0.2",
     }).env;
     expect(env.NO_PROXY).toBe("127.0.0.1,localhost,::1,10.0.0.1,.corp.test");
-    expect(env.no_proxy).toBe("127.0.0.1,localhost,::1,10.0.0.2");
+    expect(env.no_proxy).toBe("127.0.0.1,localhost,::1,10.0.0.1,.corp.test");
   });
 
-  test("a loopback baseUrl with no parent NO_PROXY pins only the loopback hosts", () => {
+  test("a loopback baseUrl merges both parent cases after the loopback hosts, deduped", () => {
+    const env = buildSettings(config({ baseUrl: "http://localhost:3000" }), SELF, {
+      NO_PROXY: "10.0.0.1,localhost",
+      no_proxy: "10.0.0.2",
+    }).env;
+    expect(env.NO_PROXY).toBe("127.0.0.1,localhost,::1,10.0.0.1,10.0.0.2");
+    expect(env.no_proxy).toBe("127.0.0.1,localhost,::1,10.0.0.1,10.0.0.2");
+  });
+
+  test("a loopback baseUrl with empty parent values pins only the loopback hosts", () => {
     const env = buildSettings(config({ baseUrl: "http://localhost:3000" }), SELF, {
       NO_PROXY: "",
       no_proxy: undefined,
@@ -179,9 +286,10 @@ describe("buildSettings", () => {
     expect(env.no_proxy).toBe("127.0.0.1,localhost,::1");
   });
 
-  test("a non-loopback baseUrl pins NO_PROXY to exactly the parent value", () => {
+  test("a non-loopback baseUrl pins both NO_PROXY names to the merged parent value", () => {
     const env = buildSettings(config(), SELF, { NO_PROXY: "10.0.0.1,.corp.test" }).env;
     expect(env.NO_PROXY).toBe("10.0.0.1,.corp.test");
+    expect(env.no_proxy).toBe("10.0.0.1,.corp.test");
     expect(buildSettings(config(), SELF, {}).env.NO_PROXY).toBe("");
   });
 });

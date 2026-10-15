@@ -18,14 +18,8 @@ import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
-import {
-  type Child,
-  CLAUDE_NOT_FOUND_MESSAGE,
-  ROUTER_UNREACHABLE_MESSAGE,
-  run,
-  type SignalWiring,
-  type SpawnFn,
-} from "./run";
+import { ROUTER_UNREACHABLE_MESSAGE } from "./preflight";
+import { type Child, CLAUDE_NOT_FOUND_MESSAGE, run, type SignalWiring, type SpawnFn } from "./run";
 
 const ROUTER = "https://router.example.test";
 const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
@@ -34,10 +28,12 @@ const SPAWN_TEST_TIMEOUT_MS = 30_000;
 
 /**
  * A real executable on PATH. It records its argv, the sorted names of its env,
- * how many times the router key appears anywhere in argv or env values, and how
- * many SIGINTs it received — then exits with the code from FAKE_CLAUDE_EXIT,
- * waits to die by signal when FAKE_CLAUDE_WAIT is set, or, when
- * FAKE_CLAUDE_TRAP_SIGINT is set, traps SIGINT like the real claude under
+ * how many times the router key appears anywhere in argv or env values, how
+ * many SIGINTs it received, and — because the launcher removes the generated
+ * settings file once this process exits — what that file looked like while it
+ * ran (existence, mode, contents). It exits with the code from
+ * FAKE_CLAUDE_EXIT, waits to die by signal when FAKE_CLAUDE_WAIT is set, or,
+ * when FAKE_CLAUDE_TRAP_SIGINT is set, traps SIGINT like the real claude under
  * Ctrl-C: ~300ms of shutdown work, then exit 7. The record is written to a
  * temp file and renamed into place, so a reader never sees a half-written
  * JSON file.
@@ -56,6 +52,17 @@ for (const value of Object.values(process.env)) {
     at = value.indexOf(KEY, at + KEY.length);
   }
 }
+let settings = null;
+const settingsAt = process.argv.indexOf("--settings");
+if (settingsAt !== -1) {
+  const path = process.argv[settingsAt + 1];
+  try {
+    const st = fs.statSync(path);
+    settings = { exists: true, mode: st.mode & 0o777, text: fs.readFileSync(path, "utf8") };
+  } catch {
+    settings = { exists: false };
+  }
+}
 let sigints = 0;
 let exitedAt = 0;
 function dump() {
@@ -65,6 +72,7 @@ function dump() {
     argv: process.argv,
     envNames: Object.keys(process.env).sort(),
     keyCount,
+    settings,
     sigints,
     exitedAt,
   };
@@ -97,10 +105,17 @@ if (!trapping) {
 }
 `;
 
+interface ClaudeSettingsRecord {
+  readonly exists: boolean;
+  readonly mode?: number;
+  readonly text?: string;
+}
+
 interface ClaudeRecord {
   argv: string[];
   envNames: string[];
   keyCount: number;
+  settings: ClaudeSettingsRecord;
   sigints: number;
   exitedAt: number;
 }
@@ -239,7 +254,7 @@ describe("run e2e: the happy path", () => {
       const record = await readRecord();
       expect(record.argv.slice(2)).toEqual([
         "--settings",
-        settingsFile(dir),
+        settingsFile(dir, process.pid),
         "--model",
         "opus",
         "-p",
@@ -281,15 +296,32 @@ describe("run e2e: the happy path", () => {
     "the settings file lands 0600 in the 0700 config dir, helper-quoted",
     async () => {
       await drive(["-p", "hi"]);
-      await readRecord();
-      const path = settingsFile(dir);
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+      const record = await readRecord();
+      expect(record.settings.exists).toBe(true);
+      expect(record.settings.mode).toBe(0o600);
       expect(statSync(dir).mode & 0o777).toBe(0o700);
-      const settings = JSON.parse(readFileSync(path, "utf8"));
+      const settings = JSON.parse(record.settings.text as string);
       expect(settings.apiKeyHelper).toBe(
         `'${process.execPath}' '${join(home, "my claudes/claudes.js")}' key`,
       );
-      assertNoKeyFragment(readFileSync(path, "utf8"), KEY);
+      assertNoKeyFragment(record.settings.text as string, KEY);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "the per-launch settings file exists while claude runs and is removed after it exits",
+    async () => {
+      const pending = drive(["-p", "hi"], { wait: true });
+      const record = await readRecord();
+      const path = settingsFile(dir, process.pid);
+      // While the child runs, its --settings file is on disk under 0600…
+      expect(record.settings.exists).toBe(true);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      children[children.length - 1]?.kill("SIGTERM");
+      expect(await pending).toBe(143);
+      // …and once it has exited, the launcher has removed it.
+      expect(existsSync(path)).toBe(false);
     },
     SPAWN_TEST_TIMEOUT_MS,
   );

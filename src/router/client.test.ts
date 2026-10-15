@@ -153,6 +153,42 @@ describe("health", () => {
     }
   });
 
+  test("flags tlsVerify for the certificate-verification errnos, and only those", async () => {
+    for (const code of [
+      "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+      "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+      "SELF_SIGNED_CERT_IN_CHAIN",
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+      "CERT_HAS_EXPIRED",
+      "ERR_TLS_CERT_ALTNAME_INVALID",
+    ]) {
+      const failure = new TypeError("fetch failed", {
+        cause: Object.assign(new Error("unable to verify the first certificate"), { code }),
+      });
+      const { fetchImpl } = stubFetch({ failWith: failure });
+      try {
+        await health(BASE, fetchImpl);
+        throw new Error("expected health to throw");
+      } catch (err) {
+        const routerError = err as RouterError;
+        expect(routerError.tlsVerify).toBe(true);
+        expect(routerError.timedOut).toBe(false);
+        expect(routerError.message).toBe(`could not reach ${BASE}/healthz (${code})`);
+      }
+    }
+    // A connection failure is not a certificate failure: no flag, no CA hint.
+    const refused = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+    const { fetchImpl } = stubFetch({ failWith: refused });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect((err as RouterError).tlsVerify).toBe(false);
+    }
+  });
+
   test("ignores a cause code that is not an errno-looking token", async () => {
     for (const code of ["not a code", "lower_case", "X", `BAD${"X".repeat(64)}`, "OK; rm -rf /"]) {
       const failure = new TypeError("fetch failed");

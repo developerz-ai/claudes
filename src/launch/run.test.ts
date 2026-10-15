@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "../config/load";
 import { configFile, settingsFile } from "../config/paths";
 import { writeConfig } from "../config/store";
-import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
-import {
-  PREFLIGHT_TIMEOUT_NOTE_MESSAGE,
-  PROXY_NOTE_MESSAGE,
-  preflightTimeoutMs,
-  ROUTER_UNREACHABLE_MESSAGE,
-} from "./run";
+import { CLAUDE_NOT_FOUND_MESSAGE } from "./run";
 import {
   cleanup,
   deadFetch,
@@ -34,6 +38,11 @@ afterEach(() => {
 
 function errText(): string {
   return h.err.join("");
+}
+
+/** This launch's settings path, as run() computes it (the test runs in-process). */
+function launchSettings(): string {
+  return settingsFile(h.dir, process.pid);
 }
 
 describe("run: config gate", () => {
@@ -135,166 +144,160 @@ describe("run: unknown rerouting toggle gate", () => {
   });
 });
 
-describe("run: router pre-flight", () => {
-  test("an unreachable router: exit 69, the exact message, no spawn, no settings", async () => {
-    const code = await h.drive(["-p", "hi"], { fetch: deadFetch });
-    expect(code).toBe(69);
-    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n`);
-    expect(h.spawnCalls).toEqual([]);
-    expect(statSync(settingsFile(h.dir), { throwIfNoEntry: false })).toBeUndefined();
-  });
-
-  /** A fetch seam whose attempt throws exactly what a timed-out probe throws. */
-  function timeoutFetch(behavior: (call: number) => "timeout" | "healthy"): FetchLike {
-    let calls = 0;
-    return async () => {
-      calls += 1;
-      if (behavior(calls) === "timeout") {
-        const err = new Error("the probe timed out");
-        err.name = "TimeoutError";
-        throw err;
-      }
-      return new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });
-    };
-  }
-
-  test("a timed-out probe is retried once, and a healthy second attempt launches", async () => {
+describe("run: host-managed bypass gate", () => {
+  test("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST truthy: exit 64, the name-only refusal, before the probe", async () => {
     const code = await h.drive(["-p", "hi"], {
-      fetch: timeoutFetch((call) => (call === 1 ? "timeout" : "healthy")),
-      spawnScript: (child) => child.emit("exit", 0, null),
+      env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" },
+      fetch: deadFetch,
     });
-    expect(code).toBe(0);
-    expect(h.spawnCalls.length).toBe(1);
-  });
-
-  test("a probe timing out twice: exit 69 after exactly two attempts, with the timeout note", async () => {
-    let calls = 0;
-    const alwaysTimeout: FetchLike = async () => {
-      calls += 1;
-      const err = new Error("the probe timed out");
-      err.name = "TimeoutError";
-      throw err;
-    };
-    expect(await h.drive(["-p", "hi"], { fetch: alwaysTimeout })).toBe(69);
-    expect(calls).toBe(2);
-    expect(h.spawnCalls).toEqual([]);
-    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
-  });
-
-  test("a proxy set and a double timeout: both notes, proxy note first", async () => {
-    const alwaysTimeout: FetchLike = async () => {
-      const err = new Error("the probe timed out");
-      err.name = "TimeoutError";
-      throw err;
-    };
-    expect(
-      await h.drive(["-p", "hi"], {
-        env: { HOME: h.home, PATH: h.binDir, HTTPS_PROXY: "http://proxy.corp.test:3128" },
-        fetch: alwaysTimeout,
-      }),
-    ).toBe(69);
+    expect(code).toBe(64);
     expect(errText()).toBe(
-      `${ROUTER_UNREACHABLE_MESSAGE}\n${PROXY_NOTE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`,
+      "claudes: refusing: CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST is set, so this session would not go to the router\n",
     );
+    expect(h.spawnCalls).toEqual([]);
+    assertNoKeyFragment(errText(), KEY);
   });
 
-  test("a hard connection error is not retried: one attempt, exit 69", async () => {
-    let calls = 0;
-    const deadOnce: FetchLike = async () => {
-      calls += 1;
-      throw new TypeError("fetch failed");
-    };
-    expect(await h.drive(["-p", "hi"], { fetch: deadOnce })).toBe(69);
-    expect(calls).toBe(1);
-  });
-
-  for (const proxy of [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ] as const) {
-    test(`${proxy} set without NODE_USE_ENV_PROXY: the proxy note follows the message`, async () => {
+  test("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST falsy does not block launch", async () => {
+    for (const value of ["", "0", "false"]) {
       const code = await h.drive(["-p", "hi"], {
-        env: { HOME: h.home, PATH: h.binDir, [proxy]: "http://proxy.corp.test:3128" },
+        env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: value },
+        spawnScript: (child) => child.emit("exit", 0, null),
+      });
+      expect(code).toBe(0);
+    }
+    expect(h.spawnCalls.length).toBe(3);
+  });
+
+  test("CLAUDE_CODE_HOST_AUTH_ENV_VAR set to a value: exit 64, the refusal, before the probe", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_HOST_AUTH_ENV_VAR: "ANTHROPIC_API_KEY" },
+      fetch: deadFetch,
+    });
+    expect(code).toBe(64);
+    expect(errText()).toBe(
+      "claudes: refusing: CLAUDE_CODE_HOST_AUTH_ENV_VAR is set, so this session would not go to the router\n",
+    );
+    expect(h.spawnCalls).toEqual([]);
+  });
+
+  // The variable names the env var holding the host's credential: "0" and
+  // "false" are names like any other, so any non-empty value refuses.
+  test("CLAUDE_CODE_HOST_AUTH_ENV_VAR counts '0' and 'false' as set", async () => {
+    for (const value of ["0", "false"]) {
+      const code = await h.drive(["-p", "hi"], {
+        env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_HOST_AUTH_ENV_VAR: value },
         fetch: deadFetch,
       });
-      expect(code).toBe(69);
-      expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PROXY_NOTE_MESSAGE}\n`);
-    });
-  }
-
-  test("NODE_USE_ENV_PROXY set: the note is suppressed", async () => {
-    await h.drive(["-p", "hi"], {
-      env: {
-        HOME: h.home,
-        PATH: h.binDir,
-        HTTPS_PROXY: "http://proxy.corp.test:3128",
-        NODE_USE_ENV_PROXY: "1",
-      },
-      fetch: deadFetch,
-    });
-    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n`);
+      expect(code).toBe(64);
+    }
+    expect(h.spawnCalls).toEqual([]);
   });
 
-  test("an empty-string proxy is not a proxy: no note", async () => {
-    await h.drive(["-p", "hi"], {
-      env: { HOME: h.home, PATH: h.binDir, HTTPS_PROXY: "" },
-      fetch: deadFetch,
-    });
-    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n`);
-  });
-
-  test("a reachable router prints nothing even when a proxy is set", async () => {
-    const code = await h.drive(["-p", "hi"], {
-      env: { HOME: h.home, PATH: h.binDir, HTTPS_PROXY: "http://proxy.corp.test:3128" },
-      spawnScript: (child) => child.emit("exit", 0, null),
-    });
-    expect(code).toBe(0);
-    expect(errText()).toBe("");
+  test("CLAUDE_CODE_HOST_AUTH_ENV_VAR empty or unset does not block launch", async () => {
+    for (const env of [
+      { HOME: h.home, PATH: h.binDir },
+      { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_HOST_AUTH_ENV_VAR: "" },
+    ]) {
+      const code = await h.drive(["-p", "hi"], {
+        env,
+        spawnScript: (child) => child.emit("exit", 0, null),
+      });
+      expect(code).toBe(0);
+    }
+    expect(h.spawnCalls.length).toBe(2);
   });
 });
 
-describe("preflightTimeoutMs", () => {
-  test("defaults to 1500 and honours CLAUDES_PREFLIGHT_TIMEOUT_MS", () => {
-    expect(preflightTimeoutMs({})).toBe(1500);
-    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "2500" })).toBe(2500);
-    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "1" })).toBe(1);
-    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "2147483647" })).toBe(2_147_483_647);
+describe("run: verbose-fetch gate", () => {
+  test("BUN_CONFIG_VERBOSE_FETCH truthy: exit 64, the refusal, before the probe", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      env: { HOME: h.home, PATH: h.binDir, BUN_CONFIG_VERBOSE_FETCH: "1" },
+      fetch: deadFetch,
+    });
+    expect(code).toBe(64);
+    expect(errText()).toBe(
+      "claudes: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed\n",
+    );
+    // deadFetch would answer 69 were the probe reached: 64 proves it was not.
+    expect(h.spawnCalls).toEqual([]);
+    assertNoKeyFragment(errText(), KEY);
   });
 
-  test("ignores non-integer values in favor of the default", () => {
-    for (const invalid of ["0.5", "2500.5", "1e10", "0", "-1", "abc"]) {
-      expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: invalid })).toBe(1500);
+  test("BUN_CONFIG_VERBOSE_FETCH falsy does not block launch", async () => {
+    for (const value of ["", "0", "false"]) {
+      const code = await h.drive(["-p", "hi"], {
+        env: { HOME: h.home, PATH: h.binDir, BUN_CONFIG_VERBOSE_FETCH: value },
+        spawnScript: (child) => child.emit("exit", 0, null),
+      });
+      expect(code).toBe(0);
     }
-  });
-
-  test("ignores invalid values in favor of the default", () => {
-    for (const invalid of ["", "  ", "1e999"]) {
-      expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: invalid })).toBe(1500);
-    }
+    expect(h.spawnCalls.length).toBe(3);
   });
 });
 
 describe("run: settings file", () => {
-  test("written 0600 inside the 0700 config dir, with the generated payload", async () => {
+  test("written 0600 inside the 0700 config dir, unlinked once the child exits", async () => {
+    let observed: { path: string; mode: number; dirMode: number; text: string } | undefined;
     const code = await h.drive(["-p", "hi"], {
-      spawnScript: (child) => child.emit("exit", 0, null),
+      spawnScript: (child) => {
+        // The file exists exactly while the child runs: read it before the
+        // exit that triggers the launcher's cleanup.
+        const path = launchSettings();
+        observed = {
+          path,
+          mode: statSync(path).mode & 0o777,
+          dirMode: statSync(h.dir).mode & 0o777,
+          text: readFileSync(path, "utf8"),
+        };
+        child.emit("exit", 0, null);
+      },
     });
     expect(code).toBe(0);
-    const path = settingsFile(h.dir);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(h.dir).mode & 0o777).toBe(0o700);
-    const text = await Bun.file(path).text();
-    const payload = JSON.parse(text);
+    const seen = observed as { path: string; mode: number; dirMode: number; text: string };
+    expect(seen.mode).toBe(0o600);
+    expect(seen.dirMode).toBe(0o700);
+    const payload = JSON.parse(seen.text);
     expect(payload.apiKeyHelper).toBe(`'${NODE}' '${SCRIPT}' key`);
     expect(payload.permissions).toEqual({ deny: ["WebSearch"] });
     expect(payload.env.ANTHROPIC_BASE_URL).toBe(ROUTER);
     expect(payload.env.ANTHROPIC_AUTH_TOKEN).toBe("");
     expect(payload.env.CLAUDE_CODE_USE_BEDROCK).toBe("");
-    assertNoKeyFragment(text, KEY);
+    assertNoKeyFragment(seen.text, KEY);
+    // After the child exits the per-launch file is gone.
+    expect(statSync(seen.path, { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  test("the settings path is removed even when claude is missing from PATH", async () => {
+    const code = await h.drive(["-p", "hi"], { env: { HOME: h.home, PATH: "/nonexistent" } });
+    expect(code).toBe(127);
+    expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n`);
+    expect(statSync(launchSettings(), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  test("the settings path is removed when the spawn itself fails", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      spawnScript: (child) => child.emit("error", new Error("ENOENT")),
+    });
+    expect(code).toBe(127);
+    expect(statSync(launchSettings(), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  test("before writing, dead launches' files and a legacy settings.json are swept", async () => {
+    writeFileSync(join(h.dir, "settings.999999999.json"), "{}\n", "utf8");
+    writeFileSync(join(h.dir, "settings.json"), "{}\n", "utf8");
+    const code = await h.drive(["-p", "hi"], {
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(0);
+    expect(existsSync(join(h.dir, "settings.999999999.json"))).toBe(false);
+    expect(existsSync(join(h.dir, "settings.json"))).toBe(false);
+  });
+
+  test("an unreachable router leaves no settings file behind", async () => {
+    const code = await h.drive(["-p", "hi"], { fetch: deadFetch });
+    expect(code).toBe(69);
+    expect(statSync(launchSettings(), { throwIfNoEntry: false })).toBeUndefined();
   });
 
   test("a symlinked config dir: the ConfigError's own message, exit 1, no spawn", async () => {
@@ -324,7 +327,7 @@ describe("run: settings file", () => {
   test("a non-Config write failure names the errno code", async () => {
     // A directory at the settings path makes the final rename fail with an
     // errno (EISDIR/ENOTDIR), which is all the message may carry.
-    mkdirSync(settingsFile(h.dir));
+    mkdirSync(launchSettings());
     const code = await h.drive(["-p", "hi"], {
       spawnScript: (child) => child.emit("exit", 0, null),
     });

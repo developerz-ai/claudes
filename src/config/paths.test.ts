@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { configDir, configFile } from "./paths";
+import { configDir, configFile, settingsFile } from "./paths";
 
 describe("configDir", () => {
   test("uses XDG_CONFIG_HOME when it is absolute", () => {
@@ -36,5 +36,13 @@ describe("configDir", () => {
 describe("configFile", () => {
   test("names the config file inside the config dir", () => {
     expect(configFile("/home/u/.config/claudes")).toBe("/home/u/.config/claudes/config.json");
+  });
+});
+
+describe("settingsFile", () => {
+  test("names the per-launch settings file by its pid", () => {
+    expect(settingsFile("/home/u/.config/claudes", 4242)).toBe(
+      "/home/u/.config/claudes/settings.4242.json",
+    );
   });
 });

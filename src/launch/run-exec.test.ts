@@ -61,7 +61,7 @@ describe("run: claude resolution and exit codes", () => {
     expect(h.spawnCalls[0]?.command).toBe(join(h.binDir, "claude"));
     expect(h.spawnCalls[0]?.argv).toEqual([
       "--settings",
-      settingsFile(h.dir),
+      settingsFile(h.dir, process.pid),
       "--model",
       "opus",
       "-p",
