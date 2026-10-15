@@ -36,3 +36,18 @@ function homeConfigBase(env: Env): string {
 export function configFile(dir: string): string {
   return `${dir}/config.json`;
 }
+
+/**
+ * The per-launch settings file the launcher writes: `${dir}/settings.<pid>.json`.
+ * One file per launch (named by the launcher's pid). It can carry the shell's
+ * proxy URL — userinfo included — and is 0600 inside the 0700 config dir that
+ * already holds the router key in config.json, so it lives until a later
+ * launch sweeps it after the launching process has exited: Claude Code hands
+ * the --settings path to processes it starts later (/restart, --tmux,
+ * background agents), which may read the file after the launcher is gone. A
+ * descendant started from a dead launcher's session loses it at that sweep and
+ * fails closed.
+ */
+export function settingsFile(dir: string, pid: number): string {
+  return `${dir}/settings.${pid}.json`;
+}

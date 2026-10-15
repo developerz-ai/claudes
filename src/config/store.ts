@@ -1,51 +1,20 @@
-import { Buffer } from "node:buffer";
 import {
-  chmodSync,
   closeSync,
   constants as fsConstants,
   fstatSync,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   type Stats,
   statSync,
-  unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { ConfigError, InsecureConfigError } from "./errors";
+import { type PrivateWriteHooks, writePrivateFile } from "./private-file";
 import { type Config, configSchema, formatZodIssues } from "./schema";
 
-/** Base error for a config file we refuse to trust or cannot use. */
-export class ConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConfigError";
-  }
-}
+export { ConfigError, InsecureConfigError } from "./errors";
 
-/** The config file, or its directory, would expose the key to other users. */
-export class InsecureConfigError extends ConfigError {
-  constructor(message: string) {
-    super(message);
-    this.name = "InsecureConfigError";
-  }
-}
-
-export interface WriteHooks {
-  /**
-   * Test seam replacing the payload writer, e.g. to simulate a short write;
-   * the post-write size check still runs against whatever it left behind.
-   */
-  writeFile?: (fd: number, payload: string) => void;
-  /**
-   * Test seam called after the temp file is fully written but before the
-   * rename, so a crash between the two steps can be simulated.
-   */
-  afterTempWrite?: (tempPath: string) => void;
-}
+export type WriteHooks = PrivateWriteHooks;
 
 export interface ReadOptions {
   /**
@@ -67,56 +36,11 @@ export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}
   if (!check.success) {
     throw new ConfigError(`refusing to write an invalid config: ${formatZodIssues(check.error)}`);
   }
-  const dir = dirname(path);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  // chmod follows symlinks, so a symlinked config dir would tighten somebody
-  // else's directory; refuse it before touching the mode.
-  if (lstatSync(dir).isSymbolicLink()) {
-    throw new ConfigError(
-      `refusing to write config: ${dir} is a symbolic link — remove it and re-run "claudes login"`,
-    );
-  }
-  // mkdir's mode is filtered by the umask, so pin the mode explicitly — also
-  // for a directory that already existed.
-  chmodSync(dir, 0o700);
-
-  const temp = `${path}.tmp-${process.pid.toString(36)}-${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-  const payload = `${JSON.stringify(config, null, 2)}\n`;
-  const writeFile = hooks.writeFile ?? ((fd, data) => writeFileSync(fd, data, "utf8"));
-  let fd: number | undefined = openSync(temp, "wx", 0o600);
-  try {
-    writeFile(fd, payload);
-    fsyncSync(fd);
-    // Verify the write through the fd itself: a short write would otherwise be
-    // renamed over the good config as a silently truncated file.
-    const expectedBytes = Buffer.byteLength(payload, "utf8");
-    const writtenBytes = fstatSync(fd).size;
-    if (writtenBytes !== expectedBytes) {
-      throw new ConfigError(
-        `short write to ${temp}: wrote ${writtenBytes} of ${expectedBytes} bytes`,
-      );
-    }
-    closeSync(fd);
-    fd = undefined;
-    hooks.afterTempWrite?.(temp);
-    renameSync(temp, path);
-  } catch (err) {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // the fd may already be closed
-      }
-    }
-    try {
-      unlinkSync(temp);
-    } catch {
-      // the temp file may never have been created
-    }
-    throw err;
-  }
+  writePrivateFile(path, `${JSON.stringify(config, null, 2)}\n`, {
+    noun: "config",
+    remedy: 'remove it and re-run "claudes login"',
+    hooks,
+  });
 }
 
 /**

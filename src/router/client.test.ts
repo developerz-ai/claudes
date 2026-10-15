@@ -116,7 +116,14 @@ describe("health", () => {
     const timeout = new Error("the operation timed out");
     timeout.name = "TimeoutError";
     const { fetchImpl } = stubFetch({ failWith: timeout });
-    await expect(health(BASE, fetchImpl)).rejects.toThrow("timed out after 10s");
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      expect((err as RouterError).timedOut).toBe(true);
+      expect((err as RouterError).message).toContain("timed out after 10s");
+    }
   });
 
   test("the timeout really aborts: an injected timeoutMs fires the signal", async () => {
@@ -134,7 +141,14 @@ describe("health", () => {
           reject(aborted);
         });
       });
-    await expect(health(BASE, fetchImpl, 25)).rejects.toThrow("timed out after 0.025s");
+    try {
+      await health(BASE, fetchImpl, 25);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      expect((err as RouterError).timedOut).toBe(true);
+      expect((err as RouterError).message).toContain("timed out after 0.025s");
+    }
     expect(signals[0]?.aborted).toBe(true);
   });
 
@@ -150,6 +164,45 @@ describe("health", () => {
       throw new Error("expected health to throw");
     } catch (err) {
       expect((err as RouterError).message).toBe(`could not reach ${BASE}/healthz (ECONNREFUSED)`);
+    }
+  });
+
+  test("carries tlsVerifyCode for the certificate-verification errnos, and only those", async () => {
+    for (const code of [
+      "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+      "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+      "SELF_SIGNED_CERT_IN_CHAIN",
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+      "CERT_HAS_EXPIRED",
+      "ERR_TLS_CERT_ALTNAME_INVALID",
+    ]) {
+      const failure = new TypeError("fetch failed", {
+        cause: Object.assign(new Error("unable to verify the first certificate"), { code }),
+      });
+      const { fetchImpl } = stubFetch({ failWith: failure });
+      try {
+        await health(BASE, fetchImpl);
+        throw new Error("expected health to throw");
+      } catch (err) {
+        const routerError = err as RouterError;
+        expect(routerError.tlsVerifyCode).toBe(code);
+        expect(routerError.timedOut).toBe(false);
+        expect(routerError.message).toBe(`could not reach ${BASE}/healthz (${code})`);
+      }
+    }
+    // A connection failure is not a certificate failure: no code, no TLS note.
+    const refused = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+    const { fetchImpl } = stubFetch({ failWith: refused });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      // The instanceof check makes this fail if health() resolves (the "expected
+      // health to throw" Error is not a RouterError).
+      expect(err).toBeInstanceOf(RouterError);
+      expect((err as RouterError).tlsVerifyCode).toBeUndefined();
     }
   });
 
