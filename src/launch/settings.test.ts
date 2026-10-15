@@ -88,6 +88,7 @@ describe("buildSettings", () => {
         NODE_TLS_REJECT_UNAUTHORIZED: "",
         NODE_EXTRA_CA_CERTS: "",
         NODE_USE_ENV_PROXY: "",
+        NODE_OPTIONS: "",
         CLAUDE_CODE_CERT_STORE: "",
         BUN_CONFIG_VERBOSE_FETCH: "",
       },
@@ -129,6 +130,17 @@ describe("buildSettings", () => {
       expect(buildSettings(config(), SELF, {}).env[name]).toBe("");
     });
   }
+
+  // NODE_OPTIONS reaches the apiKeyHelper subprocess too (`node <script> key`),
+  // and Node applies a planted --require from it before the helper script runs
+  // — so a cloned repo could otherwise run code inside the key helper. Both
+  // parent cases are pinned so a settings-file plant can never win.
+  test('pins NODE_OPTIONS to the parent env\'s value, "" when the parent has none', () => {
+    expect(
+      buildSettings(config(), SELF, { NODE_OPTIONS: "--max-old-space-size=4096" }).env.NODE_OPTIONS,
+    ).toBe("--max-old-space-size=4096");
+    expect(buildSettings(config(), SELF, {}).env.NODE_OPTIONS).toBe("");
+  });
 
   // An SSL pin of "" is NOT unset for the OpenSSL clients (python urllib, pip,
   // wget, openssl, ruby) in every session subprocess: they would see an empty
@@ -247,16 +259,39 @@ describe("buildSettings", () => {
   });
 
   // A loopback router must never go through a proxy configured in the user's
-  // or project's settings: the proxy would receive the plaintext key.
-  test("a loopback baseUrl pins NO_PROXY and no_proxy to the loopback hosts", () => {
-    for (const baseUrl of [
-      "http://127.0.0.1:8787",
-      "http://localhost:3000",
-      "http://[::1]:9090",
+  // or project's settings: the proxy would receive the plaintext key. The
+  // router's own hostname is pinned too — not every proxy client reads
+  // 127.0.0.0/8 as a range, only literal hosts.
+  test("a loopback baseUrl pins NO_PROXY and no_proxy to the loopback hosts plus the router's own", () => {
+    for (const [baseUrl, expected] of [
+      ["http://127.0.0.1:8787", "127.0.0.1,localhost,::1"],
+      ["http://localhost:3000", "127.0.0.1,localhost,::1"],
+      ["http://[::1]:9090", "127.0.0.1,localhost,::1,[::1]"],
+      ["http://127.0.0.2:8787", "127.0.0.1,localhost,::1,127.0.0.2"],
+      ["http://127.255.255.254:8787", "127.0.0.1,localhost,::1,127.255.255.254"],
     ] as const) {
       const env = buildSettings(config({ baseUrl }), SELF, {}).env;
-      expect(env.NO_PROXY).toBe("127.0.0.1,localhost,::1");
-      expect(env.no_proxy).toBe("127.0.0.1,localhost,::1");
+      expect(env.NO_PROXY).toBe(expected);
+      expect(env.no_proxy).toBe(expected);
+    }
+  });
+
+  test("a 127.0.0.0/8 router merges its hostname ahead of the parent's entries", () => {
+    const env = buildSettings(config({ baseUrl: "http://127.0.0.2:8787" }), SELF, {
+      NO_PROXY: "10.0.0.1,.corp.test",
+    }).env;
+    expect(env.NO_PROXY).toBe("127.0.0.1,localhost,::1,127.0.0.2,10.0.0.1,.corp.test");
+    expect(env.no_proxy).toBe("127.0.0.1,localhost,::1,127.0.0.2,10.0.0.1,.corp.test");
+  });
+
+  test("a non-loopback host — even a 127.x-looking one — earns no loopback pin", () => {
+    for (const baseUrl of [
+      "http://128.0.0.1:8787", // in-range IPv4, outside 127.0.0.0/8
+      "http://127.0.0.256:8787", // not a valid IPv4: the URL does not parse, so not loopback
+      "http://example.127.0.0.1:8787", // same: any host ending in a number must parse as IPv4
+    ] as const) {
+      const env = buildSettings(config({ baseUrl }), SELF, {}).env;
+      expect(env.NO_PROXY).toBe("");
     }
   });
 

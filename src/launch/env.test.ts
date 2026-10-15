@@ -100,6 +100,7 @@ describe("buildChildEnv", () => {
   test("drops undefined entries instead of passing them on", () => {
     const child = buildChildEnv({ PATH: "/bin", ANTHROPIC_API_KEY: undefined });
     expect(child).toEqual({ PATH: "/bin" });
+    expect("ANTHROPIC_API_KEY" in child).toBe(false);
   });
 
   test("returns a copy: the child cannot mutate the parent", () => {

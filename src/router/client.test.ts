@@ -116,7 +116,14 @@ describe("health", () => {
     const timeout = new Error("the operation timed out");
     timeout.name = "TimeoutError";
     const { fetchImpl } = stubFetch({ failWith: timeout });
-    await expect(health(BASE, fetchImpl)).rejects.toThrow("timed out after 10s");
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      expect((err as RouterError).timedOut).toBe(true);
+      expect((err as RouterError).message).toContain("timed out after 10s");
+    }
   });
 
   test("the timeout really aborts: an injected timeoutMs fires the signal", async () => {
@@ -134,7 +141,14 @@ describe("health", () => {
           reject(aborted);
         });
       });
-    await expect(health(BASE, fetchImpl, 25)).rejects.toThrow("timed out after 0.025s");
+    try {
+      await health(BASE, fetchImpl, 25);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      expect((err as RouterError).timedOut).toBe(true);
+      expect((err as RouterError).message).toContain("timed out after 0.025s");
+    }
     expect(signals[0]?.aborted).toBe(true);
   });
 
@@ -185,6 +199,9 @@ describe("health", () => {
       await health(BASE, fetchImpl);
       throw new Error("expected health to throw");
     } catch (err) {
+      // The instanceof check makes this fail if health() resolves (the "expected
+      // health to throw" Error is not a RouterError).
+      expect(err).toBeInstanceOf(RouterError);
       expect((err as RouterError).tlsVerifyCode).toBeUndefined();
     }
   });

@@ -72,6 +72,36 @@ describe("run: router pre-flight", () => {
     expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
   });
 
+  // The timeout env var must bound a probe that would otherwise hang forever:
+  // the seam resolves only when its AbortSignal fires, exactly as a real fetch
+  // stuck on a silent router would.
+  test("a small CLAUDES_PREFLIGHT_TIMEOUT_MS aborts a hanging probe: exit 69, timeout note", async () => {
+    const signals: AbortSignal[] = [];
+    const hangingFetch: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        signals.push(init.signal);
+        init.signal.addEventListener("abort", () => {
+          const reason = init.signal.reason;
+          const aborted = new Error("the operation timed out");
+          aborted.name =
+            reason instanceof Error && reason.name === "TimeoutError"
+              ? "TimeoutError"
+              : "AbortError";
+          reject(aborted);
+        });
+      });
+    expect(
+      await h.drive(["-p", "hi"], {
+        env: { HOME: h.home, PATH: h.binDir, CLAUDES_PREFLIGHT_TIMEOUT_MS: "5" },
+        fetch: hangingFetch,
+      }),
+    ).toBe(69);
+    expect(signals.length).toBe(2); // the retry ran, and was aborted too
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(h.spawnCalls).toEqual([]);
+    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
+  });
+
   test("a proxy set and a double timeout: both notes, proxy note first", async () => {
     const alwaysTimeout: FetchLike = async () => {
       const err = new Error("the probe timed out");

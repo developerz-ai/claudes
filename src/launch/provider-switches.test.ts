@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Env } from "../config/paths";
-import { firstHostManagedEnv, HOST_MANAGED_ENV, isTruthyToggle } from "./provider-switches";
+import {
+  firstHostManagedEnv,
+  firstReroutingUseToggle,
+  firstSetProviderSwitch,
+  firstUnknownReroutingUseToggle,
+  HOST_MANAGED_ENV,
+  isTruthyToggle,
+} from "./provider-switches";
 
 describe("firstHostManagedEnv", () => {
   test("no host-managed names set: undefined", () => {
@@ -60,5 +67,109 @@ describe("isTruthyToggle", () => {
     for (const on of ["1", "true", "yes", " "]) {
       expect(isTruthyToggle(on)).toBe(true);
     }
+  });
+});
+
+describe("firstSetProviderSwitch", () => {
+  test("no switch set: undefined", () => {
+    expect(firstSetProviderSwitch({})).toBeUndefined();
+  });
+
+  test("a truthy known switch yields its name", () => {
+    expect(firstSetProviderSwitch({ CLAUDE_CODE_USE_BEDROCK: "1" })).toBe(
+      "CLAUDE_CODE_USE_BEDROCK",
+    );
+  });
+
+  test("two switches set: the stable PROVIDER_SWITCHES order wins", () => {
+    expect(
+      firstSetProviderSwitch({
+        CLAUDE_CODE_USE_VERTEX: "1",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+      }),
+    ).toBe("CLAUDE_CODE_USE_BEDROCK");
+  });
+
+  test("falsy values are off: undefined", () => {
+    for (const value of ["", "0", "false"] as const) {
+      expect(firstSetProviderSwitch({ CLAUDE_CODE_USE_BEDROCK: value })).toBeUndefined();
+    }
+  });
+
+  test("a benign allowlisted toggle is not a provider switch", () => {
+    expect(firstSetProviderSwitch({ CLAUDE_CODE_USE_POWERSHELL_TOOL: "1" })).toBeUndefined();
+  });
+
+  test("an unknown CLAUDE_CODE_USE_ toggle is not a provider switch", () => {
+    expect(firstSetProviderSwitch({ CLAUDE_CODE_USE_FOO: "1" })).toBeUndefined();
+  });
+});
+
+describe("firstUnknownReroutingUseToggle", () => {
+  test("a benign allowlisted toggle yields undefined", () => {
+    expect(
+      firstUnknownReroutingUseToggle({ CLAUDE_CODE_USE_POWERSHELL_TOOL: "1" }),
+    ).toBeUndefined();
+  });
+
+  test("an unknown truthy toggle yields its name", () => {
+    expect(firstUnknownReroutingUseToggle({ CLAUDE_CODE_USE_FOO: "1" })).toBe(
+      "CLAUDE_CODE_USE_FOO",
+    );
+  });
+
+  test("a known switch is not unknown: undefined (the settings pin covers it)", () => {
+    expect(firstUnknownReroutingUseToggle({ CLAUDE_CODE_USE_BEDROCK: "1" })).toBeUndefined();
+  });
+
+  test("falsy unknown toggles yield undefined", () => {
+    for (const value of ["", "0", "false"] as const) {
+      expect(firstUnknownReroutingUseToggle({ CLAUDE_CODE_USE_FOO: value })).toBeUndefined();
+    }
+  });
+
+  test("several unknown toggles: the sorted name wins", () => {
+    expect(
+      firstUnknownReroutingUseToggle({
+        CLAUDE_CODE_USE_ZED: "1",
+        CLAUDE_CODE_USE_ALPHA: "1",
+      }),
+    ).toBe("CLAUDE_CODE_USE_ALPHA");
+  });
+});
+
+describe("firstReroutingUseToggle", () => {
+  test("a benign allowlisted toggle alone yields undefined", () => {
+    expect(firstReroutingUseToggle({ CLAUDE_CODE_USE_POWERSHELL_TOOL: "1" })).toBeUndefined();
+  });
+
+  test("an unknown truthy toggle yields its name", () => {
+    expect(firstReroutingUseToggle({ CLAUDE_CODE_USE_FOO: "1" })).toBe("CLAUDE_CODE_USE_FOO");
+  });
+
+  test("a provider switch yields its name", () => {
+    expect(firstReroutingUseToggle({ CLAUDE_CODE_USE_BEDROCK: "1" })).toBe(
+      "CLAUDE_CODE_USE_BEDROCK",
+    );
+  });
+
+  test("falsy values yield undefined", () => {
+    for (const value of ["", "0", "false"] as const) {
+      expect(
+        firstReroutingUseToggle({
+          CLAUDE_CODE_USE_BEDROCK: value,
+          CLAUDE_CODE_USE_FOO: value,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  test("a known switch wins over an unknown toggle (stable known-first order)", () => {
+    expect(
+      firstReroutingUseToggle({
+        CLAUDE_CODE_USE_VERTEX: "1",
+        CLAUDE_CODE_USE_FOO: "1",
+      }),
+    ).toBe("CLAUDE_CODE_USE_VERTEX");
   });
 });
