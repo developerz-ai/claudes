@@ -9,6 +9,7 @@ import { writePrivateFile } from "../config/private-file";
 import { errorName, type FetchLike, health, RouterError } from "../router/client";
 import { buildArgv } from "./argv";
 import { buildChildEnv } from "./env";
+import { firstUnknownReroutingUseToggle } from "./provider-switches";
 import { buildSettings } from "./settings";
 
 export const ROUTER_UNREACHABLE_MESSAGE =
@@ -72,10 +73,11 @@ export interface RunDeps {
 
 /**
  * Runs `claude` against the router: load the config (or refuse), build the
- * child argv (or refuse), pre-flight the router, write the generated settings
- * atomically at 0600 in the 0700 config dir, then spawn `claude` with the
- * stripped env, inherited stdio, forwarded signals, and the child's exit code
- * (or 128+n for a signal death) as the answer. Never prints or passes the key.
+ * child argv (or refuse), refuse an unknown rerouting toggle in the parent
+ * env, pre-flight the router, write the generated settings atomically at 0600
+ * in the 0700 config dir, then spawn `claude` with the stripped env, inherited
+ * stdio, forwarded signals, and the child's exit code (or 128+n for a signal
+ * death) as the answer. Never prints or passes the key.
  */
 export async function run(userArgs: readonly string[], deps: RunDeps): Promise<number> {
   const loaded = loadConfig(deps.env);
@@ -88,14 +90,32 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     return fail(deps, argv.exitCode, argv.message);
   }
 
+  // A CLAUDE_CODE_USE_ toggle that is neither a known provider switch (those
+  // are stripped from the child env and pinned to "" in the settings, so they
+  // cannot reroute anything) nor a benign tool toggle would reach the child
+  // unstripped — and `claudes key` would then refuse mid-session, stranding
+  // the session at its first credential fetch. Refusing here, before any
+  // network probe, names the variable instead.
+  const unknownToggle = firstUnknownReroutingUseToggle(deps.env);
+  if (unknownToggle !== undefined) {
+    return fail(
+      deps,
+      64,
+      `claudes: refusing: ${unknownToggle} is set, so this session would not go to the router`,
+    );
+  }
+
   try {
     await preflight(loaded.config.baseUrl, deps.fetch, preflightTimeoutMs(deps.env));
   } catch (err) {
     const timedOut = err instanceof RouterError && err.timedOut;
-    return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, proxyNoteNeeded(deps.env), timedOut);
+    return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, [
+      ...(proxyNoteNeeded(deps.env) ? [PROXY_NOTE_MESSAGE] : []),
+      ...(timedOut ? [PREFLIGHT_TIMEOUT_NOTE_MESSAGE] : []),
+    ]);
   }
 
-  const settings = buildSettings(loaded.config, deps);
+  const settings = buildSettings(loaded.config, deps, deps.env);
   try {
     writePrivateFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
       noun: "settings",
@@ -130,12 +150,21 @@ async function preflight(baseUrl: string, fetchImpl: FetchLike, timeoutMs: numbe
 }
 
 /**
- * True when HTTP(S)_PROXY is set but Node's env-proxy opt-in is not: the
- * pre-flight would then bypass the developer's proxy and fail for that reason
- * alone, which deserves its own hint next to the unreachable message.
+ * True when a proxy is set but Node's env-proxy opt-in is not: the pre-flight
+ * would then bypass the developer's proxy and fail for that reason alone,
+ * which deserves its own hint next to the unreachable message. Both cases of
+ * each name count: tools export uppercase or lowercase, and ALL_PROXY covers
+ * the scheme-agnostic form.
  */
 function proxyNoteNeeded(env: Env): boolean {
-  const proxySet = isSet(env.HTTPS_PROXY) || isSet(env.HTTP_PROXY);
+  const proxySet = [
+    env.HTTPS_PROXY,
+    env.HTTP_PROXY,
+    env.https_proxy,
+    env.http_proxy,
+    env.ALL_PROXY,
+    env.all_proxy,
+  ].some(isSet);
   return proxySet && !isSet(env.NODE_USE_ENV_PROXY);
 }
 
@@ -184,6 +213,14 @@ async function execClaude(
   // its exit code and orphaning it. So a TTY registers a NO-OP SIGINT handler
   // (the child got the terminal's copy already) and forwards the rest.
   // Without a TTY (pipes, nohup) nothing else delivers SIGINT, so claudes must.
+  //
+  // Known limitation of the no-op: a SIGINT addressed to the claudes PID only
+  // (kill -INT <pid>, a supervisor) is swallowed rather than forwarded — the
+  // handler cannot tell who sent the signal. Symmetrically, when stdin is
+  // redirected but a controlling terminal remains, a Ctrl-C reaches the child
+  // through the process group AND is forwarded by claudes: claude sees it
+  // twice. Both edges are accepted over the alternative of killing the child
+  // twice on every ordinary Ctrl-C.
   const forwarded = deps.stdinIsTTY
     ? FORWARDED_SIGNALS.filter((signal) => signal !== "SIGINT")
     : FORWARDED_SIGNALS;
@@ -247,19 +284,11 @@ export function resolveExecutable(name: string, env: Env): string | undefined {
   return undefined;
 }
 
-function fail(
-  deps: RunDeps,
-  code: number,
-  message: string,
-  note = false,
-  timeoutNote = false,
-): number {
+/** Emits `message` then each note on its own line, and answers `code`. */
+function fail(deps: RunDeps, code: number, message: string, notes: readonly string[] = []): number {
   let text = message.endsWith("\n") ? message : `${message}\n`;
-  if (note) {
-    text += `${PROXY_NOTE_MESSAGE}\n`;
-  }
-  if (timeoutNote) {
-    text += `${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`;
+  for (const note of notes) {
+    text += `${note}\n`;
   }
   deps.stderr(text);
   return code;

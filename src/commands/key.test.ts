@@ -7,11 +7,13 @@ import { configDir, configFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import { BENIGN_USE_TOGGLES, PROVIDER_SWITCHES } from "../launch/provider-switches";
+import { buildSettings } from "../launch/settings";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { runKey } from "./key";
 
 const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
 const ROUTER = "https://router.example.test";
+const SELF = { nodePath: "/usr/local/bin/node", scriptPath: "/opt/claudes/bin/claudes.js" };
 
 let home: string;
 let err: string[];
@@ -105,6 +107,17 @@ describe("runKey", () => {
     assertNoKeyFragment(err.join(""), KEY);
   });
 
+  test("an unknown toggle set to a falsy value (0, empty) is allowed", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    for (const value of ["0", ""]) {
+      err = [];
+      writes = [];
+      expect(drive(false, { CLAUDE_CODE_USE_FOO: value })).toBe(0);
+      expect(writes).toEqual([KEY]);
+      expect(err).toEqual([]);
+    }
+  });
+
   test("allows the benign CLAUDE_CODE_USE_ toggles", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
     for (const name of BENIGN_USE_TOGGLES) {
@@ -143,6 +156,19 @@ describe("runKey", () => {
       expect(writes).toEqual([KEY]);
       expect(err).toEqual([]);
     }
+  });
+
+  // The helper runs inside the Claude Code session, so the env it inherits
+  // carries the generated settings' own ANTHROPIC_BASE_URL — the base URL gate
+  // must let exactly that value through, or every session's first key fetch
+  // would fail.
+  test("the generated settings' ANTHROPIC_BASE_URL passes the gate: exit 0, key printed", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    const settings = buildSettings(config(), SELF, {});
+    const code = drive(false, { ANTHROPIC_BASE_URL: settings.env.ANTHROPIC_BASE_URL });
+    expect(code).toBe(0);
+    expect(writes).toEqual([KEY]);
+    expect(err).toEqual([]);
   });
 
   test("the refusal fires even with no config at all", () => {

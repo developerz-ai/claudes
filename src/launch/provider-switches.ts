@@ -23,13 +23,16 @@ export const PROVIDER_SWITCHES = [
 
 export type ProviderSwitch = (typeof PROVIDER_SWITCHES)[number];
 
-/** The `CLAUDE_CODE_USE_` prefix every switch — and no benign toggle — carries. */
+/** The `CLAUDE_CODE_USE_` prefix shared by switches and benign toggles alike. */
 const USE_PREFIX = "CLAUDE_CODE_USE_";
 
 /**
  * `CLAUDE_CODE_USE_` toggles that do NOT reroute the session: they pick a local
  * implementation of a tool, not another provider. Everything else under the
- * prefix is treated as a switch, known or not.
+ * prefix is treated as a switch, known or not. CLAUDE_CODE_USE_CCR_V2 is
+ * deliberately NOT on this list: it is a remote-session transport toggle, and
+ * an unknown meaning is exactly why it must fail closed rather than be
+ * allowlisted on a guess.
  */
 export const BENIGN_USE_TOGGLES = [
   "CLAUDE_CODE_USE_POWERSHELL_TOOL",
@@ -61,27 +64,47 @@ export function firstSetProviderSwitch(env: Env): ProviderSwitch | undefined {
 }
 
 /**
+ * The `CLAUDE_CODE_USE_` names that are neither a known switch nor a benign
+ * toggle, in sorted order: exactly the names whose meaning claudes cannot
+ * account for, so they are treated as switches, known or not.
+ */
+function unknownUseToggleNames(env: Env): string[] {
+  const known = PROVIDER_SWITCHES as readonly string[];
+  const benign = BENIGN_USE_TOGGLES as readonly string[];
+  return Object.keys(env)
+    .filter(
+      (name) => name.startsWith(USE_PREFIX) && !known.includes(name) && !benign.includes(name),
+    )
+    .sort();
+}
+
+/** The first of `names` set to a truthy value, in the order given. */
+function firstTruthy(env: Env, names: readonly string[]): string | undefined {
+  for (const name of names) {
+    if (isTruthyToggle(env[name])) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
+/**
  * The first env name that would reroute the session, for `claudes key`: every
  * known switch first (stable order), then any OTHER `CLAUDE_CODE_USE_` toggle
  * except the benign allowlist, in sorted order. New switch names Claude Code
  * grows are refused too — the list of names is an allowlist, not a blocklist.
  */
 export function firstReroutingUseToggle(env: Env): string | undefined {
-  const switched = firstSetProviderSwitch(env);
-  if (switched !== undefined) {
-    return switched;
-  }
-  const known = PROVIDER_SWITCHES as readonly string[];
-  const benign = BENIGN_USE_TOGGLES as readonly string[];
-  const others = Object.keys(env)
-    .filter(
-      (name) => name.startsWith(USE_PREFIX) && !known.includes(name) && !benign.includes(name),
-    )
-    .sort();
-  for (const name of others) {
-    if (isTruthyToggle(env[name])) {
-      return name;
-    }
-  }
-  return undefined;
+  return firstSetProviderSwitch(env) ?? firstTruthy(env, unknownUseToggleNames(env));
+}
+
+/**
+ * The first rerouting toggle that is NOT a known switch, for the launcher's
+ * early refusal: a known switch is stripped from the child env and pinned to ""
+ * in the generated settings, so it is harmless at launch; anything else under
+ * the prefix reaches the child unstripped and un-pinned, and the key helper
+ * would refuse mid-session — so the launcher refuses up front instead.
+ */
+export function firstUnknownReroutingUseToggle(env: Env): string | undefined {
+  return firstTruthy(env, unknownUseToggleNames(env));
 }

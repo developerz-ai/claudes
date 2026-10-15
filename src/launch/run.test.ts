@@ -90,6 +90,51 @@ describe("run: argv gate", () => {
   }
 });
 
+describe("run: unknown rerouting toggle gate", () => {
+  test("an unknown CLAUDE_CODE_USE_ toggle: exit 64, the refusal, before the probe or spawn", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_USE_CCR_V2: "1" },
+      fetch: deadFetch,
+    });
+    expect(code).toBe(64);
+    expect(errText()).toBe(
+      "claudes: refusing: CLAUDE_CODE_USE_CCR_V2 is set, so this session would not go to the router\n",
+    );
+    // deadFetch would answer 69 were the probe reached: 64 proves it was not.
+    expect(h.spawnCalls).toEqual([]);
+    assertNoKeyFragment(errText(), KEY);
+  });
+
+  test("a known provider switch in the parent env does not block launch", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_USE_BEDROCK: "1" },
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(0);
+    expect(h.spawnCalls.length).toBe(1);
+  });
+
+  test("a benign toggle does not block launch", async () => {
+    const code = await h.drive(["-p", "hi"], {
+      env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_USE_POWERSHELL_TOOL: "1" },
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(0);
+    expect(h.spawnCalls.length).toBe(1);
+  });
+
+  test("an unknown toggle set to a falsy value does not block launch", async () => {
+    for (const value of ["", "0", "false"]) {
+      const code = await h.drive(["-p", "hi"], {
+        env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_USE_CCR_V2: value },
+        spawnScript: (child) => child.emit("exit", 0, null),
+      });
+      expect(code).toBe(0);
+    }
+    expect(h.spawnCalls.length).toBe(3);
+  });
+});
+
 describe("run: router pre-flight", () => {
   test("an unreachable router: exit 69, the exact message, no spawn, no settings", async () => {
     const code = await h.drive(["-p", "hi"], { fetch: deadFetch });
@@ -136,6 +181,23 @@ describe("run: router pre-flight", () => {
     expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
   });
 
+  test("a proxy set and a double timeout: both notes, proxy note first", async () => {
+    const alwaysTimeout: FetchLike = async () => {
+      const err = new Error("the probe timed out");
+      err.name = "TimeoutError";
+      throw err;
+    };
+    expect(
+      await h.drive(["-p", "hi"], {
+        env: { HOME: h.home, PATH: h.binDir, HTTPS_PROXY: "http://proxy.corp.test:3128" },
+        fetch: alwaysTimeout,
+      }),
+    ).toBe(69);
+    expect(errText()).toBe(
+      `${ROUTER_UNREACHABLE_MESSAGE}\n${PROXY_NOTE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`,
+    );
+  });
+
   test("a hard connection error is not retried: one attempt, exit 69", async () => {
     let calls = 0;
     const deadOnce: FetchLike = async () => {
@@ -146,7 +208,14 @@ describe("run: router pre-flight", () => {
     expect(calls).toBe(1);
   });
 
-  for (const proxy of ["HTTPS_PROXY", "HTTP_PROXY"] as const) {
+  for (const proxy of [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+  ] as const) {
     test(`${proxy} set without NODE_USE_ENV_PROXY: the proxy note follows the message`, async () => {
       const code = await h.drive(["-p", "hi"], {
         env: { HOME: h.home, PATH: h.binDir, [proxy]: "http://proxy.corp.test:3128" },

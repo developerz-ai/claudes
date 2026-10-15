@@ -79,10 +79,12 @@ fi
 # `claudes key` through the shipped file: stdout must be the config's key bytes
 # exactly — no trailing newline — and the exit code must be 0. stdout here is a
 # file, not a TTY, so the helper path is the one being exercised. The scratch
-# HOME/XDG_CONFIG_HOME hold a hand-written 0700 dir and 0600 config. The check
-# runs against a synthetic config, so any ambient ANTHROPIC_BASE_URL (a
-# developer shell behind a gateway) is cleared: `claudes key` rightly refuses a
-# base URL that differs from the configured router.
+# HOME/XDG_CONFIG_HOME hold a hand-written 0700 dir and 0600 config. Every
+# invocation below runs under `env -i` with exactly HOME, XDG_CONFIG_HOME and
+# PATH: the check must not inherit the caller's CLAUDE_CODE_USE_* (a remote
+# Claude Code session exports CLAUDE_CODE_USE_CCR_V2=1, which the key guard
+# rightly refuses) or an ambient ANTHROPIC_BASE_URL (a developer shell behind
+# a gateway, which differs from the synthetic router).
 CHECK_KEY="mar_live_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
 mkdir -p "$scratch/keyhome" "$scratch/keyxdg/claudes"
 chmod 700 "$scratch/keyxdg/claudes"
@@ -100,7 +102,7 @@ cat >"$scratch/keyxdg/claudes/config.json" <<JSON
 JSON
 chmod 600 "$scratch/keyxdg/claudes/config.json"
 rc=0
-HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ANTHROPIC_BASE_URL= \
+env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" \
   ./dist/claudes.js key >"$scratch/key.out" || rc=$?
 if [ "$rc" -ne 0 ]; then
   echo "bin/check: ./dist/claudes.js key exited $rc, expected 0" >&2
@@ -130,10 +132,10 @@ elif ! command -v script >/dev/null 2>&1; then
 else
   rc=0
   if [ "$pty_form" = "util-linux" ]; then
-    HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ANTHROPIC_BASE_URL= \
+    env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" TERM="${TERM:-dumb}" \
       script -qec "./dist/claudes.js key" /dev/null >"$scratch/key-tty.out" || rc=$?
   else
-    HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ANTHROPIC_BASE_URL= \
+    env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" TERM="${TERM:-dumb}" \
       script -q /dev/null ./dist/claudes.js key >"$scratch/key-tty.out" || rc=$?
   fi
   if grep -q "mar_live_" "$scratch/key-tty.out"; then

@@ -36,6 +36,17 @@ function shQuote(word: string): string {
   return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
+/**
+ * The env every spawn in this file runs under: an explicit, closed object —
+ * never process.env wholesale — so an ambient CLAUDE_CODE_USE_* (a remote
+ * Claude Code session exports CLAUDE_CODE_USE_CCR_V2=1) or an ambient
+ * ANTHROPIC_BASE_URL cannot make these key runs refuse for reasons the test
+ * never chose.
+ */
+function childEnv(home: string): Record<string, string | undefined> {
+  return { PATH: process.env.PATH, HOME: home, TERM: "dumb" };
+}
+
 /** `script` runs a command under a pseudo-tty; absent on some systems. */
 const SCRIPT_AVAILABLE = spawnSync("sh", ["-c", "command -v script >/dev/null 2>&1"]).status === 0;
 
@@ -74,7 +85,7 @@ describe("claudes key through a real process (bun src/main.ts key)", () => {
       const home = scratchHome();
       try {
         const res = spawnSync(process.execPath, [MAIN, "key"], {
-          env: { PATH: process.env.PATH, HOME: home },
+          env: childEnv(home),
           encoding: "buffer",
           timeout: SPAWN_TEST_TIMEOUT_MS,
         });
@@ -96,7 +107,7 @@ describe("claudes key through a real process (bun src/main.ts key)", () => {
       const home = scratchHome();
       try {
         const res = spawnSync(process.execPath, [MAIN, "key"], {
-          env: { PATH: process.env.PATH, HOME: home, CLAUDE_CODE_USE_BEDROCK: "1" },
+          env: { ...childEnv(home), CLAUDE_CODE_USE_BEDROCK: "1" },
           encoding: "buffer",
           timeout: SPAWN_TEST_TIMEOUT_MS,
         });
@@ -123,7 +134,7 @@ describe("claudes key through a real process (bun src/main.ts key)", () => {
           throw new Error(`unreachable: the skipIf guard already skipped (${PTY.skip})`);
         }
         const res = spawnSync("script", PTY.argv, {
-          env: { PATH: process.env.PATH, HOME: home, TERM: "dumb" },
+          env: childEnv(home),
           encoding: "buffer",
           timeout: SPAWN_TEST_TIMEOUT_MS,
         });
