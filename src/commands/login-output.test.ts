@@ -27,6 +27,30 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+/** A proxy whose getPrototypeOf trap throws: every bare `instanceof` on it throws. */
+function prototypeTrap(): Error {
+  return new Proxy(new TypeError("fetch failed"), {
+    getPrototypeOf() {
+      throw new Error(`trap exploded ${KEY}`);
+    },
+  });
+}
+
+/**
+ * A Response whose `status` getter throws the trap: the throw happens in
+ * health()/models() outside their wrapping try, so the raw trap is what
+ * login's catch blocks see.
+ */
+function trappingStatusResponse(): Response {
+  return {
+    headers: new Headers(),
+    body: null,
+    get status(): number {
+      throw prototypeTrap();
+    },
+  } as unknown as Response;
+}
+
 describe("login validation and output", () => {
   test("health failure names the endpoint and exits 1", async () => {
     const h = harness(home, {
@@ -47,6 +71,35 @@ describe("login validation and output", () => {
     const message = result.ok === false ? (result.message ?? "") : "";
     expect(message).toContain("router rejected the key");
     expect(message).toContain("401");
+    expectNoKeyLeak(h, result);
+  });
+
+  test("a prototype-trapped health failure is described by shape, never thrown", async () => {
+    // A bare instanceof in describeRouterError would let the trap escape
+    // login() itself, breaking the always-returns-a-LoginResult contract.
+    const h = harness(home, { fetch: async () => trappingStatusResponse() });
+    const result = await login(["--url", ROUTER], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 1 });
+    expect(result.ok === false && result.message).toBe(
+      `claudes login: health check failed: could not reach ${ROUTER} (Error)`,
+    );
+    expectNoKeyLeak(h, result);
+  });
+
+  test("a prototype-trapped models failure is described by shape, never thrown", async () => {
+    // Same trap on the models response: the 401/403 check must read false,
+    // not throw, and the failure falls through to the shaped description.
+    const h = harness(home, {
+      fetch: async (url) =>
+        url.endsWith("/healthz")
+          ? new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 })
+          : trappingStatusResponse(),
+    });
+    const result = await login(["--url", ROUTER], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 1 });
+    expect(result.ok === false && result.message).toBe(
+      `claudes login: could not list models: could not reach ${ROUTER} (Error)`,
+    );
     expectNoKeyLeak(h, result);
   });
 
