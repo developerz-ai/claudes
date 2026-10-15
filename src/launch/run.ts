@@ -131,6 +131,13 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     ]);
   }
 
+  // Resolved before the write, so a missing `claude` leaves no settings file
+  // behind for a session that never ran.
+  const claudePath = resolveExecutable("claude", deps.env);
+  if (claudePath === undefined) {
+    return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE);
+  }
+
   const settings = buildSettings(loaded.config, deps, deps.env);
   try {
     writePrivateFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
@@ -142,12 +149,8 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
   }
 
   // The settings file stays on disk after this launcher exits (see above), so
-  // there is no cleanup on any exit path from here on — a missing `claude` or
-  // a failed spawn leaves it for the next launch's sweep.
-  const claudePath = resolveExecutable("claude", deps.env);
-  if (claudePath === undefined) {
-    return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE);
-  }
+  // there is no cleanup on any exit path from here on — a failed spawn leaves
+  // it for the next launch's sweep.
   return await execClaude(claudePath, argv.argv, deps);
 }
 

@@ -54,14 +54,16 @@ const CAUSE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
  * The errno codes Node puts on `err.cause.code` when TLS certificate
  * verification itself failed (a "fetch failed" TypeError wrapping them): the
  * launcher appends a TLS note to the unreachable message for exactly these —
- * which note is the launcher's call, keyed off the code it reads here.
+ * which note is the launcher's call, keyed off the code it reads here. This is
+ * the one list; the launcher's note table is tested to cover every entry.
  */
-const TLS_VERIFY_CODES: ReadonlySet<string> = new Set([
+export const TLS_VERIFY_CODES: ReadonlySet<string> = new Set([
   "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
   "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
   "SELF_SIGNED_CERT_IN_CHAIN",
   "DEPTH_ZERO_SELF_SIGNED_CERT",
   "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
   "ERR_TLS_CERT_ALTNAME_INVALID",
 ]);
 

@@ -1,4 +1,4 @@
-import { readdirSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { ConfigError } from "../config/errors";
 import { settingsFile } from "../config/paths";
@@ -39,11 +39,19 @@ export function launchSettingsPath(dir: string): string {
  * A file whose pid is alive is never touched — including a pid this process
  * may not signal (the liveness probe answers EPERM), which is treated as
  * alive. Anything else in the dir (config.json, another user's files) is not
- * the launcher's to remove.
+ * the launcher's to remove. A symlinked config dir is not swept at all: the
+ * settings writer refuses one, so nothing in its target is this launcher's.
+ *
+ * Liveness is judged in this process's pid namespace, so a config dir shared
+ * across containers can see another namespace's live launcher as dead; the
+ * session keeps running, and only processes it starts later lose the file.
  */
 export function sweepStaleLaunchSettings(dir: string): void {
   let names: readonly string[];
   try {
+    if (lstatSync(dir).isSymbolicLink()) {
+      return;
+    }
     names = readdirSync(dir);
   } catch {
     return; // no config dir yet: nothing stale to sweep
