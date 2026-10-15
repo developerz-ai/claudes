@@ -234,14 +234,17 @@ describe("health", () => {
     }
   });
 
-  test("an errno wins over the word 'redirect' in a DNS or TLS cause (no misdiagnosis)", async () => {
-    // A hostname or certificate SAN can contain "redirect"; the real code must still show.
+  test("an errno wins when the cause mentions redirect, and even when it is the exact redirect phrase", async () => {
+    // A hostname or certificate SAN can contain "redirect"; the real code must
+    // still show — including when the cause is exactly "unexpected redirect"
+    // but carries an errno anyway.
     const cases: Array<[string, string]> = [
       ["getaddrinfo ENOTFOUND redirect.example.test", "ENOTFOUND"],
       [
         "Hostname/IP does not match certificate's altnames: DNS:redirect.test",
         "ERR_TLS_CERT_ALTNAME_INVALID",
       ],
+      ["unexpected redirect", "ECONNREFUSED"],
     ];
     for (const [text, code] of cases) {
       const failure = new TypeError("fetch failed", {
@@ -264,6 +267,24 @@ describe("health", () => {
     );
   });
 
+  test("a code-less cause that only starts like the redirect phrase is a plain TypeError", async () => {
+    // "unexpected redirect to <url>": the phrase plus anything — a URL, or a
+    // key an attacker smuggled into the message — is not the exact bare cause.
+    const failure = new TypeError("fetch failed", {
+      cause: new Error(`unexpected redirect to ${BASE}/login?next=${KEY}`),
+    });
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      const message = (err as RouterError).message;
+      expect(message).toBe(`could not reach ${BASE}/healthz (TypeError)`);
+      assertNoKeyFragment(message, KEY);
+    }
+  });
+
   test("a refused redirect is named, never quoted (Bun shape: the message says it)", async () => {
     const { fetchImpl } = stubFetch({
       failWith: new TypeError(`redirect mode is set to error: ${KEY}`),
@@ -276,6 +297,28 @@ describe("health", () => {
       expect(message).toBe(`could not reach ${BASE}/healthz (refused a redirect)`);
       assertNoKeyFragment(message, KEY);
     }
+  });
+
+  test("the Bun shapes: UnexpectedRedirect is a refused redirect, ConnectionRefused is not", async () => {
+    const redirect = stubFetch({
+      failWith: new TypeError(`UnexpectedRedirect fetching "${BASE}/healthz"`),
+    });
+    try {
+      await health(BASE, redirect.fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect((err as RouterError).message).toBe(
+        `could not reach ${BASE}/healthz (refused a redirect)`,
+      );
+    }
+    // A connection failure whose URL merely contains "redirect" is reported by
+    // its class name; the word alone must not tip the diagnosis.
+    const refused = stubFetch({
+      failWith: new TypeError(`ConnectionRefused fetching "${BASE}/redirect"`),
+    });
+    await expect(health(BASE, refused.fetchImpl)).rejects.toThrow(
+      `could not reach ${BASE}/healthz (TypeError)`,
+    );
   });
 
   test("an exotic thrown value (prototype trap) still becomes a RouterError, key-free", async () => {
@@ -354,6 +397,32 @@ describe("health", () => {
     const { fetchImpl } = stubFetch({ healthResponse: new Response(stream, { status: 200 }) });
     await expect(health(BASE, fetchImpl)).rejects.toThrow(`exceeds ${CAP} bytes`);
   });
+
+  test("a body-read rejection from a prototype-trapping proxy still becomes a RouterError", async () => {
+    // The reader rejects with a proxy whose getPrototypeOf trap throws: with a
+    // bare instanceof in the body-read handler the proxy itself would escape
+    // health() raw, breaking the every-failure-is-a-RouterError contract.
+    const trap = new Proxy(new Error("fetch failed"), {
+      getPrototypeOf() {
+        throw new Error(`trap exploded ${KEY}`);
+      },
+    });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(trap);
+      },
+    });
+    const { fetchImpl } = stubFetch({ healthResponse: new Response(stream, { status: 200 }) });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      const message = (err as RouterError).message;
+      expect(message).toBe(`GET ${BASE}/healthz body could not be read (Error)`);
+      assertNoKeyFragment(message, KEY);
+    }
+  });
 });
 
 describe("models", () => {
@@ -416,6 +485,11 @@ describe("scrub", () => {
     expect(scrub("no keys here")).toBe("no keys here");
   });
 
+  test("stops at a closing parenthesis, so a key inside a longer token cannot eat it", () => {
+    expect(scrub(`(${KEY})`)).toBe("(mar_live_…)");
+    expect(scrub(`(X${KEY})`)).toBe("(Xmar_live_…)");
+  });
+
   test("RouterError scrubs its own message at construction", () => {
     const err = new RouterError(`GET x failed with ${KEY} inside`);
     expect(err.message).not.toContain(KEY);
@@ -460,5 +534,21 @@ describe("errorName", () => {
     await expect(health(BASE, fetchImpl)).rejects.toThrow(
       `could not reach ${BASE}/healthz (Error)`,
     );
+  });
+
+  test("a class-shaped err.name that embeds the key scrubs to a balanced parenthetical", async () => {
+    // "X" + the key passes the class-shape pattern, so the name really is
+    // printed — scrub must reduce it without eating the ")" after it.
+    const failure = new Error("fetch failed");
+    failure.name = `X${KEY}`;
+    const { fetchImpl } = stubFetch({ failWith: failure });
+    try {
+      await health(BASE, fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      const message = (err as RouterError).message;
+      expect(message).toBe(`could not reach ${BASE}/healthz (Xmar_live_…)`);
+      assertNoKeyFragment(message, KEY);
+    }
   });
 });

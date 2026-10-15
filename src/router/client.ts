@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { errorName, scrub } from "./errors";
+import { errorName, isRouterError, RouterError } from "./errors";
 
 /**
  * Client for the self-hosted, Anthropic-compatible router. The router key only
@@ -11,33 +11,7 @@ import { errorName, scrub } from "./errors";
  * passed through `scrub` as a second line of defence.
  */
 
-export { errorName, scrub } from "./errors";
-
-export class RouterError extends Error {
-  readonly status: number | undefined;
-  /** True when the router was unreachable because the request timed out. */
-  readonly timedOut: boolean;
-  /**
-   * The errno of the TLS certificate-verification failure, when the router's
-   * TLS certificate itself failed verification — the code that picks the
-   * launcher's TLS note (an expired cert and a host-name mismatch each carry
-   * their own).
-   */
-  readonly tlsVerifyCode: string | undefined;
-
-  constructor(
-    message: string,
-    status?: number,
-    timedOut: boolean = false,
-    tlsVerifyCode: string | undefined = undefined,
-  ) {
-    super(scrub(message));
-    this.name = "RouterError";
-    this.status = status;
-    this.timedOut = timedOut;
-    this.tlsVerifyCode = tlsVerifyCode;
-  }
-}
+export { errorName, isRouterError, RouterError, scrub } from "./errors";
 
 export type FetchLike = (
   url: string,
@@ -257,7 +231,7 @@ async function parseJson(endpoint: string, res: Response): Promise<unknown> {
   try {
     text = await readBodyCapped(endpoint, res);
   } catch (err) {
-    if (err instanceof RouterError) {
+    if (isRouterError(err)) {
       throw err;
     }
     throw new RouterError(`GET ${endpoint} body could not be read (${errorName(err)})`);

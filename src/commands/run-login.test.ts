@@ -160,6 +160,18 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(existsSync(configPath())).toBe(true);
   });
 
+  test("TTY Ctrl-C at the prompt: exit 130, prompt plus newline on err, terminal restored", async () => {
+    const { stdin, rawModes } = ttyStdin(Buffer.from([0x03]));
+    const driven = await drive(["--url", ROUTER], stdin, stubFetch());
+    expect(driven.code).toBe(130);
+    // The prompt and the Ctrl-C newline only: exit 130 carries no message line.
+    expect(driven.errCalls).toEqual(["Router key: ", "\n"]);
+    expect(driven.out).toBe("");
+    expect(rawModes).toEqual([true, false]);
+    assertNoKeyFragment(`${driven.out}\n${driven.err}`, KEY);
+    expect(existsSync(configPath())).toBe(false);
+  });
+
   test("401 from the router: exit 1, the rejection line on err", async () => {
     const driven = await drive(
       ["--url", ROUTER],
