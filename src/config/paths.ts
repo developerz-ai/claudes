@@ -37,7 +37,11 @@ export function configFile(dir: string): string {
   return `${dir}/config.json`;
 }
 
-/** The file the launcher writes for each session: `${dir}/settings.json`. */
-export function settingsFile(dir: string): string {
-  return `${dir}/settings.json`;
+/**
+ * The per-launch settings file the launcher writes: `${dir}/settings.<pid>.json`.
+ * One file per launch (named by the launcher's pid), so the file — which can
+ * carry the shell's proxy URL — exists only while its session does.
+ */
+export function settingsFile(dir: string, pid: number): string {
+  return `${dir}/settings.${pid}.json`;
 }

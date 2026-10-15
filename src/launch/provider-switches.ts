@@ -23,6 +23,39 @@ export const PROVIDER_SWITCHES = [
 
 export type ProviderSwitch = (typeof PROVIDER_SWITCHES)[number];
 
+/**
+ * Env names that hand Claude Code's provider/endpoint/auth configuration to a
+ * managing host process: with the first truthy, or the second set to any
+ * non-empty value, Claude Code ignores the generated settings file's provider,
+ * endpoint and auth keys outright — the session would silently skip the router
+ * while appearing to work. The launcher refuses up front. A plant of these in
+ * some other settings file is itself ignored by Claude Code, so the key helper
+ * needs no matching check.
+ */
+export const HOST_MANAGED_ENV = [
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+] as const;
+
+export type HostManagedEnvName = (typeof HOST_MANAGED_ENV)[number];
+
+/**
+ * The first host-managed name set in `env`, or undefined when the parent env
+ * manages nothing. PROVIDER_MANAGED_BY_HOST is a flag, so only a truthy value
+ * counts; HOST_AUTH_ENV_VAR carries the NAME of the env var holding the host's
+ * credential, so any non-empty value counts — "0" and "false" included.
+ */
+export function firstHostManagedEnv(env: Env): HostManagedEnvName | undefined {
+  if (isTruthyToggle(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)) {
+    return "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST";
+  }
+  const authEnvVar = env.CLAUDE_CODE_HOST_AUTH_ENV_VAR;
+  if (authEnvVar !== undefined && authEnvVar !== "") {
+    return "CLAUDE_CODE_HOST_AUTH_ENV_VAR";
+  }
+  return undefined;
+}
+
 /** The `CLAUDE_CODE_USE_` prefix shared by switches and benign toggles alike. */
 const USE_PREFIX = "CLAUDE_CODE_USE_";
 
@@ -40,8 +73,12 @@ export const BENIGN_USE_TOGGLES = [
   "CLAUDE_CODE_USE_COWORK_PLUGINS",
 ] as const;
 
-/** The truthiness rule a switch value follows: "", "0" and "false" are off. */
-function isTruthyToggle(value: string | undefined): boolean {
+/**
+ * The truthiness rule env toggles follow: anything but unset, "", "0" and
+ * "false" is on, compared case-insensitively. Shared by the provider switches,
+ * the host-managed flags and the launcher's verbose-fetch refusal.
+ */
+export function isTruthyToggle(value: string | undefined): boolean {
   if (value === undefined) {
     return false;
   }

@@ -2,46 +2,39 @@ import { type SpawnOptions, spawn } from "node:child_process";
 import { accessSync, constants as fsConstants, realpathSync, statSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { ConfigError } from "../config/errors";
 import { loadConfig } from "../config/load";
-import { type Env, settingsFile } from "../config/paths";
+import type { Env } from "../config/paths";
 import { writePrivateFile } from "../config/private-file";
-import { errorName, type FetchLike, health, RouterError } from "../router/client";
+import { type FetchLike, RouterError } from "../router/client";
+import { errorName } from "../router/errors";
 import { buildArgv } from "./argv";
 import { buildChildEnv } from "./env";
-import { firstUnknownReroutingUseToggle } from "./provider-switches";
+import {
+  PREFLIGHT_TIMEOUT_NOTE_MESSAGE,
+  PROXY_NOTE_MESSAGE,
+  preflight,
+  preflightTimeoutMs,
+  proxyNoteNeeded,
+  ROUTER_UNREACHABLE_MESSAGE,
+  TLS_VERIFY_NOTE_MESSAGE,
+} from "./preflight";
+import {
+  firstHostManagedEnv,
+  firstUnknownReroutingUseToggle,
+  isTruthyToggle,
+} from "./provider-switches";
 import { buildSettings } from "./settings";
+import {
+  launchSettingsPath,
+  removeLaunchSettings,
+  settingsWriteError,
+  sweepStaleLaunchSettings,
+} from "./settings-file";
 
-export const ROUTER_UNREACHABLE_MESSAGE =
-  "router unreachable: run `claudes doctor`, or use plain `claude` with your own login (usage won't be attributed)";
-export const PROXY_NOTE_MESSAGE =
-  "note: claudes' router check does not use HTTP(S)_PROXY; set NODE_USE_ENV_PROXY=1 if your network needs a proxy";
-export const PREFLIGHT_TIMEOUT_NOTE_MESSAGE =
-  "note: the router check timed out; set CLAUDES_PREFLIGHT_TIMEOUT_MS (milliseconds) to wait longer";
 export const CLAUDE_NOT_FOUND_MESSAGE = "claude not found on PATH";
 
-const DEFAULT_PREFLIGHT_TIMEOUT_MS = 1_500;
-/** The largest accepted CLAUDES_PREFLIGHT_TIMEOUT_MS: a signed 32-bit integer. */
-const MAX_PREFLIGHT_TIMEOUT_MS = 2_147_483_647;
 export const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 export type ForwardedSignal = (typeof FORWARDED_SIGNALS)[number];
-
-/**
- * The router pre-flight timeout in milliseconds, from
- * `CLAUDES_PREFLIGHT_TIMEOUT_MS`; anything but an integer in 1..2147483647
- * (unset, empty, non-numeric, fractional, zero, negative, out of range) is
- * ignored in favor of the default.
- */
-export function preflightTimeoutMs(env: Env): number {
-  const raw = env.CLAUDES_PREFLIGHT_TIMEOUT_MS;
-  if (raw === undefined) {
-    return DEFAULT_PREFLIGHT_TIMEOUT_MS;
-  }
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_PREFLIGHT_TIMEOUT_MS
-    ? parsed
-    : DEFAULT_PREFLIGHT_TIMEOUT_MS;
-}
 
 /** How run() subscribes to the signals it forwards; a seam for tests. */
 export interface SignalWiring {
@@ -73,18 +66,20 @@ export interface RunDeps {
 
 /**
  * Runs `claude` against the router: load the config (or refuse), build the
- * child argv (or refuse), refuse an unknown rerouting toggle in the parent
- * env, pre-flight the router, write the generated settings atomically at 0600
- * in the 0700 config dir, then spawn `claude` with the stripped env, inherited
- * stdio, forwarded signals, and the child's exit code (or 128+n for a signal
- * death) as the answer. Never prints or passes the key.
+ * child argv (or refuse), refuse an env that would reroute the session or
+ * print the key, pre-flight the router, sweep the settings files of dead
+ * launches, write this launch's settings atomically at 0600 in the 0700 config
+ * dir under a per-launch name, then spawn `claude` with the stripped env,
+ * inherited stdio, forwarded signals, and the child's exit code (or 128+n for
+ * a signal death) as the answer — removing the settings file on the way out,
+ * whatever happened. Never prints or passes the key.
  */
 export async function run(userArgs: readonly string[], deps: RunDeps): Promise<number> {
   const loaded = loadConfig(deps.env);
   if (!loaded.ok) {
     return fail(deps, loaded.exitCode, loaded.message);
   }
-  const settingsPath = settingsFile(loaded.dir);
+  const settingsPath = launchSettingsPath(loaded.dir);
   const argv = buildArgv(userArgs, settingsPath);
   if (!argv.ok) {
     return fail(deps, argv.exitCode, argv.message);
@@ -98,24 +93,41 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
   // network probe, names the variable instead.
   const unknownToggle = firstUnknownReroutingUseToggle(deps.env);
   if (unknownToggle !== undefined) {
+    return refuseReroute(deps, unknownToggle);
+  }
+
+  // A host that manages Claude Code's provider/auth env makes it ignore the
+  // generated settings file outright: the session would silently skip the
+  // router while appearing to work, so it is refused the same way, by name.
+  const hostManaged = firstHostManagedEnv(deps.env);
+  if (hostManaged !== undefined) {
+    return refuseReroute(deps, hostManaged);
+  }
+
+  // Bun's verbose fetch prints every request — headers included — so a truthy
+  // value would print the router key to stderr. The settings pin below covers
+  // a settings-file plant; a truthy parent shell is refused before any probe.
+  if (isTruthyToggle(deps.env.BUN_CONFIG_VERBOSE_FETCH)) {
     return fail(
       deps,
       64,
-      `claudes: refusing: ${unknownToggle} is set, so this session would not go to the router`,
+      "claudes: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed",
     );
   }
 
   try {
     await preflight(loaded.config.baseUrl, deps.fetch, preflightTimeoutMs(deps.env));
   } catch (err) {
-    const timedOut = err instanceof RouterError && err.timedOut;
+    const routerError = err instanceof RouterError ? err : undefined;
     return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, [
       ...(proxyNoteNeeded(deps.env) ? [PROXY_NOTE_MESSAGE] : []),
-      ...(timedOut ? [PREFLIGHT_TIMEOUT_NOTE_MESSAGE] : []),
+      ...(routerError?.tlsVerify === true ? [TLS_VERIFY_NOTE_MESSAGE] : []),
+      ...(routerError?.timedOut === true ? [PREFLIGHT_TIMEOUT_NOTE_MESSAGE] : []),
     ]);
   }
 
   const settings = buildSettings(loaded.config, deps, deps.env);
+  sweepStaleLaunchSettings(loaded.dir);
   try {
     writePrivateFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
       noun: "settings",
@@ -125,76 +137,27 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     return fail(deps, 1, settingsWriteError(err, settingsPath));
   }
 
-  const claudePath = resolveExecutable("claude", deps.env);
-  if (claudePath === undefined) {
-    return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE);
-  }
-  return await execClaude(claudePath, argv.argv, deps);
-}
-
-/**
- * One pre-flight attempt, retried exactly once when — and only when — the
- * router attempt timed out: a slow first probe (cold DNS, a just-woken
- * laptop) deserves a second chance, a hard refusal or connection error does
- * not. A second failure of any kind propagates.
- */
-async function preflight(baseUrl: string, fetchImpl: FetchLike, timeoutMs: number): Promise<void> {
+  // The settings env can carry the shell's proxy URL, userinfo included, so
+  // from here on every exit path — a missing `claude`, a failed spawn, a
+  // signalled child — removes the file again once the child is done with it.
   try {
-    await health(baseUrl, fetchImpl, timeoutMs);
-  } catch (err) {
-    if (!(err instanceof RouterError) || !err.timedOut) {
-      throw err;
+    const claudePath = resolveExecutable("claude", deps.env);
+    if (claudePath === undefined) {
+      return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE);
     }
-    await health(baseUrl, fetchImpl, timeoutMs);
+    return await execClaude(claudePath, argv.argv, deps);
+  } finally {
+    removeLaunchSettings(settingsPath);
   }
 }
 
-/**
- * True when a proxy is set but Node's env-proxy opt-in is not: the pre-flight
- * would then bypass the developer's proxy and fail for that reason alone,
- * which deserves its own hint next to the unreachable message. Both cases of
- * each name count: tools export uppercase or lowercase, and ALL_PROXY covers
- * the scheme-agnostic form.
- */
-function proxyNoteNeeded(env: Env): boolean {
-  const proxySet = [
-    env.HTTPS_PROXY,
-    env.HTTP_PROXY,
-    env.https_proxy,
-    env.http_proxy,
-    env.ALL_PROXY,
-    env.all_proxy,
-  ].some(isSet);
-  return proxySet && !isSet(env.NODE_USE_ENV_PROXY);
-}
-
-function isSet(value: string | undefined): boolean {
-  return value !== undefined && value !== "";
-}
-
-/**
- * The reason a settings write failed, for the refusal message: a ConfigError
- * already carries a key-free, remedy-bearing message of its own; anything
- * else is named by its errno-shaped `code` when it has one.
- */
-function settingsWriteError(err: unknown, settingsPath: string): string {
-  if (err instanceof ConfigError) {
-    return err.message;
-  }
-  return `claudes: could not write the settings file at ${settingsPath} (${errnoOf(err)})`;
-}
-
-/** The errno-shaped `err.code`, falling back to the error's class name. */
-function errnoOf(err: unknown): string {
-  try {
-    const code = (err as { readonly code?: unknown }).code;
-    if (typeof code === "string") {
-      return code;
-    }
-  } catch {
-    // a throwing getter has no printable code
-  }
-  return errorName(err);
+/** The shared shape of the two rerouting refusals: exit 64, the name only. */
+function refuseReroute(deps: RunDeps, name: string): number {
+  return fail(
+    deps,
+    64,
+    `claudes: refusing: ${name} is set, so this session would not go to the router`,
+  );
 }
 
 async function execClaude(

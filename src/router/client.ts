@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { errorName, scrub } from "./errors";
 
 /**
  * Client for the self-hosted, Anthropic-compatible router. The router key only
@@ -10,21 +11,26 @@ import { Buffer } from "node:buffer";
  * passed through `scrub` as a second line of defence.
  */
 
-/** Reduces anything that looks like a router key to its bare prefix. */
-export function scrub(text: string): string {
-  return text.replace(/mar_live_\S*/g, "mar_live_…");
-}
+export { errorName, scrub } from "./errors";
 
 export class RouterError extends Error {
   readonly status: number | undefined;
   /** True when the router was unreachable because the request timed out. */
   readonly timedOut: boolean;
+  /** True when the router's TLS certificate itself failed verification. */
+  readonly tlsVerify: boolean;
 
-  constructor(message: string, status?: number, timedOut: boolean = false) {
+  constructor(
+    message: string,
+    status?: number,
+    timedOut: boolean = false,
+    tlsVerify: boolean = false,
+  ) {
     super(scrub(message));
     this.name = "RouterError";
     this.status = status;
     this.timedOut = timedOut;
+    this.tlsVerify = tlsVerify;
   }
 }
 
@@ -38,27 +44,20 @@ const MAX_BODY_BYTES = 2 ** 20; // 1 MiB is far more than either endpoint return
 const VERSION_PATTERN = /^[0-9A-Za-z.+_-]{1,64}$/;
 /** Errno-looking tokens only (`ECONNREFUSED`, `EAI_AGAIN`); never free text. */
 const CAUSE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
-/** Class-shaped names only (`TypeError`, `TimeoutError`); never free text. */
-const ERROR_NAME_PATTERN = /^[A-Z][A-Za-z0-9_]{0,63}$/;
 
 /**
- * The single error-name helper (login and client share it): `err.name` when it
- * is a class-shaped token, "Error" for anything else — a name that is missing,
- * not a string, or produced by a throwing getter is never printed.
+ * The errno codes Node puts on `err.cause.code` when TLS certificate
+ * verification itself failed (a "fetch failed" TypeError wrapping them): the
+ * launcher appends its CA hint to the unreachable message for exactly these.
  */
-export function errorName(err: unknown): string {
-  try {
-    if (err instanceof Error) {
-      const name = err.name;
-      if (typeof name === "string" && ERROR_NAME_PATTERN.test(name)) {
-        return name;
-      }
-    }
-  } catch {
-    // an exotic object (throwing getter or prototype trap) is not printable
-  }
-  return "Error";
-}
+const TLS_VERIFY_CODES: ReadonlySet<string> = new Set([
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "CERT_HAS_EXPIRED",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
 
 /** GET `${baseUrl}/healthz`; resolves the router's version string. */
 export async function health(
@@ -143,7 +142,22 @@ function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterE
   if (name === "TimeoutError" || name === "AbortError") {
     return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`, undefined, true);
   }
-  return new RouterError(`could not reach ${endpoint} (${diagnostic(err)})`);
+  // Flagged by errno only, so no underlying message text decides the hint.
+  return new RouterError(
+    `could not reach ${endpoint} (${diagnostic(err)})`,
+    undefined,
+    false,
+    isTlsVerifyFailure(err),
+  );
+}
+
+/** True when the failure's cause carries a certificate-verification errno. */
+function isTlsVerifyFailure(err: unknown): boolean {
+  try {
+    return err instanceof Error && TLS_VERIFY_CODES.has(causeCodeOf(err) ?? "");
+  } catch {
+    return false; // an exotic object (prototype trap) decides nothing
+  }
 }
 
 /**
