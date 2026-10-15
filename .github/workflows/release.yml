@@ -62,17 +62,27 @@ jobs:
       - name: Pre-releases are not published
         if: github.event_name == 'release' && github.event.release.prerelease
         run: |
-          echo "::error title=Pre-release refused::this workflow publishes stable releases only; a GitHub pre-release would move the npm 'latest' tag. Delete this release (the tag stays) and create a new, non-pre-release release from the same tag. Editing this release in place or re-running this run will not work: neither fires a new 'published' event." >&2
+          echo "::error title=Pre-release refused::this workflow publishes stable releases only; a GitHub pre-release would move the npm 'latest' tag. Delete this release (the tag stays) and create a new, non-pre-release release from the same tag. Unticking in place or re-running will not work: neither fires a new 'published' event." >&2
           exit 1
-      - name: Release tag must equal v + package.json version
+      - name: Release tag must equal v + a stable package.json version
         if: github.event_name == 'release'
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           version="$(node -p "require('./package.json').version")"
+          # Semver puts a hyphen only in the prerelease part; npm 12.2.0
+          # refuses to publish such a version without --tag, which this
+          # workflow never passes, so refuse it here rather than letting
+          # it die late inside the environment-gated publish job.
+          case "$version" in
+            *-*)
+              echo "::error title=Pre-release version refused::package.json version '$version' has a semver prerelease part, and this workflow publishes stable releases only: npm refuses to publish a prerelease without --tag, which this workflow never passes, so the run would fail late, inside the environment-gated publish job, in npm's wording. Merge a stable version bump to main, delete this release AND its tag (admin only), then re-create from main." >&2
+              exit 1
+              ;;
+          esac
           expected="v$version"
           if [ "$RELEASE_TAG" != "$expected" ]; then
-            echo "::error title=Tag/version mismatch::release tag '$RELEASE_TAG' does not match package.json version '$version' (expected tag '$expected'). Bump the version in package.json and re-cut the release." >&2
+            echo "::error title=Tag/version mismatch::release tag '$RELEASE_TAG' does not match package.json version '$version' (expected tag '$expected'). The tag must move: merge the bump to main, delete this release AND its tag (admin only), then re-create from main." >&2
             exit 1
           fi
       - name: Release commit must already be on main
