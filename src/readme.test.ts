@@ -5,6 +5,7 @@ import { type DoctorDeps, runDoctor } from "./commands/doctor";
 import { parseLoginArgs } from "./commands/login-args";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { dispatch } from "./dispatch";
+import { buildArgv } from "./launch/argv";
 
 /**
  * claudes has no --help output of its own: dispatch() routes the first
@@ -17,19 +18,44 @@ import { dispatch } from "./dispatch";
 const LOGIN_URL = "https://router.invalid";
 
 /**
- * Flags that are Claude Code's own, not claudes'. The README names them
- * because claudes rewrites their values (--model), passes them through, or
- * refuses them by design (--settings and --key, exit 64 — see
- * src/launch/argv.ts). They are claude's to define, so they are allowlisted
- * here and asserted against nothing.
+ * Flags that are Claude Code's own, not claudes': claudes rewrites their
+ * values (--model) or passes them through untouched (-p). They are claude's
+ * to define, so they are allowlisted here and asserted against nothing.
  */
-const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "--settings", "--key"]);
+const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "-p"]);
 
-/** Every double-dash flag token the README mentions, deduped. */
+/**
+ * Flags claudes refuses outright, with exit 64 and the exact message the
+ * README's "Refusals and exit codes" table quotes (both are defined in
+ * src/launch/argv.ts, which exports no constant for them — hence the
+ * literals). The refusal is claudes' own behaviour, so these flags are NOT
+ * allowlisted above: a change that made claudes accept them would fail the
+ * refusal test below.
+ */
+const REFUSED_FLAGS: Readonly<Record<string, string>> = {
+  "--settings":
+    "claudes: --settings is not supported — claudes writes its own settings file to point claude at the router",
+  "--key":
+    "claudes: --key is not supported — the router key comes from the config written by `claudes login`",
+};
+
+/**
+ * Flags of the other commands in the README's shell snippets: npm's `-g` and
+ * rm's `-rf` in the install/uninstall commands. Neither claudes' nor
+ * claude's, so they are asserted against nothing.
+ */
+const SHELL_FLAGS: ReadonlySet<string> = new Set(["-g", "-rf"]);
+
+/**
+ * Every flag token the README mentions, long or short, deduped. A token
+ * counts as a flag only after whitespace, a quote, a backtick, a bracket or
+ * a line start, so hyphenated prose ("known-benign", "claude-opus-5-5") and
+ * the bare `--` terminator are not mistaken for flags.
+ */
 function readmeFlags(): Set<string> {
   const path = fileURLToPath(new URL("../README.md", import.meta.url));
   const readme = readFileSync(path, "utf8");
-  return new Set(readme.match(/--[A-Za-z][A-Za-z0-9-]*/g) ?? []);
+  return new Set(readme.match(/(?<=[\s`"([]|^)--?[A-Za-z][A-Za-z0-9-]*/gm) ?? []);
 }
 
 /**
@@ -68,12 +94,16 @@ function noConfigDoctorDeps(): { deps: DoctorDeps; out: string[]; err: string[] 
 
 /**
  * The flags claudes owns, each mapped to the assertion that its own parser
- * accepts it. A README flag that is neither here nor in CLAUDE_FLAGS fails
- * the first test below, so this table cannot silently fall behind the docs.
+ * accepts it. A README flag that is in none of CLAUDES_FLAG_CHECKS,
+ * CLAUDE_FLAGS, REFUSED_FLAGS or SHELL_FLAGS fails the first test below, so
+ * this table cannot silently fall behind the docs.
  */
 const CLAUDES_FLAG_CHECKS: Readonly<Record<string, () => Promise<void>>> = {
   "--version": async () => {
     expect(dispatch(["--version"]).kind).toBe("version");
+    expect(dispatch(["-v"]).kind).toBe("version");
+  },
+  "-v": async () => {
     expect(dispatch(["-v"]).kind).toBe("version");
   },
   "--url": async () => {
@@ -105,7 +135,13 @@ describe("README flags", () => {
     const flags = readmeFlags();
     expect(flags.size).toBeGreaterThan(0); // the extraction itself still works
     const unknown = [...flags]
-      .filter((flag) => !CLAUDE_FLAGS.has(flag) && !(flag in CLAUDES_FLAG_CHECKS))
+      .filter(
+        (flag) =>
+          !CLAUDE_FLAGS.has(flag) &&
+          !(flag in CLAUDES_FLAG_CHECKS) &&
+          !(flag in REFUSED_FLAGS) &&
+          !SHELL_FLAGS.has(flag),
+      )
       .sort();
     expect(unknown).toEqual([]);
   });
@@ -118,6 +154,17 @@ describe("README flags", () => {
         throw new Error(`README flag ${flag} was rejected by its parser: ${String(err)}`, {
           cause: err,
         });
+      }
+    }
+  });
+
+  test("claudes refuses --settings and --key with exit 64 and the README's message", () => {
+    for (const [flag, message] of Object.entries(REFUSED_FLAGS)) {
+      // Both spellings hit the same refusal: the separated value and
+      // `--flag=value`. run() turns this ArgvResult into the process's exit
+      // code and stderr line — covered end to end in readme-refusals.test.ts.
+      for (const args of [[flag, "x"], [`${flag}=x`]]) {
+        expect(buildArgv(args, "/tmp/settings.json")).toEqual({ ok: false, exitCode: 64, message });
       }
     }
   });
