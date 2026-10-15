@@ -38,16 +38,35 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
-# Bare "login" (no --url) must exit 64: that is the usage error. "some-prompt"
-# is a passthrough the launcher does not implement yet.
-for arg in login some-prompt; do
-  rc=0
-  ./dist/claudes.js "$arg" 2>/dev/null || rc=$?
-  if [ "$rc" -ne 64 ]; then
-    echo "bin/check: ./dist/claudes.js $arg exited $rc, expected 64" >&2
-    exit 1
-  fi
-done
+# Bare "login" (no --url) must exit 64: that is the usage error.
+rc=0
+./dist/claudes.js login 2>/dev/null || rc=$?
+if [ "$rc" -ne 64 ]; then
+  echo "bin/check: ./dist/claudes.js login exited $rc, expected 64" >&2
+  exit 1
+fi
+
+# A passthrough with no config behind an empty HOME must exit 78 (EX_CONFIG)
+# with the exact remedy, newline-terminated — without touching the network.
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+rc=0
+HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" ./dist/claudes.js some-prompt 2>"$scratch/err" || rc=$?
+if [ "$rc" -ne 78 ]; then
+  echo "bin/check: ./dist/claudes.js some-prompt exited $rc, expected 78" >&2
+  exit 1
+fi
+expected='no claudes config: run `claudes login --url <router>`'
+actual="$(tail -n 1 "$scratch/err")"
+if [ "$actual" != "$expected" ]; then
+  echo "bin/check: ./dist/claudes.js some-prompt stderr was '$actual', expected '$expected'" >&2
+  exit 1
+fi
+last_byte="$(tail -c 1 "$scratch/err" | od -An -tu1 | tr -d ' \n')"
+if [ "$last_byte" != "10" ]; then
+  echo "bin/check: the no-config error does not end with a newline (last byte: '$last_byte')" >&2
+  exit 1
+fi
 
 # The usage error on stderr must end with a newline (byte 10), or the shell
 # prompt would land on the error's last line.

@@ -36,3 +36,8 @@ function homeConfigBase(env: Env): string {
 export function configFile(dir: string): string {
   return `${dir}/config.json`;
 }
+
+/** The file the launcher writes for each session: `${dir}/settings.json`. */
+export function settingsFile(dir: string): string {
+  return `${dir}/settings.json`;
+}
