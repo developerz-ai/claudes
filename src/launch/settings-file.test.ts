@@ -4,11 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { settingsFile } from "../config/paths";
-import {
-  launchSettingsPath,
-  removeLaunchSettings,
-  sweepStaleLaunchSettings,
-} from "./settings-file";
+import { launchSettingsPath, sweepStaleLaunchSettings } from "./settings-file";
 
 /** A pid no kernel will hand out (above every pid_max, below kill()'s range). */
 const DEAD_PID = 999_999_999;
@@ -34,12 +30,17 @@ describe("launchSettingsPath", () => {
 });
 
 describe("sweepStaleLaunchSettings", () => {
-  test("removes a dead pid's settings file", () => {
+  test("removes a dead pid's settings file and its stranded temp sibling", () => {
     withDir((dir) => {
       const stale = settingsFile(dir, DEAD_PID);
       writeFileSync(stale, "{}\n", "utf8");
+      // What a SIGKILL between the temp-open and the rename of an atomic
+      // write leaves behind, under the same dead pid.
+      const staleTemp = `${stale}.tmp-m3z1gx-lx2ab1`;
+      writeFileSync(staleTemp, "{}\n", "utf8");
       sweepStaleLaunchSettings(dir);
       expect(existsSync(stale)).toBe(false);
+      expect(existsSync(staleTemp)).toBe(false);
     });
   });
 
@@ -60,17 +61,31 @@ describe("sweepStaleLaunchSettings", () => {
         expect(holder.pid).toBeDefined();
         const live = settingsFile(dir, holder.pid as number);
         writeFileSync(live, "{}\n", "utf8");
+        const liveTemp = `${live}.tmp-m3z1gx-lx2ab1`;
+        writeFileSync(liveTemp, "{}\n", "utf8");
         const config = join(dir, "config.json");
         writeFileSync(config, "{}\n", "utf8");
         const temp = join(dir, "settings.json.tmp-abc123");
         writeFileSync(temp, "{}\n", "utf8");
         sweepStaleLaunchSettings(dir);
         expect(existsSync(live)).toBe(true);
+        expect(existsSync(liveTemp)).toBe(true);
         expect(existsSync(config)).toBe(true);
         expect(existsSync(temp)).toBe(true); // a stranger's file, not ours to judge
       } finally {
         holder.kill("SIGKILL");
       }
+    });
+  });
+
+  test("keeps settings.1.json: the liveness probe's EPERM means pid 1 is alive", () => {
+    withDir((dir) => {
+      const init = settingsFile(dir, 1);
+      writeFileSync(init, "{}\n", "utf8");
+      sweepStaleLaunchSettings(dir);
+      // For a non-root prober process.kill(1, 0) throws EPERM, which counts
+      // as alive; under root pid 1 genuinely exists. Either way: kept.
+      expect(existsSync(init)).toBe(true);
     });
   });
 
@@ -85,6 +100,8 @@ describe("sweepStaleLaunchSettings", () => {
         "settings.abc.json",
         "settings.0.json",
         "settings..json",
+        "settings.0.json.tmp-abc123",
+        "settings.5.json.tmp-",
       ]) {
         writeFileSync(join(dir, name), "{}\n", "utf8");
       }
@@ -94,32 +111,11 @@ describe("sweepStaleLaunchSettings", () => {
         "settings.abc.json",
         "settings.0.json",
         "settings..json",
+        "settings.0.json.tmp-abc123",
+        "settings.5.json.tmp-",
       ]) {
         expect(existsSync(join(dir, name))).toBe(true);
       }
     });
-  });
-});
-
-describe("removeLaunchSettings", () => {
-  test("removes the file at the path", () => {
-    withDir((dir) => {
-      const path = join(dir, "settings.4242.json");
-      writeFileSync(path, "{}\n", "utf8");
-      removeLaunchSettings(path);
-      expect(existsSync(path)).toBe(false);
-    });
-  });
-
-  test("a missing file is fine, not an error", () => {
-    withDir((dir) => {
-      expect(() => removeLaunchSettings(join(dir, "settings.4242.json"))).not.toThrow();
-    });
-  });
-
-  test("a path inside a missing dir is fine too", () => {
-    expect(() =>
-      removeLaunchSettings(join(tmpdir(), "claudes-no-such-dir-xyz", "settings.1.json")),
-    ).not.toThrow();
   });
 });

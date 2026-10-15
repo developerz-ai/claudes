@@ -153,7 +153,7 @@ describe("health", () => {
     }
   });
 
-  test("flags tlsVerify for the certificate-verification errnos, and only those", async () => {
+  test("carries tlsVerifyCode for the certificate-verification errnos, and only those", async () => {
     for (const code of [
       "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
       "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
@@ -171,12 +171,12 @@ describe("health", () => {
         throw new Error("expected health to throw");
       } catch (err) {
         const routerError = err as RouterError;
-        expect(routerError.tlsVerify).toBe(true);
+        expect(routerError.tlsVerifyCode).toBe(code);
         expect(routerError.timedOut).toBe(false);
         expect(routerError.message).toBe(`could not reach ${BASE}/healthz (${code})`);
       }
     }
-    // A connection failure is not a certificate failure: no flag, no CA hint.
+    // A connection failure is not a certificate failure: no code, no TLS note.
     const refused = new TypeError("fetch failed", {
       cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
     });
@@ -185,7 +185,7 @@ describe("health", () => {
       await health(BASE, fetchImpl);
       throw new Error("expected health to throw");
     } catch (err) {
-      expect((err as RouterError).tlsVerify).toBe(false);
+      expect((err as RouterError).tlsVerifyCode).toBeUndefined();
     }
   });
 

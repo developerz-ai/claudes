@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { MISSING_CONFIG_MESSAGE } from "../config/load";
 import { configDir, configFile, settingsFile } from "../config/paths";
 import type { Config } from "../config/schema";
@@ -29,9 +30,9 @@ const SPAWN_TEST_TIMEOUT_MS = 30_000;
 /**
  * A real executable on PATH. It records its argv, the sorted names of its env,
  * how many times the router key appears anywhere in argv or env values, how
- * many SIGINTs it received, and — because the launcher removes the generated
- * settings file once this process exits — what that file looked like while it
- * ran (existence, mode, contents). It exits with the code from
+ * many SIGINTs it received, and what its --settings file looked like while it
+ * ran (existence, mode, contents) — the file outlives both this process and
+ * the launcher, until a later launch sweeps it. It exits with the code from
  * FAKE_CLAUDE_EXIT, waits to die by signal when FAKE_CLAUDE_WAIT is set, or,
  * when FAKE_CLAUDE_TRAP_SIGINT is set, traps SIGINT like the real claude under
  * Ctrl-C: ~300ms of shutdown work, then exit 7. The record is written to a
@@ -100,8 +101,13 @@ if (trapping) {
 // the default disposition instead of the trapped shutdown path.
 dump();
 if (!trapping) {
-  if (process.env.FAKE_CLAUDE_WAIT === "1") setInterval(() => {}, 500);
-  else process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? "0"));
+  if (process.env.FAKE_CLAUDE_WAIT === "1") {
+    setInterval(() => {}, 500);
+    // A hard stop, unref'd so it never keeps a healthy process alive: if the
+    // launcher dies without delivering the signal this process waits for, it
+    // must not linger on the test machine forever.
+    setTimeout(() => process.exit(99), 60_000).unref();
+  } else process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? "0"));
 }
 `;
 
@@ -310,18 +316,48 @@ describe("run e2e: the happy path", () => {
   );
 
   test(
-    "the per-launch settings file exists while claude runs and is removed after it exits",
+    "the settings file exists while claude runs, outlives the launcher, and is swept by a later launch",
     async () => {
-      const pending = drive(["-p", "hi"], { wait: true });
+      // Launch 1 runs in a REAL launcher process, so its pid can die while
+      // its settings file lives — the lifetime the sweep is keyed on. The
+      // script drives the same run() this file imports, with only the fetch
+      // seam stubbed (the router is synthetic).
+      const launcherScript = join(home, "launcher.mjs");
+      const runModule = pathToFileURL(join(import.meta.dir, "run.ts")).href;
+      writeFileSync(
+        launcherScript,
+        [
+          `import { run, realRunDeps } from ${JSON.stringify(runModule)};`,
+          'const healthy = async () => new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });',
+          "process.exit(await run(process.argv.slice(2), { ...realRunDeps(), fetch: healthy }));",
+        ].join("\n"),
+        "utf8",
+      );
+      const launcher = spawn(process.execPath, [launcherScript, "-p", "hi"], {
+        env: parentEnv({ FAKE_CLAUDE_WAIT: "1" }),
+        stdio: "ignore",
+      });
+      children.push(launcher);
       const record = await readRecord();
-      const path = settingsFile(dir, process.pid);
+      const stranded = settingsFile(dir, launcher.pid as number);
       // While the child runs, its --settings file is on disk under 0600…
       expect(record.settings.exists).toBe(true);
-      expect(statSync(path).mode & 0o777).toBe(0o600);
-      children[children.length - 1]?.kill("SIGTERM");
-      expect(await pending).toBe(143);
-      // …and once it has exited, the launcher has removed it.
-      expect(existsSync(path)).toBe(false);
+      expect(statSync(stranded).mode & 0o777).toBe(0o600);
+      // …SIGTERM reaches the launcher, which forwards it and answers 143…
+      const exited = new Promise<number>((resolve) => {
+        launcher.on("exit", (code, signal) => resolve(signal === null ? (code ?? 127) : 128));
+      });
+      launcher.kill("SIGTERM");
+      expect(await exited).toBe(143);
+      // …but the launcher does NOT remove the file on its way out: Claude
+      // Code hands the --settings path to processes it starts later.
+      expect(existsSync(stranded)).toBe(true);
+      // A second launch — after the first launcher's pid is dead — sweeps it.
+      expect(await drive(["-p", "hi"])).toBe(7);
+      expect(existsSync(stranded)).toBe(false);
+      // The second launch's own file outlives it too: its pid (this test
+      // process's) is alive, so its own sweep never touches it.
+      expect(existsSync(settingsFile(dir, process.pid))).toBe(true);
     },
     SPAWN_TEST_TIMEOUT_MS,
   );

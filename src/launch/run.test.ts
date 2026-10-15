@@ -237,12 +237,11 @@ describe("run: verbose-fetch gate", () => {
 });
 
 describe("run: settings file", () => {
-  test("written 0600 inside the 0700 config dir, unlinked once the child exits", async () => {
+  test("written 0600 inside the 0700 config dir, left in place once the child exits", async () => {
     let observed: { path: string; mode: number; dirMode: number; text: string } | undefined;
     const code = await h.drive(["-p", "hi"], {
       spawnScript: (child) => {
-        // The file exists exactly while the child runs: read it before the
-        // exit that triggers the launcher's cleanup.
+        // The file exists while the child runs: read it before the exit.
         const path = launchSettings();
         observed = {
           path,
@@ -264,34 +263,47 @@ describe("run: settings file", () => {
     expect(payload.env.ANTHROPIC_AUTH_TOKEN).toBe("");
     expect(payload.env.CLAUDE_CODE_USE_BEDROCK).toBe("");
     assertNoKeyFragment(seen.text, KEY);
-    // After the child exits the per-launch file is gone.
-    expect(statSync(seen.path, { throwIfNoEntry: false })).toBeUndefined();
+    // After the child exits the file stays: Claude Code hands the --settings
+    // path to processes it starts later, which read it fresh from disk.
+    expect(existsSync(seen.path)).toBe(true);
   });
 
-  test("the settings path is removed even when claude is missing from PATH", async () => {
+  test("the settings file stays behind when claude is missing from PATH", async () => {
     const code = await h.drive(["-p", "hi"], { env: { HOME: h.home, PATH: "/nonexistent" } });
     expect(code).toBe(127);
     expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n`);
-    expect(statSync(launchSettings(), { throwIfNoEntry: false })).toBeUndefined();
+    // No child ever ran, but the write already happened: the file waits for a
+    // later launch's sweep, like any launch whose pid has since died.
+    expect(existsSync(launchSettings())).toBe(true);
   });
 
-  test("the settings path is removed when the spawn itself fails", async () => {
+  test("the settings file stays behind when the spawn itself fails", async () => {
     const code = await h.drive(["-p", "hi"], {
       spawnScript: (child) => child.emit("error", new Error("ENOENT")),
     });
     expect(code).toBe(127);
-    expect(statSync(launchSettings(), { throwIfNoEntry: false })).toBeUndefined();
+    expect(existsSync(launchSettings())).toBe(true);
   });
 
-  test("before writing, dead launches' files and a legacy settings.json are swept", async () => {
+  test("dead launches' files, their temp siblings, and a legacy settings.json are swept", async () => {
     writeFileSync(join(h.dir, "settings.999999999.json"), "{}\n", "utf8");
+    writeFileSync(join(h.dir, "settings.999999999.json.tmp-m3z1gx"), "{}\n", "utf8");
     writeFileSync(join(h.dir, "settings.json"), "{}\n", "utf8");
     const code = await h.drive(["-p", "hi"], {
       spawnScript: (child) => child.emit("exit", 0, null),
     });
     expect(code).toBe(0);
     expect(existsSync(join(h.dir, "settings.999999999.json"))).toBe(false);
+    expect(existsSync(join(h.dir, "settings.999999999.json.tmp-m3z1gx"))).toBe(false);
     expect(existsSync(join(h.dir, "settings.json"))).toBe(false);
+  });
+
+  test("the sweep runs before the router pre-flight: it cleans even when the router is down", async () => {
+    const stale = join(h.dir, "settings.999999999.json");
+    writeFileSync(stale, "{}\n", "utf8");
+    const code = await h.drive(["-p", "hi"], { fetch: deadFetch });
+    expect(code).toBe(69);
+    expect(existsSync(stale)).toBe(false);
   });
 
   test("an unreachable router leaves no settings file behind", async () => {

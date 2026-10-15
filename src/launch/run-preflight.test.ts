@@ -6,6 +6,8 @@ import {
   PROXY_NOTE_MESSAGE,
   preflightTimeoutMs,
   ROUTER_UNREACHABLE_MESSAGE,
+  TLS_EXPIRED_NOTE_MESSAGE,
+  TLS_HOSTNAME_NOTE_MESSAGE,
   TLS_VERIFY_NOTE_MESSAGE,
 } from "./preflight";
 import { cleanup, deadFetch, type Harness, harness, KEY } from "./run-harness";
@@ -151,23 +153,26 @@ describe("run: router pre-flight", () => {
   });
 
   // The errno codes Node puts on err.cause.code when certificate verification
-  // itself failed; each one earns the CA hint next to the unreachable message.
-  for (const code of [
-    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-    "SELF_SIGNED_CERT_IN_CHAIN",
-    "DEPTH_ZERO_SELF_SIGNED_CERT",
-    "CERT_HAS_EXPIRED",
-    "ERR_TLS_CERT_ALTNAME_INVALID",
-  ] as const) {
-    test(`a TLS verification failure (${code}): exit 69, message kept, CA note appended`, async () => {
+  // itself failed; each one earns its own note next to the unreachable
+  // message — the four trust errnos the CA hint, an expired certificate and a
+  // host-name mismatch their own words (no CA store fixes either).
+  const TLS_NOTES: Readonly<Record<string, string>> = {
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: TLS_VERIFY_NOTE_MESSAGE,
+    UNABLE_TO_GET_ISSUER_CERT_LOCALLY: TLS_VERIFY_NOTE_MESSAGE,
+    SELF_SIGNED_CERT_IN_CHAIN: TLS_VERIFY_NOTE_MESSAGE,
+    DEPTH_ZERO_SELF_SIGNED_CERT: TLS_VERIFY_NOTE_MESSAGE,
+    CERT_HAS_EXPIRED: TLS_EXPIRED_NOTE_MESSAGE,
+    ERR_TLS_CERT_ALTNAME_INVALID: TLS_HOSTNAME_NOTE_MESSAGE,
+  };
+  for (const [code, note] of Object.entries(TLS_NOTES)) {
+    test(`a TLS verification failure (${code}): exit 69, message kept, its note appended`, async () => {
       const tlsFetch: FetchLike = async () => {
         throw new TypeError("fetch failed", {
           cause: Object.assign(new Error(`raw tls text for ${code} — quotes 'stuff'`), { code }),
         });
       };
       expect(await h.drive(["-p", "hi"], { fetch: tlsFetch })).toBe(69);
-      expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${TLS_VERIFY_NOTE_MESSAGE}\n`);
+      expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${note}\n`);
       // The note is keyed off the errno only: no raw TLS text is quoted.
       expect(errText()).not.toContain("raw tls text");
       assertNoKeyFragment(errText(), KEY);
