@@ -7,7 +7,7 @@ import {
   ROUTER_KEY_PREFIX,
 } from "../config/schema";
 import { writeConfig } from "../config/store";
-import { errorName, type FetchLike, health, models, RouterError, scrub } from "../router/client";
+import { errorName, type FetchLike, health, isRouterError, models, scrub } from "../router/client";
 import { resolveTiers } from "../tiers";
 import { parseLoginArgs } from "./login-args";
 import {
@@ -122,7 +122,7 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
   try {
     modelIds = await models(url, key, deps.fetch);
   } catch (err) {
-    if (err instanceof RouterError && (err.status === 401 || err.status === 403)) {
+    if (isRouterError(err) && (err.status === 401 || err.status === 403)) {
       return failure(1, `claudes login: router rejected the key (HTTP ${err.status})`);
     }
     return failure(1, `claudes login: could not list models: ${describeRouterError(err, url)}`);
@@ -176,7 +176,7 @@ function resolveBaseUrl(value: string): string | { reason: string } {
 }
 
 function describeRouterError(err: unknown, url: string): string {
-  return err instanceof RouterError ? err.message : `could not reach ${url} (${errorName(err)})`;
+  return isRouterError(err) ? err.message : `could not reach ${url} (${errorName(err)})`;
 }
 
 function errorMessage(err: unknown): string {
