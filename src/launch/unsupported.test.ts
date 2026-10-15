@@ -16,7 +16,8 @@ describe("unsupported features table", () => {
       expect(row.feature.length).toBeGreaterThan(0);
       expect(row.reason.length).toBeGreaterThan(0);
       expect(row.removedBy.kind === "deny" || row.removedBy.kind === "env").toBe(true);
-      expect(row.issue).toBe("developerz-ai/multi-ai-router#210");
+      // An owner/repo#N reference, so a row may move to another repository.
+      expect(row.issue).toMatch(/^[\w.-]+\/[\w.-]+#\d+$/);
     }
   });
 });

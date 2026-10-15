@@ -5,7 +5,12 @@ import { configFile, settingsFile } from "../config/paths";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
-import { PROXY_NOTE_MESSAGE, preflightTimeoutMs, ROUTER_UNREACHABLE_MESSAGE } from "./run";
+import {
+  PREFLIGHT_TIMEOUT_NOTE_MESSAGE,
+  PROXY_NOTE_MESSAGE,
+  preflightTimeoutMs,
+  ROUTER_UNREACHABLE_MESSAGE,
+} from "./run";
 import {
   cleanup,
   deadFetch,
@@ -117,7 +122,7 @@ describe("run: router pre-flight", () => {
     expect(h.spawnCalls.length).toBe(1);
   });
 
-  test("a probe timing out twice: exit 69 after exactly two attempts", async () => {
+  test("a probe timing out twice: exit 69 after exactly two attempts, with the timeout note", async () => {
     let calls = 0;
     const alwaysTimeout: FetchLike = async () => {
       calls += 1;
@@ -128,6 +133,7 @@ describe("run: router pre-flight", () => {
     expect(await h.drive(["-p", "hi"], { fetch: alwaysTimeout })).toBe(69);
     expect(calls).toBe(2);
     expect(h.spawnCalls).toEqual([]);
+    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
   });
 
   test("a hard connection error is not retried: one attempt, exit 69", async () => {
@@ -186,11 +192,18 @@ describe("preflightTimeoutMs", () => {
   test("defaults to 1500 and honours CLAUDES_PREFLIGHT_TIMEOUT_MS", () => {
     expect(preflightTimeoutMs({})).toBe(1500);
     expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "2500" })).toBe(2500);
-    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "0.5" })).toBe(0.5);
+    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "1" })).toBe(1);
+    expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: "2147483647" })).toBe(2_147_483_647);
+  });
+
+  test("ignores non-integer values in favor of the default", () => {
+    for (const invalid of ["0.5", "2500.5", "1e10", "0", "-1", "abc"]) {
+      expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: invalid })).toBe(1500);
+    }
   });
 
   test("ignores invalid values in favor of the default", () => {
-    for (const invalid of ["", "  ", "abc", "0", "-5", "1e999"]) {
+    for (const invalid of ["", "  ", "1e999"]) {
       expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: invalid })).toBe(1500);
     }
   });

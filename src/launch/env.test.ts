@@ -37,7 +37,7 @@ const STRIPPED = [
   "ANTHROPIC_VERTEX_BASE_URL",
   // The claude.ai OAuth namespace, whatever the name.
   "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_TOKEN_EXPIRY",
+  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
   // Provider switches: the explicit list, not the whole CLAUDE_CODE_USE_ prefix.
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
@@ -45,6 +45,7 @@ const STRIPPED = [
   "CLAUDE_CODE_USE_MANTLE",
   "CLAUDE_CODE_USE_ANTHROPIC_AWS",
   "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+  "CLAUDE_CODE_USE_GATEWAY",
   // The one Bedrock-only credential outside the namespaces above.
   "AWS_BEARER_TOKEN_BEDROCK",
 ] as const;

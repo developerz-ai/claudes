@@ -94,23 +94,28 @@ describe("run: signal forwarding", () => {
     expect(fired.size).toBe(0);
   });
 
-  test("stdin a TTY: SIGINT is not wired — the terminal already hits the process group", async () => {
+  test("stdin a TTY: SIGINT is wired as a no-op that never reaches the child", async () => {
     const { wiring, fired } = fakeWiring();
+    let sigintWiredWhileRunning = false;
     const code = await h.drive(["-p", "hi"], {
       wiring,
       stdinIsTTY: true,
       spawnScript: (child) => {
         queueMicrotask(() => {
+          // While the child runs, a SIGINT listener IS registered — without one
+          // Node's default disposition would kill claudes mid-shutdown.
+          sigintWiredWhileRunning = fired.has("SIGINT");
           for (const signal of FORWARDED_SIGNALS) {
-            fired.get(signal)?.(); // SIGINT was never wired: only two kills land
+            fired.get(signal)?.(); // the no-op fires: only two kills land
           }
           child.emit("exit", null, "SIGHUP");
         });
       },
     });
+    expect(sigintWiredWhileRunning).toBe(true);
     expect(code).toBe(129);
     expect(h.children[0]?.kills).toEqual(["SIGTERM", "SIGHUP"]);
-    expect(fired.has("SIGINT")).toBe(false);
+    expect(fired.size).toBe(0); // the no-op unwires with the rest
   });
 
   test("stdin not a TTY (the default): SIGINT is forwarded", async () => {
