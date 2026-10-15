@@ -79,7 +79,10 @@ fi
 # `claudes key` through the shipped file: stdout must be the config's key bytes
 # exactly — no trailing newline — and the exit code must be 0. stdout here is a
 # file, not a TTY, so the helper path is the one being exercised. The scratch
-# HOME/XDG_CONFIG_HOME hold a hand-written 0700 dir and 0600 config.
+# HOME/XDG_CONFIG_HOME hold a hand-written 0700 dir and 0600 config. The check
+# runs against a synthetic config, so any ambient ANTHROPIC_BASE_URL (a
+# developer shell behind a gateway) is cleared: `claudes key` rightly refuses a
+# base URL that differs from the configured router.
 CHECK_KEY="mar_live_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
 mkdir -p "$scratch/keyhome" "$scratch/keyxdg/claudes"
 chmod 700 "$scratch/keyxdg/claudes"
@@ -97,7 +100,8 @@ cat >"$scratch/keyxdg/claudes/config.json" <<JSON
 JSON
 chmod 600 "$scratch/keyxdg/claudes/config.json"
 rc=0
-HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ./dist/claudes.js key >"$scratch/key.out" || rc=$?
+HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ANTHROPIC_BASE_URL= \
+  ./dist/claudes.js key >"$scratch/key.out" || rc=$?
 if [ "$rc" -ne 0 ]; then
   echo "bin/check: ./dist/claudes.js key exited $rc, expected 0" >&2
   exit 1
@@ -109,18 +113,38 @@ if [ "$actual_key_od" != "$expected_key_od" ]; then
   exit 1
 fi
 
-# And the same command under a TTY must refuse: exit 64, no key bytes. `script`
-# is present everywhere CI runs; if it is missing here, the pty tests in the
-# suite cover the same path instead.
-if command -v script >/dev/null 2>&1; then
+# And the same command under a TTY must refuse: exit 64, no key bytes. The
+# util-linux and BSD `script` variants take different arguments, so pick by
+# platform; where neither form applies (or `script` is missing), skip with a
+# printed reason — the pty tests in the suite cover the same path.
+pty_form=""
+case "$(uname -s)" in
+  Linux) pty_form="util-linux" ;;
+  Darwin) pty_form="bsd" ;;
+  *) pty_form="" ;;
+esac
+if [ -z "$pty_form" ]; then
+  echo "bin/check: no known script(1) form on $(uname -s); skipping the pty refusal check"
+elif ! command -v script >/dev/null 2>&1; then
+  echo "bin/check: script(1) not found; skipping the pty refusal check"
+else
   rc=0
-  HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" script -qec "./dist/claudes.js key" /dev/null >"$scratch/key-tty.out" || rc=$?
-  if [ "$rc" -ne 64 ]; then
-    echo "bin/check: ./dist/claudes.js key under a pty exited $rc, expected 64" >&2
-    exit 1
+  if [ "$pty_form" = "util-linux" ]; then
+    HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ANTHROPIC_BASE_URL= \
+      script -qec "./dist/claudes.js key" /dev/null >"$scratch/key-tty.out" || rc=$?
+  else
+    HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" ANTHROPIC_BASE_URL= \
+      script -q /dev/null ./dist/claudes.js key >"$scratch/key-tty.out" || rc=$?
   fi
   if grep -q "mar_live_" "$scratch/key-tty.out"; then
     echo "bin/check: ./dist/claudes.js key under a pty leaked key bytes" >&2
+    exit 1
+  fi
+  if [ "$rc" -ne 64 ]; then
+    # The captured output aids diagnosis; the leak check above has already
+    # established it contains no key bytes.
+    echo "bin/check: ./dist/claudes.js key under a pty exited $rc, expected 64" >&2
+    cat "$scratch/key-tty.out" >&2
     exit 1
   fi
 fi

@@ -65,6 +65,7 @@ describe("buildSettings", () => {
         CLAUDE_CODE_USE_MANTLE: "",
         CLAUDE_CODE_USE_ANTHROPIC_AWS: "",
         CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: "",
+        CLAUDE_CODE_USE_GATEWAY: "",
       },
     });
   });
@@ -87,5 +88,25 @@ describe("buildSettings", () => {
   test("carries no key material", () => {
     const settings = buildSettings(config({ subagentModel: "claude-haiku-4-5" }), SELF);
     assertNoKeyFragment(JSON.stringify(settings), config().key);
+  });
+
+  // A loopback router must never go through a proxy configured in the user's
+  // or project's settings: the proxy would receive the plaintext key.
+  test("a loopback baseUrl pins NO_PROXY and no_proxy to the loopback hosts", () => {
+    for (const baseUrl of [
+      "http://127.0.0.1:8787",
+      "http://localhost:3000",
+      "http://[::1]:9090",
+    ] as const) {
+      const env = buildSettings(config({ baseUrl }), SELF).env;
+      expect(env.NO_PROXY).toBe("127.0.0.1,localhost,::1");
+      expect(env.no_proxy).toBe("127.0.0.1,localhost,::1");
+    }
+  });
+
+  test("a non-loopback baseUrl adds no proxy vars", () => {
+    const env = buildSettings(config(), SELF).env;
+    expect("NO_PROXY" in env).toBe(false);
+    expect("no_proxy" in env).toBe(false);
   });
 });

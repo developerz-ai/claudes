@@ -65,6 +65,14 @@ export function buildArgv(userArgs: readonly string[], settingsPath: string): Ar
   for (let i = 0; i < userArgs.length; i++) {
     const arg = userArgs[i] ?? "";
     if (arg === "--") {
+      // Everything after the terminator is positional prompt text, so the
+      // rewriting stops — but a pasted key still leaks through shell history
+      // and process listings, so the key-shape refusal still runs there.
+      for (const rest of userArgs.slice(i + 1)) {
+        if (looksLikeRouterKey(rest)) {
+          return refusedKey();
+        }
+      }
       argv.push(...userArgs.slice(i));
       return { ok: true, argv: ["--settings", settingsPath, ...argv] };
     }

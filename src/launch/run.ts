@@ -15,16 +15,21 @@ export const ROUTER_UNREACHABLE_MESSAGE =
   "router unreachable: run `claudes doctor`, or use plain `claude` with your own login (usage won't be attributed)";
 export const PROXY_NOTE_MESSAGE =
   "note: claudes' router check does not use HTTP(S)_PROXY; set NODE_USE_ENV_PROXY=1 if your network needs a proxy";
+export const PREFLIGHT_TIMEOUT_NOTE_MESSAGE =
+  "note: the router check timed out; set CLAUDES_PREFLIGHT_TIMEOUT_MS (milliseconds) to wait longer";
 export const CLAUDE_NOT_FOUND_MESSAGE = "claude not found on PATH";
 
 const DEFAULT_PREFLIGHT_TIMEOUT_MS = 1_500;
+/** The largest accepted CLAUDES_PREFLIGHT_TIMEOUT_MS: a signed 32-bit integer. */
+const MAX_PREFLIGHT_TIMEOUT_MS = 2_147_483_647;
 export const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 export type ForwardedSignal = (typeof FORWARDED_SIGNALS)[number];
 
 /**
  * The router pre-flight timeout in milliseconds, from
- * `CLAUDES_PREFLIGHT_TIMEOUT_MS`; invalid values (empty, non-numeric, zero,
- * negative) are ignored in favor of the default.
+ * `CLAUDES_PREFLIGHT_TIMEOUT_MS`; anything but an integer in 1..2147483647
+ * (unset, empty, non-numeric, fractional, zero, negative, out of range) is
+ * ignored in favor of the default.
  */
 export function preflightTimeoutMs(env: Env): number {
   const raw = env.CLAUDES_PREFLIGHT_TIMEOUT_MS;
@@ -32,7 +37,9 @@ export function preflightTimeoutMs(env: Env): number {
     return DEFAULT_PREFLIGHT_TIMEOUT_MS;
   }
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PREFLIGHT_TIMEOUT_MS;
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_PREFLIGHT_TIMEOUT_MS
+    ? parsed
+    : DEFAULT_PREFLIGHT_TIMEOUT_MS;
 }
 
 /** How run() subscribes to the signals it forwards; a seam for tests. */
@@ -83,8 +90,9 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
 
   try {
     await preflight(loaded.config.baseUrl, deps.fetch, preflightTimeoutMs(deps.env));
-  } catch {
-    return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, proxyNoteNeeded(deps.env));
+  } catch (err) {
+    const timedOut = err instanceof RouterError && err.timedOut;
+    return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, proxyNoteNeeded(deps.env), timedOut);
   }
 
   const settings = buildSettings(loaded.config, deps);
@@ -170,8 +178,12 @@ async function execClaude(
   const child = spawnFn(claudePath, argv, { stdio: "inherit", env: buildChildEnv(deps.env) });
   const wiring = deps.signals ?? processSignals;
   // With stdin on a TTY, the terminal delivers SIGINT to the whole process
-  // group — child included — so forwarding it would kill the child twice.
-  // Without a TTY (pipes, nohup) nothing else delivers it, so claudes must.
+  // group — child included — so forwarding it would kill the child twice, and
+  // claudes must still survive it: without any listener Node's default
+  // disposition would kill claudes while the child is shutting down, losing
+  // its exit code and orphaning it. So a TTY registers a NO-OP SIGINT handler
+  // (the child got the terminal's copy already) and forwards the rest.
+  // Without a TTY (pipes, nohup) nothing else delivers SIGINT, so claudes must.
   const forwarded = deps.stdinIsTTY
     ? FORWARDED_SIGNALS.filter((signal) => signal !== "SIGINT")
     : FORWARDED_SIGNALS;
@@ -181,7 +193,9 @@ async function execClaude(
       child.kill(signal);
     },
   }));
-  for (const { signal, handler } of forwards) {
+  const held = deps.stdinIsTTY ? [{ signal: "SIGINT" as const, handler: () => {} }] : [];
+  const wired = [...forwards, ...held];
+  for (const { signal, handler } of wired) {
     wiring.on(signal, handler);
   }
   try {
@@ -195,7 +209,7 @@ async function execClaude(
       });
     });
   } finally {
-    for (const { signal, handler } of forwards) {
+    for (const { signal, handler } of wired) {
       wiring.off(signal, handler);
     }
   }
@@ -233,10 +247,19 @@ export function resolveExecutable(name: string, env: Env): string | undefined {
   return undefined;
 }
 
-function fail(deps: RunDeps, code: number, message: string, note = false): number {
+function fail(
+  deps: RunDeps,
+  code: number,
+  message: string,
+  note = false,
+  timeoutNote = false,
+): number {
   let text = message.endsWith("\n") ? message : `${message}\n`;
   if (note) {
     text += `${PROXY_NOTE_MESSAGE}\n`;
+  }
+  if (timeoutNote) {
+    text += `${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`;
   }
   deps.stderr(text);
   return code;

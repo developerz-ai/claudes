@@ -34,10 +34,13 @@ const SPAWN_TEST_TIMEOUT_MS = 30_000;
 
 /**
  * A real executable on PATH. It records its argv, the sorted names of its env,
- * and how many times the router key appears anywhere in argv or env values —
- * then exits with the code from FAKE_CLAUDE_EXIT, or waits to die by signal
- * when FAKE_CLAUDE_WAIT is set. The record is written to a temp file and
- * renamed into place, so a reader never sees a half-written JSON file.
+ * how many times the router key appears anywhere in argv or env values, and how
+ * many SIGINTs it received — then exits with the code from FAKE_CLAUDE_EXIT,
+ * waits to die by signal when FAKE_CLAUDE_WAIT is set, or, when
+ * FAKE_CLAUDE_TRAP_SIGINT is set, traps SIGINT like the real claude under
+ * Ctrl-C: ~300ms of shutdown work, then exit 7. The record is written to a
+ * temp file and renamed into place, so a reader never sees a half-written
+ * JSON file.
  */
 const FAKE_CLAUDE = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -53,21 +56,53 @@ for (const value of Object.values(process.env)) {
     at = value.indexOf(KEY, at + KEY.length);
   }
 }
-const record = { argv: process.argv, envNames: Object.keys(process.env).sort(), keyCount };
-const out = process.env.FAKE_CLAUDE_OUT;
-if (out !== undefined) {
+let sigints = 0;
+let exitedAt = 0;
+function dump() {
+  const out = process.env.FAKE_CLAUDE_OUT;
+  if (out === undefined) return;
+  const record = {
+    argv: process.argv,
+    envNames: Object.keys(process.env).sort(),
+    keyCount,
+    sigints,
+    exitedAt,
+  };
   const tmp = \`\${out}.tmp\`;
   fs.writeFileSync(tmp, JSON.stringify(record));
   fs.renameSync(tmp, out);
 }
-if (process.env.FAKE_CLAUDE_WAIT === "1") setInterval(() => {}, 500);
-else process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? "0"));
+function exit7() {
+  exitedAt = Date.now();
+  dump();
+  process.exit(7);
+}
+const trapping = process.env.FAKE_CLAUDE_TRAP_SIGINT === "1";
+if (trapping) {
+  let timer = null;
+  process.on("SIGINT", () => {
+    sigints += 1;
+    dump();
+    if (timer === null) timer = setTimeout(exit7, 300);
+  });
+  setTimeout(exit7, 10000);
+}
+// Written only once the trap above is armed, so a reader that sees the record
+// can safely signal the child: before the arming, a SIGINT would kill it with
+// the default disposition instead of the trapped shutdown path.
+dump();
+if (!trapping) {
+  if (process.env.FAKE_CLAUDE_WAIT === "1") setInterval(() => {}, 500);
+  else process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? "0"));
+}
 `;
 
 interface ClaudeRecord {
   argv: string[];
   envNames: string[];
   keyCount: number;
+  sigints: number;
+  exitedAt: number;
 }
 
 let home: string;
@@ -123,6 +158,7 @@ async function drive(
     env?: Record<string, string | undefined>;
     fetch?: FetchLike;
     wait?: boolean;
+    trapSigint?: boolean;
     wiring?: SignalWiring;
     stdinIsTTY?: boolean;
   } = {},
@@ -130,6 +166,9 @@ async function drive(
   const env = parentEnv(options.env ?? {});
   if (options.wait === true) {
     env.FAKE_CLAUDE_WAIT = "1";
+  }
+  if (options.trapSigint === true) {
+    env.FAKE_CLAUDE_TRAP_SIGINT = "1";
   }
   // Wrap the spawn so every child is remembered for afterEach cleanup.
   const spawnFn: SpawnFn = (command, argv, spawnOptions) => {
@@ -354,15 +393,52 @@ describe("run e2e: signal deaths and forwarding", () => {
   }
 
   test(
-    "stdin a TTY: SIGINT is not wired, SIGTERM still is",
+    "stdin a TTY: SIGINT is wired as a no-op, SIGTERM still forwards",
     async () => {
       const { wiring, fired } = captureWiring();
       const pending = drive(["-p", "hi"], { wait: true, wiring, stdinIsTTY: true });
       await readRecord();
-      expect(fired.has("SIGINT")).toBe(false);
+      expect(fired.has("SIGINT")).toBe(true);
       expect(fired.has("SIGTERM")).toBe(true);
       fired.get("SIGTERM")?.();
       expect(await pending).toBe(143);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "stdin a TTY: Ctrl-C waits for the child shutdown and keeps its exit code",
+    async () => {
+      const { wiring, fired } = captureWiring();
+      let settled = false;
+      let settledAt = 0;
+      const pending = drive(["-p", "hi"], { wiring, stdinIsTTY: true, trapSigint: true });
+      void pending.then(() => {
+        settled = true;
+        settledAt = Date.now();
+      });
+      await readRecord(); // the child is up, so the handlers are wired
+      expect(fired.has("SIGINT")).toBe(true); // the no-op listener is registered
+      const child = children[children.length - 1];
+      expect(child?.pid).toBeDefined();
+      // A real Ctrl-C hits the whole process group: the child gets its own
+      // copy from the terminal…
+      process.kill(child?.pid as number, "SIGINT");
+      // …separated by a beat (the runtime coalesces same-signal hits in one
+      // tick, which would hide a wrongly forwarded second copy)…
+      await Bun.sleep(50);
+      // …while claudes' own handler must be the no-op, never a forward.
+      fired.get("SIGINT")?.();
+      await Bun.sleep(20); // a beat: the handler itself resolves nothing
+      expect(settled).toBe(false); // the child still has ~200ms of shutdown
+      expect(await pending).toBe(7); // the child's exit code, not 130
+      const record = await readRecord();
+      expect(record.sigints).toBe(1); // exactly the terminal's copy: no forward
+      // The promise settled only at or after the child's own exit, never on
+      // the signal — the same clock stamps both sides.
+      expect(record.exitedAt).toBeGreaterThan(0);
+      expect(settledAt).toBeGreaterThanOrEqual(record.exitedAt);
+      expect(err.join("")).toBe("");
     },
     SPAWN_TEST_TIMEOUT_MS,
   );

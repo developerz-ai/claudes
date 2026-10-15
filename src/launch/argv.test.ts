@@ -95,6 +95,26 @@ describe("buildArgv", () => {
       ok: true,
       argv: ["--settings", SETTINGS, "--", "--key", "k"],
     });
+    expect(buildArgv(["--", "--model", "claude-opus"], SETTINGS)).toEqual({
+      ok: true,
+      argv: ["--settings", SETTINGS, "--", "--model", "claude-opus"],
+    });
+  });
+
+  test("after a -- terminator a key shape is still refused, without echoing it", () => {
+    for (const args of [
+      ["--", KEY],
+      ["-p", "--", KEY],
+    ]) {
+      const result = buildArgv(args, SETTINGS);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.exitCode).toBe(64);
+        expect(result.message).toContain("looks like a router key");
+        expect(result.message).not.toContain(KEY);
+        expect(result.message).not.toContain("FAKEKEY");
+      }
+    }
   });
 
   test("refuses a user --settings in both forms, without echoing the value", () => {

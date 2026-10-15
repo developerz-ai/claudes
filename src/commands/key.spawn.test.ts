@@ -36,8 +36,36 @@ function shQuote(word: string): string {
   return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
-/** `script` (util-linux) runs a command under a pseudo-tty; absent on some systems. */
+/** `script` runs a command under a pseudo-tty; absent on some systems. */
 const SCRIPT_AVAILABLE = spawnSync("sh", ["-c", "command -v script >/dev/null 2>&1"]).status === 0;
+
+/**
+ * How to run `claudes key` under a pseudo-tty on this platform: the util-linux
+ * and BSD `script` variants take different arguments. util-linux needs
+ * `-e` to propagate the child's exit code; BSD `script` returns the child's
+ * exit status by default. Where neither form applies, the reason to skip.
+ */
+function ptyPlan(): { argv: string[] } | { skip: string } {
+  if (process.platform === "linux") {
+    return {
+      argv: ["-qec", `${shQuote(process.execPath)} ${shQuote(MAIN)} key`, "/dev/null"],
+    };
+  }
+  if (process.platform === "darwin") {
+    return { argv: ["-q", "/dev/null", process.execPath, MAIN, "key"] };
+  }
+  return { skip: `no known \`script\` form for platform ${process.platform}` };
+}
+
+const PTY = ptyPlan();
+const PTY_SKIP_REASON = !SCRIPT_AVAILABLE
+  ? "`script` is not on PATH on this system"
+  : "skip" in PTY
+    ? PTY.skip
+    : undefined;
+if (PTY_SKIP_REASON !== undefined) {
+  console.log(`skipping the pty test: ${PTY_SKIP_REASON}`);
+}
 
 describe("claudes key through a real process (bun src/main.ts key)", () => {
   test(
@@ -86,23 +114,29 @@ describe("claudes key through a real process (bun src/main.ts key)", () => {
     SPAWN_TEST_TIMEOUT_MS,
   );
 
-  test.skipIf(!SCRIPT_AVAILABLE)(
-    "under a pseudo-tty (script -qec): exit 64, no key bytes",
+  test.skipIf(PTY_SKIP_REASON !== undefined)(
+    "under a pseudo-tty (script): exit 64, no key bytes",
     () => {
       const home = scratchHome();
       try {
-        const res = spawnSync(
-          "script",
-          ["-qec", `${shQuote(process.execPath)} ${shQuote(MAIN)} key`, "/dev/null"],
-          {
-            env: { PATH: process.env.PATH, HOME: home, TERM: "dumb" },
-            encoding: "buffer",
-            timeout: SPAWN_TEST_TIMEOUT_MS,
-          },
-        );
+        if (!("argv" in PTY)) {
+          throw new Error(`unreachable: the skipIf guard already skipped (${PTY.skip})`);
+        }
+        const res = spawnSync("script", PTY.argv, {
+          env: { PATH: process.env.PATH, HOME: home, TERM: "dumb" },
+          encoding: "buffer",
+          timeout: SPAWN_TEST_TIMEOUT_MS,
+        });
+        const out = res.stdout.toString("utf8");
+        if (res.status !== 64) {
+          // Print the captured output to aid diagnosis. The leak assertions
+          // below would fail the test first if it could contain the key, and
+          // this assert makes that certain before anything is printed.
+          assertNoKeyFragment(out, KEY);
+          console.error(`pty run exited ${res.status}; captured output:\n${out}`);
+        }
         expect(res.error).toBeUndefined();
         expect(res.status).toBe(64);
-        const out = res.stdout.toString("utf8");
         expect(out).toContain("claudes key is for apiKeyHelper only");
         expect(out).not.toContain(KEY);
         assertNoKeyFragment(out, KEY);

@@ -6,11 +6,12 @@ import { MISSING_CONFIG_MESSAGE } from "../config/load";
 import { configDir, configFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
-import { PROVIDER_SWITCHES } from "../launch/provider-switches";
+import { BENIGN_USE_TOGGLES, PROVIDER_SWITCHES } from "../launch/provider-switches";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { runKey } from "./key";
 
 const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
+const ROUTER = "https://router.example.test";
 
 let home: string;
 let err: string[];
@@ -29,7 +30,7 @@ afterEach(() => {
 function config(): Config {
   return {
     version: 1,
-    baseUrl: "https://router.example.test",
+    baseUrl: ROUTER,
     key: KEY,
     tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
   };
@@ -83,6 +84,65 @@ describe("runKey", () => {
     }
     expect(writes).toEqual([KEY, KEY, KEY, KEY, KEY]);
     expect(err).toEqual([]);
+  });
+
+  test("refuses the gateway switch", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    expect(drive(false, { CLAUDE_CODE_USE_GATEWAY: "1" })).toBe(64);
+    expect(err.join("")).toBe(
+      "claudes key: refusing: CLAUDE_CODE_USE_GATEWAY is set, so this session would not go to the router\n",
+    );
+    expect(writes).toEqual([]);
+  });
+
+  test("refuses an unknown CLAUDE_CODE_USE_ toggle, naming only the variable", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    expect(drive(false, { CLAUDE_CODE_USE_FUTURE_THING: "1" })).toBe(64);
+    expect(err.join("")).toBe(
+      "claudes key: refusing: CLAUDE_CODE_USE_FUTURE_THING is set, so this session would not go to the router\n",
+    );
+    expect(writes).toEqual([]);
+    assertNoKeyFragment(err.join(""), KEY);
+  });
+
+  test("allows the benign CLAUDE_CODE_USE_ toggles", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    for (const name of BENIGN_USE_TOGGLES) {
+      err = [];
+      writes = [];
+      expect(drive(false, { [name]: "1" })).toBe(0);
+      expect(writes).toEqual([KEY]);
+      expect(err).toEqual([]);
+    }
+  });
+
+  test("refuses when ANTHROPIC_BASE_URL points anywhere but the configured router", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    for (const value of [
+      "https://elsewhere.example.test",
+      "https://router.example.test:8443",
+      "not a url",
+    ]) {
+      err = [];
+      writes = [];
+      expect(drive(false, { ANTHROPIC_BASE_URL: value })).toBe(64);
+      expect(err.join("")).toBe(
+        "claudes key: refusing: ANTHROPIC_BASE_URL does not point at the configured router\n",
+      );
+      expect(writes).toEqual([]);
+      assertNoKeyFragment(err.join(""), KEY);
+    }
+  });
+
+  test("allows an ANTHROPIC_BASE_URL matching the router, trailing slash included", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    for (const value of [undefined, "", ROUTER, `${ROUTER}/`]) {
+      err = [];
+      writes = [];
+      expect(drive(false, { ANTHROPIC_BASE_URL: value })).toBe(0);
+      expect(writes).toEqual([KEY]);
+      expect(err).toEqual([]);
+    }
   });
 
   test("the refusal fires even with no config at all", () => {
