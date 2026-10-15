@@ -157,6 +157,19 @@ describe("runDoctor", () => {
     }
   });
 
+  test("a claude that exits non-zero from --version FAILs even with a version line", async () => {
+    const d = drive();
+    try {
+      const fake = fakeClaudeProc({ exitCode: 1 });
+      const { deps: theDeps, out } = deps(d, { runProc: fake.runProc });
+      const code = await runDoctor([], theDeps);
+      expect(code).toBe(1);
+      expect(out.join("")).toContain(`[FAIL] could not run ${CLAUDE} (exit 1)`);
+    } finally {
+      rmSync(d.home, { recursive: true, force: true });
+    }
+  });
+
   test("--live adds exactly one live request line; without it there is none", async () => {
     const d = drive();
     try {

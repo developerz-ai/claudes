@@ -1,14 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import type { FetchLike } from "../../router/client";
-import { sampleConfig, TIERS } from "../harness";
+import { KEY, sampleConfig, TIERS } from "../harness";
 import { checkRouter } from "./router";
 
 const IDS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-opus-4-1"];
 
+/** One request the stub answered: its URL and the Authorization header sent. */
+interface StubCall {
+  readonly url: string;
+  readonly authorization: string | undefined;
+}
+
 function stubFetch(
   options: { health?: () => Promise<Response>; models?: () => Promise<Response> } = {},
+  calls: StubCall[] = [],
 ): FetchLike {
-  return async (url) => {
+  return async (url, init) => {
+    calls.push({ url, authorization: init.headers.Authorization });
     if (url.endsWith("/healthz")) {
       return options.health
         ? await options.health()
@@ -23,13 +31,23 @@ function stubFetch(
 
 describe("checkRouter", () => {
   test("a healthy router passes health, key and tiers, and yields the model ids", async () => {
-    const { results, modelIds } = await checkRouter({ config: sampleConfig(), fetch: stubFetch() });
+    const calls: StubCall[] = [];
+    const { results, modelIds } = await checkRouter({
+      config: sampleConfig(),
+      fetch: stubFetch({}, calls),
+    });
     expect(modelIds).toEqual(IDS);
     expect(results.map((r) => r.status)).toEqual(["PASS", "PASS", "PASS"]);
     expect(results[0]?.title).toContain("https://router.example.test");
     expect(results[0]?.title).toContain("1.4.2");
     expect(results[1]?.title).toContain("4 models");
     expect(results[2]?.title).toContain("every pinned tier is served");
+    // The stub saw the right requests: /healthz, then /v1/models with the key.
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://router.example.test/healthz",
+      "https://router.example.test/v1/models",
+    ]);
+    expect(calls[1]?.authorization).toBe(`Bearer ${KEY}`);
   });
 
   test("an unreachable router FAILs once, with no model ids", async () => {
