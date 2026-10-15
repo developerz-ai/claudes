@@ -1,3 +1,4 @@
+import { realDoctorDeps, runDoctor } from "./commands/doctor";
 import { realKeyDeps, runKey } from "./commands/key";
 import { runLogin } from "./commands/login";
 import { dispatch } from "./dispatch";
@@ -16,6 +17,9 @@ async function main(argv: string[]): Promise<void> {
     }
     if (result.word === "key") {
       process.exit(runKey(realKeyDeps()));
+    }
+    if (result.word === "doctor") {
+      process.exit(await runDoctor(argv.slice(1), realDoctorDeps()));
     }
     console.error(`claudes ${result.word}: not implemented yet`);
     process.exit(64);
