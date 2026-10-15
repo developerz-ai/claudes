@@ -52,8 +52,10 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
 # "doctor" with no config behind an empty HOME: a real run now, so it must
-# exit non-zero, print a FAIL line, and print no key bytes — in the same env -i
-# isolation as the key checks below (no ambient env leaks in).
+# exit non-zero and print a FAIL line — in the same env -i isolation as the key
+# checks below (no ambient env leaks in). The key-leak guard lives further
+# down, against the keyed config: here no key exists in the process, so a
+# mar_live_ grep could never match.
 rc=0
 env -i HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" PATH="$PATH" \
   ./dist/claudes.js doctor >"$scratch/doctor.out" 2>/dev/null || rc=$?
@@ -65,10 +67,6 @@ grep -q "FAIL" "$scratch/doctor.out" || {
   echo "bin/check: ./dist/claudes.js doctor printed no FAIL line" >&2
   exit 1
 }
-if grep -q "mar_live_[A-Za-z0-9_-]\{8\}" "$scratch/doctor.out"; then
-  echo "bin/check: ./dist/claudes.js doctor leaked key bytes" >&2
-  exit 1
-fi
 
 rc=0
 HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" ./dist/claudes.js some-prompt 2>"$scratch/err" || rc=$?
@@ -121,6 +119,24 @@ cat >"$scratch/keyxdg/claudes/config.json" <<JSON
 }
 JSON
 chmod 600 "$scratch/keyxdg/claudes/config.json"
+
+# doctor against the KEYED config: a real key is loaded into the process now,
+# so this is the leak guard that can actually fail. The synthetic router is
+# unreachable, so the run must exit non-zero — and no key bytes may appear on
+# either stream. (The config check prints the "mar_live_…" display prefix, so
+# the grep requires eight real key characters after the prefix.)
+rc=0
+env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" \
+  ./dist/claudes.js doctor >"$scratch/doctor-keyed.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "bin/check: ./dist/claudes.js doctor exited 0 against an unreachable router, expected non-zero" >&2
+  exit 1
+fi
+if grep -q "mar_live_[A-Za-z0-9_-]\{8\}" "$scratch/doctor-keyed.out"; then
+  echo "bin/check: ./dist/claudes.js doctor leaked key bytes" >&2
+  exit 1
+fi
+
 rc=0
 env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" \
   ./dist/claudes.js key >"$scratch/key.out" || rc=$?

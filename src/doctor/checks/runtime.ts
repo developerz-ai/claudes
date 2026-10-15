@@ -73,6 +73,7 @@ async function claudeResults(deps: RuntimeDeps): Promise<CheckResult[]> {
     ];
   }
   const proc = await deps.runProc(deps.claudePath, ["--version"], {
+    env: deps.env,
     timeoutMs: deps.versionTimeoutMs ?? VERSION_TIMEOUT_MS,
   });
   if (proc.timedOut) {
@@ -84,7 +85,9 @@ async function claudeResults(deps: RuntimeDeps): Promise<CheckResult[]> {
       },
     ];
   }
-  if (!proc.ok) {
+  // proc.ok only means "ran and exited" — a claude that exits non-zero yet
+  // prints a version line is still a failed probe.
+  if (!proc.ok || proc.code !== 0) {
     return [
       {
         status: "FAIL",

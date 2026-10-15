@@ -281,9 +281,10 @@ export function realRunDeps(): RunDeps {
  * The absolute realpath of the running claudes script, so apiKeyHelper reaches
  * this exact install however it was symlinked onto PATH. A realpath failure
  * (exotic filesystem) falls back to the unresolved path rather than refusing
- * to launch.
+ * to launch. Exported for `claudes doctor`, whose wiring probe must resolve
+ * the very same script a real launch would.
  */
-function runningScriptPath(): string {
+export function runningScriptPath(): string {
   const entry = resolve(process.argv[1] ?? "claudes");
   try {
     return realpathSync(entry);

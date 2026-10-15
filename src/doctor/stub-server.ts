@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  * probe" never materialises the key in doctor's own output.
  */
 
-export type CredentialHeader = "x-api-key" | "authorization";
+export type CredentialHeader = "x-api-key" | "authorization" | "proxy-authorization" | "cookie";
 
 export interface RecordedCredential {
   readonly header: CredentialHeader;
@@ -160,7 +160,14 @@ function pathnameOf(req: IncomingMessage): string {
   }
 }
 
-/** The credential hashes of one request: x-api-key, and a Bearer authorization. */
+/**
+ * The credential hashes of one request: x-api-key and a Bearer authorization
+ * are the shapes the configured key may legitimately travel in; anything else
+ * credential-shaped — a proxy-authorization, a cookie, or an authorization
+ * with any other scheme — is a FOREIGN credential by definition and recorded
+ * the same way (hash only), so check 5's "no other credential arrived" proof
+ * cannot go green while one slips past.
+ */
 function credentialsOf(req: IncomingMessage): RecordedCredential[] {
   const credentials: RecordedCredential[] = [];
   const xKey = req.headers["x-api-key"];
@@ -168,11 +175,23 @@ function credentialsOf(req: IncomingMessage): RecordedCredential[] {
     credentials.push({ header: "x-api-key", hash: credentialHash(xKey) });
   }
   const auth = req.headers.authorization;
-  if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-    const bearer = auth.slice("Bearer ".length);
-    if (bearer !== "") {
-      credentials.push({ header: "authorization", hash: credentialHash(bearer) });
+  if (typeof auth === "string" && auth !== "") {
+    if (auth.startsWith("Bearer ")) {
+      const bearer = auth.slice("Bearer ".length);
+      if (bearer !== "") {
+        credentials.push({ header: "authorization", hash: credentialHash(bearer) });
+      }
+    } else {
+      credentials.push({ header: "authorization", hash: credentialHash(auth) });
     }
+  }
+  const proxyAuth = req.headers["proxy-authorization"];
+  if (typeof proxyAuth === "string" && proxyAuth !== "") {
+    credentials.push({ header: "proxy-authorization", hash: credentialHash(proxyAuth) });
+  }
+  const cookie = req.headers.cookie;
+  if (typeof cookie === "string" && cookie !== "") {
+    credentials.push({ header: "cookie", hash: credentialHash(cookie) });
   }
   return credentials;
 }

@@ -1,10 +1,9 @@
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
 import type { LoadResult } from "../config/load";
 import type { Env } from "../config/paths";
 import { checkConfig } from "../doctor/checks/config";
-import { checkConflicts, type ReadText } from "../doctor/checks/conflicts";
+import { checkConflicts, defaultReadFile, type ReadText } from "../doctor/checks/conflicts";
 import { checkEffectiveModel } from "../doctor/checks/effective-model";
 import { checkLive, type PostFetch } from "../doctor/checks/live";
 import { checkRouter } from "../doctor/checks/router";
@@ -13,7 +12,7 @@ import { checkWiring } from "../doctor/checks/wiring";
 import { anyFailed, type CheckResult } from "../doctor/results";
 import { type RunProc, realRunProc } from "../doctor/run-proc";
 import type { RouterStub } from "../doctor/stub-server";
-import { resolveExecutable } from "../launch/run";
+import { resolveExecutable, runningScriptPath } from "../launch/run";
 import type { FetchLike } from "../router/client";
 import { scrub } from "../router/errors";
 import { VERSION } from "../version";
@@ -155,7 +154,7 @@ export function realDoctorDeps(): DoctorDeps {
     fetch: (input, init) => fetch(input, init),
     postFetch: (url, init) => fetch(url, init),
     runProc: realRunProc,
-    readFile: realReadFile,
+    readFile: defaultReadFile,
     mkdtemp: () => mkdtempSync(`${tmpdir()}/claudes-doctor-`),
     rm: (path) => {
       rmSync(path, { recursive: true, force: true });
@@ -163,27 +162,4 @@ export function realDoctorDeps(): DoctorDeps {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
   };
-}
-
-const realReadFile: ReadText = (path) => {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return undefined;
-  }
-};
-
-/**
- * The absolute realpath of the running claudes script — the same resolution
- * the launcher uses for its own apiKeyHelper, duplicated here because run.ts
- * keeps its copy private. A realpath failure falls back to the unresolved
- * path rather than refusing to run.
- */
-function runningScriptPath(): string {
-  const entry = resolve(process.argv[1] ?? "claudes");
-  try {
-    return realpathSync(entry);
-  } catch {
-    return entry;
-  }
 }

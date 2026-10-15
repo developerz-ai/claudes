@@ -47,13 +47,6 @@ export const realRunProc: RunProc = (command, argv, options) =>
       }
     });
     let timedOut = false;
-    const timer = setTimeout(() => {
-      // The deadline passed: nothing the child says now matters, and a SIGKILL
-      // cannot be trapped or delayed into a clean partial write. The exit this
-      // causes is what resolves the promise, flagged as a timeout.
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, options.timeoutMs);
     let settled = false;
     const settle = (code: number | null, signal: string | null) => {
       if (settled) {
@@ -63,7 +56,19 @@ export const realRunProc: RunProc = (command, argv, options) =>
       clearTimeout(timer);
       resolve({ ok: !timedOut && code !== null, code, signal, timedOut, stdout });
     };
-    child.on("exit", (code, signal) => {
+    const timer = setTimeout(() => {
+      // The deadline passed: nothing the child says now matters, and a SIGKILL
+      // cannot be trapped or delayed into a clean partial write. Settle right
+      // here rather than waiting on the exit the kill causes — a grandchild
+      // holding the stdout pipe would otherwise keep 'close' (and this
+      // promise) pending past the deadline.
+      timedOut = true;
+      child.kill("SIGKILL");
+      settle(null, null);
+    }, options.timeoutMs);
+    // 'close', not 'exit': Node fires 'exit' while the child's stdio streams
+    // can still hold unread bytes, so a version line could be read truncated.
+    child.on("close", (code, signal) => {
       settle(code, signal);
     });
     child.on("error", () => {
