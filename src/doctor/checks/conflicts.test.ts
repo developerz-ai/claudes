@@ -155,6 +155,43 @@ describe("checkConflicts: managed settings", () => {
     expect(results[2]?.status).toBe("INFO");
     expect(results[2]?.title).toContain("sunos");
   });
+
+  test("an unreadable managed-settings file FAILs rather than passing as absent", () => {
+    const eacces = new Error("permission denied") as Error & { code: string };
+    eacces.code = "EACCES";
+    const results = checkConflicts(
+      deps({
+        readFile: (path) => {
+          if (path === "/etc/claude-code/managed-settings.json") {
+            throw eacces;
+          }
+          return undefined;
+        },
+      }),
+    );
+    const fail = results[2];
+    expect(fail?.status).toBe("FAIL");
+    expect(fail?.title).toContain("/etc/claude-code/managed-settings.json");
+    expect(fail?.title).toContain("could not be read");
+    expect(fail?.fix).toContain("/etc/claude-code/managed-settings.json");
+  });
+
+  test("an unreadable user settings file WARNs instead of being skipped", () => {
+    const results = checkConflicts(
+      deps({
+        env: { HOME },
+        readFile: (path) => {
+          if (path === `${HOME}/.claude/settings.json`) {
+            throw new Error("EACCES");
+          }
+          return undefined;
+        },
+      }),
+    );
+    expect(results[1]?.status).toBe("WARN");
+    expect(results[1]?.title).toContain("user settings");
+    expect(results[1]?.title).toContain("could not be read");
+  });
 });
 
 describe("checkConflicts: saved claude.ai login", () => {
@@ -170,5 +207,23 @@ describe("checkConflicts: saved claude.ai login", () => {
   test("no saved login passes", () => {
     const results = checkConflicts(deps({ env: { HOME } }));
     expect(results[3]?.status).toBe("PASS");
+  });
+
+  test("on darwin a clean file check is INFO: a Keychain-held login is not visible", () => {
+    const results = checkConflicts(deps({ env: { HOME }, platform: "darwin" }));
+    expect(results[3]?.status).toBe("INFO");
+    expect(results[3]?.title).toContain("Keychain");
+  });
+
+  test("on darwin a saved login file is still reported", () => {
+    const results = checkConflicts(
+      deps({
+        env: { HOME },
+        platform: "darwin",
+        readFile: files({ [`${HOME}/.claude/.credentials.json`]: "{}" }),
+      }),
+    );
+    expect(results[3]?.status).toBe("INFO");
+    expect(results[3]?.title).toContain("a start-up auth warning is expected");
   });
 });

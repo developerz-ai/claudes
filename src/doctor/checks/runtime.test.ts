@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { versionProc } from "../harness";
+import type { ProcOptions, RunProc } from "../run-proc";
 import { checkRuntime, type RuntimeDeps } from "./runtime";
 
 const ENV = { PATH: "/usr/bin" } as const;
@@ -66,6 +67,25 @@ describe("checkRuntime", () => {
   test("a version line without a triple fails", async () => {
     const results = await checkRuntime(deps({ runProc: versionProc("Claude Code") }));
     expect(results[1]?.status).toBe("FAIL");
+  });
+
+  test("a --version that exits non-zero yet prints a version line fails", async () => {
+    const results = await checkRuntime(
+      deps({ runProc: versionProc("2.1.300 (Claude Code)\n", 1) }),
+    );
+    expect(results[1]?.status).toBe("FAIL");
+    expect(results[1]?.title).toContain("exit 1");
+    expect(results[1]?.fix).toContain("reinstall Claude Code");
+  });
+
+  test("the version probe runs under the injected env", async () => {
+    let seen: ProcOptions["env"];
+    const runProc: RunProc = async (_command, _argv, options) => {
+      seen = options.env;
+      return { ok: true, code: 0, signal: null, timedOut: false, stdout: "2.1.300\n" };
+    };
+    await checkRuntime(deps({ runProc }));
+    expect(seen).toBe(ENV);
   });
 
   test("a --version probe that times out or cannot run fails", async () => {

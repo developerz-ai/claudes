@@ -27,7 +27,10 @@ export function sampleConfig(overrides: Partial<Config> = {}): Config {
 /** A runProc whose stdout answers `claude --version`. */
 export function versionProc(stdout: string, exitCode = 0): RunProc {
   return async () => ({
-    ok: exitCode === 0,
+    // ProcResult.ok means "ran and exited" at ANY exit code (run-proc.ts), so
+    // a non-zero exitCode still stands in for a successful spawn; judging the
+    // code is the check's job.
+    ok: true,
     code: exitCode,
     signal: null,
     timedOut: false,
@@ -91,10 +94,12 @@ export function fakeClaudeProc(options: FakeClaudeOptions = {}): {
     const settingsAt = argv.indexOf("--settings");
     const settingsPath = settingsAt === -1 ? undefined : argv[settingsAt + 1];
     if (settingsPath === undefined) {
-      // The runtime check's `claude --version` probe, not a wiring run.
+      // The runtime check's `claude --version` probe, not a wiring run —
+      // options.exitCode applies here too, so a test can pin a failing probe.
+      const code = options.exitCode ?? 0;
       return {
-        ok: true,
-        code: 0,
+        ok: true, // ran and exited; the exit code is the check's to judge
+        code,
         signal: null,
         timedOut: false,
         stdout: options.version ?? "2.1.300 (Claude Code)\n",
@@ -127,7 +132,7 @@ export function fakeClaudeProc(options: FakeClaudeOptions = {}): {
       ran = true;
     }
     const code = options.exitCode ?? (ran ? 0 : 1);
-    return { ok: code === 0, code, signal: null, timedOut: false, stdout: "" };
+    return { ok: true, code, signal: null, timedOut: false, stdout: "" };
   };
   return { runProc, calls };
 }

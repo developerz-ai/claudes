@@ -3,7 +3,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertNoKeyFragment } from "../../test-support/redact";
-import { FOREIGN_CREDENTIAL, fakeClaudeProc, KEY, sampleConfig, TIERS } from "../harness";
+import {
+  FOREIGN_CREDENTIAL,
+  fakeClaudeProc,
+  fileFacts,
+  KEY,
+  sampleConfig,
+  TIERS,
+} from "../harness";
 import { checkWiring, WIRING_ARGS } from "./wiring";
 
 const CLAUDE = "/usr/local/bin/claude";
@@ -115,6 +122,46 @@ describe("checkWiring", () => {
     } finally {
       cleanup(s);
     }
+  });
+
+  test("writes the throwaway probe config — the real key's only disk copy — with mode 0600", async () => {
+    const s = scratch();
+    const capturing = fakeClaudeProc();
+    let configFacts: { exists: boolean; mode: number } | undefined;
+    const runProc = async (...args: Parameters<typeof capturing.runProc>) => {
+      const env = args[2].env ?? {};
+      // Capture during the run: the check removes its temp tree before
+      // returning, so nothing is left to stat afterwards.
+      configFacts = fileFacts(join(env.XDG_CONFIG_HOME as string, "claudes", "config.json"));
+      return await capturing.runProc(...args);
+    };
+    try {
+      const result = await checkWiring(deps(s, runProc), sampleConfig());
+      expect(result.status).toBe("PASS");
+      const facts = configFacts as { exists: boolean; mode: number };
+      expect(facts.exists).toBe(true);
+      expect(facts.mode).toBe(0o600);
+    } finally {
+      cleanup(s);
+    }
+  });
+
+  test("FAILs with the errno token when the temp dir cannot be created", async () => {
+    const s = scratch();
+    const eacces = new Error("mkdir: permission denied") as Error & { code: string };
+    eacces.code = "EACCES";
+    const fake = fakeClaudeProc();
+    const result = await checkWiring(
+      {
+        ...deps(s, fake.runProc),
+        mkdtemp: () => {
+          throw eacces;
+        },
+      },
+      sampleConfig(),
+    );
+    expect(result.status).toBe("FAIL");
+    expect(result.title).toContain("could not run (EACCES)");
   });
 
   test("PROVEN NEGATIVE: FAILs when the settings file is removed before claude reads it", async () => {

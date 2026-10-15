@@ -3,7 +3,11 @@ import type { Env } from "../../config/paths";
 import { isStripped } from "../../launch/env";
 import type { CheckResult } from "../results";
 
-/** Reads a file's text, or undefined when it is missing or unreadable. */
+/**
+ * Reads a file's text: undefined when the path is genuinely absent, and THROWS
+ * when it exists but cannot be read — an unreadable managed-settings file must
+ * never pass for an absent one, since it outranks --settings.
+ */
 export type ReadText = (path: string) => string | undefined;
 
 export interface ConflictsDeps {
@@ -30,11 +34,20 @@ function managedSettingsPath(platform: string): string | undefined {
   return undefined;
 }
 
-const defaultReadFile: ReadText = (path) => {
+/**
+ * The real ReadText: ENOENT/ENOTDIR read as absent; any other failure throws,
+ * so an existing-but-unreadable file (mode 000, a directory at the path) can
+ * never pass for a missing one.
+ */
+export const defaultReadFile: ReadText = (path) => {
   try {
     return readFileSync(path, "utf8");
-  } catch {
-    return undefined;
+  } catch (err) {
+    const code = (err as { readonly code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw err;
   }
 };
 
@@ -53,7 +66,7 @@ export function checkConflicts(deps: ConflictsDeps): CheckResult[] {
     shellEnvResult(deps.env),
     settingsResult(home, deps.cwd, readFile),
     managedResult(deps.platform, readFile),
-    claudeLoginResult(home, readFile),
+    claudeLoginResult(home, deps.platform, readFile),
   ];
 }
 
@@ -101,7 +114,14 @@ function settingsResult(home: string | undefined, cwd: string, readFile: ReadTex
       warnings.push("user settings: no home directory, cannot look");
       continue;
     }
-    const text = readFile(source.path);
+    let text: string | undefined;
+    try {
+      text = readFile(source.path);
+    } catch {
+      // Exists but unreadable: report it rather than skip it silently.
+      warnings.push(`${source.label} (${source.path}) could not be read`);
+      continue;
+    }
     if (text === undefined) {
       continue; // absent is the normal case
     }
@@ -165,7 +185,19 @@ function managedResult(platform: string, readFile: ReadText): CheckResult {
       title: `the managed-settings location is not known on ${platform}; skipped`,
     };
   }
-  const text = readFile(path);
+  let text: string | undefined;
+  try {
+    text = readFile(path);
+  } catch {
+    // The path exists but cannot be read (mode 000, a directory there): it
+    // still outranks --settings, so hiding it behind "no managed settings"
+    // would defeat this check.
+    return {
+      status: "FAIL",
+      title: `managed settings ${path} outrank --settings and exist but could not be read`,
+      fix: `make ${path} readable or remove it; it may override the settings claudes generates`,
+    };
+  }
   if (text === undefined) {
     return { status: "PASS", title: `no managed settings at ${path}` };
   }
@@ -187,13 +219,34 @@ function managedResult(platform: string, readFile: ReadText): CheckResult {
   return { status: "PASS", title: `managed settings ${path} set no conflicting keys` };
 }
 
-function claudeLoginResult(home: string | undefined, readFile: ReadText): CheckResult {
+function claudeLoginResult(
+  home: string | undefined,
+  platform: string,
+  readFile: ReadText,
+): CheckResult {
   const path = under(home, CREDENTIALS_RELATIVE);
-  if (path !== undefined && readFile(path) !== undefined) {
+  let present = false;
+  if (path !== undefined) {
+    try {
+      present = readFile(path) !== undefined;
+    } catch {
+      present = true; // unreadable is not absent: report it
+    }
+  }
+  if (present) {
     return {
       status: "INFO",
       title:
         "a saved claude.ai login exists — a start-up auth warning is expected; the router key wins",
+    };
+  }
+  if (platform === "darwin") {
+    // On macOS a claude.ai login lives in the Keychain, which doctor cannot
+    // inspect — so a clean file check proves nothing there.
+    return {
+      status: "INFO",
+      title:
+        "no saved claude.ai login in ~/.claude/.credentials.json — on macOS a login can also live in the Keychain, which doctor cannot inspect",
     };
   }
   return { status: "PASS", title: "no saved claude.ai login" };

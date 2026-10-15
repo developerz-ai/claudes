@@ -59,7 +59,11 @@ const defaultRm = (path: string): void => {
  * but with the base URL pointed at a local recording stub, and passes only if
  * that stub saw a POST /v1/messages whose credential hash is the configured
  * key's, with a configured tier as the model, and no other credential
- * anywhere. The key itself never appears: the stub records SHA-256 hex only.
+ * anywhere. The key itself never appears in the generated settings file, in
+ * the probe's output, or in the stub's records (SHA-256 hex only). It DOES
+ * land in the throwaway probe config at `<tempRoot>/xdg/claudes/config.json`
+ * (mode 0600) — `claudes key` can only serve it from a config — so the
+ * finally-block's rm is what keeps it off disk permanently.
  *
  * Two deliberate probe substitutions, both because the stub is not the real
  * router: the settings' base URL (the point of the probe) and the child's
@@ -124,7 +128,9 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
       fix: "re-run `claudes doctor`",
     };
   } finally {
-    // Best-effort cleanup: a leftover temp dir is only disk noise.
+    // Best-effort cleanup: a leftover temp dir still holds the probe config
+    // with the real key inside (mode 0600), so this rm matters; the OS's tmp
+    // sweeping is the backstop when it fails.
     try {
       await stub?.close();
     } catch {
