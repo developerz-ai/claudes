@@ -57,6 +57,8 @@ refuses (exit 64).
 - It never writes `~/.claude`. Everything `claudes` writes lives under
   `~/.config/claudes` (`$XDG_CONFIG_HOME/claudes`): the config, plus one
   small settings file per launch (see "Network, proxies and certificates").
+  Claude Code itself does write there, as it does under plain `claude`: its
+  `/model` command saves the chosen model to `~/.claude/settings.json`.
 - The router key stays out of the session environment. Claude Code fetches it
   on demand through the `apiKeyHelper` setting, which runs `claudes key`; the
   generated settings pin `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` to
@@ -92,10 +94,12 @@ linked here as the source. The table may shrink as the router catches up.
 | --- | --- | --- |
 | WebSearch | Disabled (`permissions.deny` in the generated settings): the subscription path cannot serve server tools | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
 | Advisor tool | Disabled (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the generated settings): it rides every main turn and the subscription path rejects it | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
-| PDFs / document blocks | Not delivered to the model on the subscription path | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
-| `count_tokens` | Returns 503 on a subscription-only pool; `claude -p` does not call it | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
+| PDFs / document blocks | Confirmed live: the model sees only a "PDF file read" line, never the content | [#298](https://github.com/developerz-ai/multi-ai-router/issues/298) |
+| `count_tokens` | Refused on a subscription-only pool. Interactive `/context` does call it: one `/context` made 50 calls, all refused, and `/context` then shows a wrong message-token figure. `claude -p` runs did not call it | [#299](https://github.com/developerz-ai/multi-ai-router/issues/299) |
 | `anthropic-beta` header | Not forwarded on the subscription path | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
 | Request duration | A single request is capped at 10 minutes, queue time included | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
+| Working directory | The router-side working directory is visible to the model, so it may try to read paths that do not exist on your machine | [#296](https://github.com/developerz-ai/multi-ai-router/issues/296) |
+| Tool-call relay | Informational: the model may mention that its tool calls "look declined" before the results arrive. That is how the router relays tool calls; the tools still run on your machine | None |
 
 ## Router is down
 
