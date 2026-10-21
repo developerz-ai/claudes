@@ -13,7 +13,7 @@ Bun + TypeScript
 
 | Task | Command |
 |------|---------|
-| setup | `bin/setup` — bun install --frozen-lockfile |
+| setup | `bin/setup` — `bun install --frozen-lockfile`, skipped when `node_modules` already holds every pin `bun.lock` declares |
 | dev | `bin/dev` — true (on developerz.ai runs, start it with code_bash_background when you need a running stack) |
 | check | `bin/check` — bin/check |
 | stop | `bin/stop` — true (on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself) |
@@ -81,4 +81,5 @@ Dependency direction: `main.ts → dispatch.ts | version.ts | commands/`; `comma
 - `bun scripts/build.ts` is the ONLY build entry; the produced `dist/claudes.js` carries `#!/usr/bin/env node` and is `chmod 755`.
 - `bin/check` is the gate: biome, tsc on both configs, `bun test`, build, then shebang/version/exit-code smoke. A PR is proven when it exits 0.
 - CI pins bun `1.4.3`; the committed `bun.lock` is v2 — bun < 1.4 cannot read it. Node is `>=22` per `engines.node`.
+- A refused frozen install is that bun being older than the lockfile format, not a bad dependency: `bin/setup` prints `bun --version`, `bun.lock`'s `lockfileVersion` and the CI-pinned bun version before it exits non-zero. Never edit `bun.lock` to make an install succeed.
 - npm release is OIDC trusted publishing only (`release.yml`) — no `NPM_TOKEN` anywhere. The release tag MUST equal `v` + `package.json` version, and the commit MUST be an ancestor of `origin/main`; pre-releases are refused.

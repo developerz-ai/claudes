@@ -2,4 +2,93 @@
 # one-command setup — established by dz-runner setup mode. One command; adjust as the repo grows.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-bun install --frozen-lockfile
+
+# bun.lock is the single source of truth for every installed version — the same
+# rule bin/check follows for package.json. Read the pins out of it; never
+# hardcode one here. bun.lock is JSON with trailing commas, and node is already a
+# hard dependency of this repo (bin/check, engines.node >= 22), so parse it
+# there. Output: one `version|<lockfileVersion>` line, then one
+# `dep|<name>|<pin>|<installed>` line per devDependency pin.
+read_bun_lock() {
+  node --input-type=module -e '
+import { readFileSync } from "node:fs";
+const raw = readFileSync("bun.lock", "utf8");
+const lock = JSON.parse(raw.replace(/,(\s*[}\]])/g, "$1"));
+const deps = lock.workspaces?.[""]?.devDependencies ?? {};
+process.stdout.write(`version|${lock.lockfileVersion ?? "unknown"}\n`);
+for (const [name, pin] of Object.entries(deps)) {
+  let installed = "";
+  try {
+    installed = JSON.parse(readFileSync(`node_modules/${name}/package.json`, "utf8")).version ?? "";
+  } catch {
+    installed = "";
+  }
+  process.stdout.write(`dep|${name}|${pin}|${installed}\n`);
+}
+'
+}
+
+# A tree that already holds every pin needs no install, and on a bun too old for
+# this lockfile the install is a hard refusal that would not repair that tree
+# anyway (bun cannot read a lockfileVersion it predates). Skipping is decided
+# ONLY on a parsed lockfile: an unreadable one declares no pins, which falls
+# through to the install below — the right answer for an unknown tree.
+lockfile_version=""
+pinned=0
+satisfied=1
+reason=""
+lock="$(read_bun_lock 2>/dev/null)" || lock=""
+while IFS='|' read -r tag name pin installed; do
+  if [ "$tag" = "version" ]; then
+    lockfile_version="$name"
+    continue
+  fi
+  if [ "$tag" != "dep" ]; then
+    continue
+  fi
+  pinned=$((pinned + 1))
+  if [ -z "$installed" ]; then
+    satisfied=0
+    reason="node_modules/$name is not installed at its pinned $pin"
+  elif [ "$pin" != "$installed" ]; then
+    satisfied=0
+    reason="node_modules/$name is $installed, not the pinned $pin"
+  fi
+done <<<"$lock"
+if [ "$pinned" -eq 0 ]; then
+  satisfied=0
+  reason="bun.lock declares no devDependency pin to check"
+fi
+# bin/check resolves these two by path, so a tree without them is not usable
+# however well its versions match.
+for tool in biome tsc; do
+  if [ "$satisfied" -eq 1 ] && [ ! -x "node_modules/.bin/$tool" ]; then
+    satisfied=0
+    reason="node_modules/.bin/$tool is missing"
+  fi
+done
+
+if [ "$satisfied" -eq 1 ]; then
+  echo "bin/setup: already satisfied — node_modules holds all $pinned devDependency pins bun.lock declares (lockfileVersion $lockfile_version); skipped 'bun install --frozen-lockfile'"
+  exit 0
+fi
+
+echo "bin/setup: $reason; running bun install --frozen-lockfile"
+rc=0
+bun install --frozen-lockfile || rc=$?
+if [ "$rc" -eq 0 ]; then
+  exit 0
+fi
+
+# A refused frozen install is nearly always a bun older than the lockfile format,
+# not a dependency the repo got wrong — and "lockfile had changes" does not say
+# which. Name the three numbers that decide it, none of them hardcoded here.
+bun_version="$(bun --version 2>&1)" || bun_version="unrunnable (bun --version failed)"
+ci_bun="$(sed -n 's/^[[:space:]]*bun-version:[[:space:]]*//p' .github/workflows/ci.yml | head -n 1)"
+{
+  echo "bin/setup: bun install --frozen-lockfile failed (exit $rc)"
+  echo "  bun --version:              $bun_version"
+  echo "  bun.lock lockfileVersion:   ${lockfile_version:-unknown}"
+  echo "  bun version CI installs:    ${ci_bun:-unknown} (.github/workflows/ci.yml); this lockfile format needs that bun or newer"
+} >&2
+exit "$rc"

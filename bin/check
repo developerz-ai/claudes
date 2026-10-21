@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+# Every path below is relative to the repo root — resolve that from the script's
+# own location, as bin/setup, bin/dev and bin/stop already do, so the gate behaves
+# the same from a subdirectory.
+cd "$(dirname "$0")/.."
+
 # Never use bunx here: it silently auto-installs the unrelated npm packages
 # "biome" and "tsc". Require the pinned devDependencies instead.
 for tool in biome tsc; do

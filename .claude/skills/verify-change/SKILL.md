@@ -15,7 +15,7 @@ passes it locally passes everywhere.
 
 | Step | Command | What it is |
 |------|---------|------------|
-| install | `bin/setup` | bun install --frozen-lockfile |
+| install | `bin/setup` | `bun install --frozen-lockfile`, skipped when `node_modules` already holds every pin `bun.lock` declares |
 | run | `bin/dev` | true — on developerz.ai runs, start it with code_bash_background when you need a running stack |
 | prove | `bin/check` | bin/check |
 | stop | `bin/stop` | true — on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself |
@@ -24,6 +24,11 @@ passes it locally passes everywhere.
 
 - Run every command from the repo root — the scripts `cd` there themselves.
 - `bin/check` red is not a pull request. Fix the cause, never silence the gate.
+- `bin/setup` printing "already satisfied" is a real answer, not a skipped step: it
+  compared every `bun.lock` devDependency pin against what is installed. Only a
+  refused `bun install --frozen-lockfile` needs you — it prints `bun --version`,
+  the `lockfileVersion` and the bun version CI installs. A bun older than the
+  committed lockfile format is the usual cause; never edit `bun.lock` to get past it.
 
 ## Exit codes `bin/check` must use
 
