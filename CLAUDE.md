@@ -22,7 +22,7 @@ Bun + TypeScript
 
 | Path | Purpose |
 |---|---|
-| `src/main.ts` | CLI entry; `dispatch` routes argv, `--version`/`-v` prints `VERSION` and exits 0, `login`/`key`/`doctor` hand off to `runLogin`/`runKey`/`runDoctor`, everything else to `run` (the passthrough to `claude`); the `not implemented yet` exit-64 fallback is dead while every `RESERVED_WORDS` member is handled |
+| `src/main.ts` | CLI entry; `dispatch` routes argv, `--version`/`-v` prints `VERSION` and exits 0, `login`/`key`/`doctor` hand off to `runLogin`/`runKey`/`runDoctor`, everything else to `run` (the passthrough to `claude`); the reserved branch ends in a compile-time exhaustiveness guard over `RESERVED_WORDS` (a `never`-typed binding of `result.word`), so `tsc` fails if a reserved word is added without a handler |
 | `src/dispatch.ts` | Pure argv → `{kind: "version" | "reserved" | "passthrough"}`; `RESERVED_WORDS = ["login", "doctor", "key"]` |
 | `src/version.ts` | `VERSION` constant; drift-guarded against `package.json` by `src/version.test.ts` |
 | `src/tiers.ts` | Claude model-id regex parse, default tier table, "newest per family" resolver |
