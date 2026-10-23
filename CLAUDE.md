@@ -43,6 +43,7 @@ Bun + TypeScript
 | `src/router/client.ts` | `/healthz` and `/v1/models`, 10 s timeout, body cap 1 MiB, `redirect: "error"`; `scrub`, `RouterError`, `isRouterError` and `errorName` are defined in `router/errors.ts` and re-exported here |
 | `src/router/errors.ts` | Defines `scrub`, `RouterError` (`status`/`timedOut`/`tlsVerifyCode`), the trap-safe `isRouterError` and the class-shaped-only `errorName`; no `err.message` is ever interpolated, because Node's `fetch` quotes header values verbatim |
 | `src/test-support/redact.ts` | `assertNoKeyFragment` (no 8-char window of the key body may appear in any output) |
+| `src/test-support/readme-table.ts` | Parses README.md's "Refusals and exit codes" table into rows (`exit`, `when`, `message`); code-span messages are unquoted and `(message above)` resolves to the router-down block |
 | `scripts/build.ts` | `Bun.build({ target: "node" })` of `src/main.ts` → `dist/claudes.js`, prepends `#!/usr/bin/env node`, `chmod 755` |
 | `bin/check` | Gate: biome (`--error-on-warnings`) → tsc on both tsconfigs → `bun test` → build → shebang/version/exit-code smoke (no `bunx` — it silently auto-installs unrelated npm packages) |
 | `.github/workflows/ci.yml` | CI matrix: ubuntu-latest + macos-latest × Node 22 + 24; `bun install --frozen-lockfile` then `bin/check` |
@@ -70,7 +71,7 @@ Dependency direction (the live import graph under `src/`, checkable with `grep '
 ## CLI behaviour
 
 - Dispatch is pure (`src/dispatch.ts`): `--version` / `-v` → `version`; first arg in `RESERVED_WORDS = ["login","doctor","key"]` → `reserved`; else → `passthrough` to `claude`.
-- Exit codes follow sysexits.h: `64` usage error, `78` config error, `1` runtime error, `69` router unanswered by the pre-launch check, `127` `claude` missing from PATH (or unsignalable), `130` Ctrl-C at prompt, `0` success. `src/readme-refusals.test.ts` pins the README's own refusal rows (64, 69, 78, 127, 1 — the README table has no 130 or 0 row) against the message each row quotes; 130 and 0 are asserted elsewhere.
+- Exit codes follow sysexits.h: `64` usage error, `78` config error, `1` runtime error, `69` router unanswered by the pre-launch check, `127` `claude` missing from PATH (or unsignalable), `130` Ctrl-C at prompt, `0` success. `src/readme-refusals.test.ts` parses the README's own refusals table (`src/test-support/readme-table.ts`) and asserts every documented row against live behaviour, so a doc-side edit fails the guard too; 130 and 0 are asserted elsewhere.
 - Every rejection of an argv value names the FLAG (e.g. `--url`, `#5`), never the VALUE — echoing input is the redaction leak path.
 - `bin/check` uses `node_modules/.bin/biome` and `node_modules/.bin/tsc` — NOT `bunx biome` / `bunx tsc`, which silently auto-install the unrelated npm packages `biome` and `tsc`.
 
