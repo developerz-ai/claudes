@@ -193,6 +193,13 @@ path to processes started later (`/restart`, tmux sessions, background
 agents) — and a later `claudes` launch sweeps it once the launching pid is
 dead.
 
+Two caveats follow from that sweep. A descendant still running from a dead
+launcher's session loses the file at the next launch's sweep and fails closed
+with "Settings file not found". And pid liveness is judged in the prober's
+pid namespace, so a config directory shared across containers can make
+another namespace's live launcher look dead: the session keeps running, but
+only the processes it starts later lose the file.
+
 Before launching, `claudes` checks the router's `/healthz`. The check is
 bounded by `CLAUDES_PREFLIGHT_TIMEOUT_MS` (integer milliseconds, 1 to
 2147483647, default 1500; any other value is ignored) and is retried exactly
