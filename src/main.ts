@@ -21,8 +21,9 @@ async function main(argv: string[]): Promise<void> {
     if (result.word === "doctor") {
       process.exit(await runDoctor(argv.slice(1), realDoctorDeps()));
     }
-    console.error(`claudes ${result.word}: not implemented yet`);
-    process.exit(64);
+    // Exhaustiveness guard: adding a RESERVED_WORDS member without a handler fails to compile here.
+    const unhandled: never = result.word;
+    throw new Error(`claudes: unhandled subcommand: ${unhandled}`);
   }
   process.exit(await run(result.args, realRunDeps()));
 }
