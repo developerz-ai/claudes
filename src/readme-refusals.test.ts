@@ -96,17 +96,39 @@ function scenarios(): Scenario[] {
       },
     },
     {
+      // The row covers CLAUDE_CODE_HOST_AUTH_ENV_VAR, which carries the NAME
+      // of the env var holding the host's credential: any non-empty value
+      // counts, "0" and "false" included. The quoted message names the
+      // variable, so each drive is checked against the row with its own name
+      // in it.
+      when: "any non-empty value",
+      run: async (h) => {
+        const observed: Observed[] = [];
+        for (const value of ["0", "false", "ANTHROPIC_API_KEY"]) {
+          const name = "CLAUDE_CODE_HOST_AUTH_ENV_VAR";
+          const code = await h.drive(["-p", "hi"], {
+            env: { HOME: h.home, PATH: h.binDir, [name]: value },
+            fetch: deadFetch,
+          });
+          observed.push({
+            code,
+            text: h.err.join(""),
+            name,
+            spawned: h.spawnCalls.length > 0,
+          });
+          h.err.length = 0;
+        }
+        return observed;
+      },
+    },
+    {
+      // The row covers an unknown CLAUDE_CODE_USE_* toggle and
+      // CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: both are flags, so only a
+      // truthy value is refused.
       when: "An unknown",
       run: async (h) => {
-        // The row covers an unknown CLAUDE_CODE_USE_* toggle and the two
-        // host-managed names; the quoted message names the variable, so each
-        // drive is checked against the row with its own name in it.
         const observed: Observed[] = [];
-        for (const name of [
-          "CLAUDE_CODE_USE_CCR_V2",
-          "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
-          "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
-        ]) {
+        for (const name of ["CLAUDE_CODE_USE_CCR_V2", "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"]) {
           const code = await h.drive(["-p", "hi"], {
             env: { HOME: h.home, PATH: h.binDir, [name]: "1" },
             fetch: deadFetch,
@@ -338,6 +360,49 @@ describe("README refusals and exit codes table", () => {
     }
   });
 
+  test("the two env rows gate on different values", async () => {
+    // The two env rows differ in what they accept, and the difference is
+    // only visible from the side that is NOT refused.
+    //
+    // CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST is a flag: unset, empty, "0" and
+    // "false" all fall through to the router probe (69 with the dead fetch),
+    // never to the exit-64 refusal.
+    for (const value of ["", "0", "false"]) {
+      const h = harness();
+      try {
+        const code = await h.drive(["-p", "hi"], {
+          env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: value },
+          fetch: deadFetch,
+        });
+        expect(code).toBe(69);
+        expect(h.err.join("")).not.toContain("would not go to the router");
+      } finally {
+        cleanup(h);
+      }
+    }
+
+    // CLAUDE_CODE_HOST_AUTH_ENV_VAR carries the NAME of the env var holding
+    // the host's credential: only an empty value is left alone, while "0"
+    // and "false" are refused — they are names, not flags.
+    for (const [value, refused] of [
+      ["", false],
+      ["0", true],
+      ["false", true],
+    ] as const) {
+      const h = harness();
+      try {
+        const code = await h.drive(["-p", "hi"], {
+          env: { HOME: h.home, PATH: h.binDir, CLAUDE_CODE_HOST_AUTH_ENV_VAR: value },
+          fetch: deadFetch,
+        });
+        expect(code).toBe(refused ? 64 : 69);
+        expect(h.err.join("").includes("would not go to the router")).toBe(refused);
+      } finally {
+        cleanup(h);
+      }
+    }
+  });
+
   test("a row whose phrase is a fragment of a scenario's phrase is never covered", async () => {
     // The shape of the hole a count-based coverage check cannot see: every
     // scenario still selects exactly one row, and one more row is added
@@ -369,7 +434,7 @@ describe("README refusals and exit codes table", () => {
     // The guard rejects the table and names the row no scenario ever
     // asserted against.
     await expect(assertRowsMatchScenarios(rows.concat(fragment), list)).rejects.toThrow(
-      /1 of 11 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
+      /1 of 12 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
     );
   });
 });
