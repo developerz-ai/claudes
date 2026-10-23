@@ -46,13 +46,18 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
     const inlineValue = name === arg ? undefined : arg.slice(equals + 1);
     if (name === "--url" || name === "--opus" || name === "--sonnet" || name === "--haiku") {
       const value = inlineValue ?? argv[++i];
-      if (value === undefined || value === "") {
-        return usageError(`claudes login: ${name} requires a value`);
-      }
       // The value in the next position is argv too — scan it as well, so a key
       // slipped in as "--url VALUE" or "--opus VALUE" is refused the same way.
-      if (value.includes(ROUTER_KEY_PREFIX)) {
+      // This runs before the value checks below so a pasted key always gets the
+      // key-refusal message, never a usage error that names only the flag.
+      if (value?.includes(ROUTER_KEY_PREFIX)) {
         return refusedKey("claudes login: refusing an argument that looks like a router key");
+      }
+      // A value that starts with "-" is the next flag, not a value: neither a
+      // bounded model id nor an https:// URL can legitimately begin with "-",
+      // so the flag was given without its value (next-token and inline forms).
+      if (value === undefined || value === "" || value.startsWith("-")) {
+        return usageError(`claudes login: ${name} requires a value`);
       }
       if (name === "--url") {
         // Rejected by flag name, never by value: the second URL is as
