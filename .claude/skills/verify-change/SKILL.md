@@ -10,8 +10,14 @@ applies: [typescript, javascript, bun]
 
 ## The one gate
 
-`bin/check` is the gate. CI runs it and the pre-commit hook runs it, so a change that
-passes it locally passes everywhere.
+`bin/check` is the gate. CI always runs it; `.githooks/pre-commit` runs it too, but
+only on a clone where the owner has activated it — a one-time `git config
+core.hooksPath .githooks`, documented in the hook's own header
+(`.githooks/pre-commit`). Nothing in this repo activates the hook for you, so never
+assume it fired: the proof before every commit is running `bin/check` yourself,
+explicitly. If that activation has not happened on your clone, leave it to the clone's
+owner — your job is the explicit `bin/check` run, and a change that passes it passes
+everywhere.
 
 | Step | Command | What it is |
 |------|---------|------------|
