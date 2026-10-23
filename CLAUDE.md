@@ -15,7 +15,7 @@ Bun + TypeScript
 |------|---------|
 | setup | `bin/setup` — `bun install --frozen-lockfile`, skipped when `node_modules` already holds every pin `bun.lock` declares |
 | dev | `bin/dev` — true (on developerz.ai runs, start it with code_bash_background when you need a running stack) |
-| check | `bin/check` — biome (`--error-on-warnings`) → `tsc` on both tsconfigs → `bun test` → `bun scripts/build.ts` → shebang / `--version` / exit-code smoke, incl. the `mar_live_` leak grep against a keyed config |
+| check | `bin/check` — `bin/check-bun-versions` (the three bun pins agree) → biome (`--error-on-warnings`) → `tsc` on both tsconfigs → `bun test` → `bun scripts/build.ts` → shebang / `--version` / exit-code smoke, incl. the `mar_live_` leak grep against a keyed config |
 | stop | `bin/stop` — true (on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself) |
 
 ## Structure
@@ -45,7 +45,7 @@ Bun + TypeScript
 | `src/test-support/redact.ts` | `assertNoKeyFragment` (no 8-char window of the key body may appear in any output) |
 | `src/test-support/readme-table.ts` | Parses README.md's "Refusals and exit codes" table into rows (`exit`, `when`, `message`); code-span messages are unquoted and `(message above)` resolves to the router-down block |
 | `scripts/build.ts` | `Bun.build({ target: "node" })` of `src/main.ts` → `dist/claudes.js`, prepends `#!/usr/bin/env node`, `chmod 755` |
-| `bin/check` | Gate: biome (`--error-on-warnings`) → tsc on both tsconfigs → `bun test` → build → shebang/version/exit-code smoke (no `bunx` — it silently auto-installs unrelated npm packages) |
+| `bin/check` | Gate: `bin/check-bun-versions` (bun-pin agreement) → biome (`--error-on-warnings`) → tsc on both tsconfigs → `bun test` → build → shebang/version/exit-code smoke (no `bunx` — it silently auto-installs unrelated npm packages) |
 | `.github/workflows/ci.yml` | CI matrix: ubuntu-latest + macos-latest × Node 22 + 24; `bun install --frozen-lockfile` then `bin/check` |
 | `.github/workflows/release.yml` | npm trusted publishing via OIDC; tag must equal `v` + `package.json` version, must be on `origin/main`, tarball verified to contain exactly `dist/claudes.js`, `package.json`, `README.md`, `LICENSE`; pre-releases refused; digest-verified pinned npm 12.2.0 |
 
@@ -88,7 +88,7 @@ Dependency direction (the live import graph under `src/`, checkable with `grep '
 ## Build / release (non-negotiable)
 
 - `bun scripts/build.ts` is the ONLY build entry; the produced `dist/claudes.js` carries `#!/usr/bin/env node` and is `chmod 755`.
-- `bin/check` is the gate: biome, tsc on both configs, `bun test`, build, then shebang/version/exit-code smoke. A PR is proven when it exits 0.
-- CI pins bun `1.4.3`; the committed `bun.lock` is v2 — bun < 1.4 cannot read it. Node is `>=22` per `engines.node`.
-- A refused frozen install is that bun being older than the lockfile format, not a bad dependency: `bin/setup` prints `bun --version`, `bun.lock`'s `lockfileVersion` and the CI-pinned bun version before it exits non-zero. Never edit `bun.lock` to make an install succeed.
+- `bin/check` is the gate: bun-pin agreement (`bin/check-bun-versions`), biome, tsc on both configs, `bun test`, build, then shebang/version/exit-code smoke. A PR is proven when it exits 0.
+- CI pins bun `1.4.3`, and `.bun-version` carries that same pin; `.bun-version`, `ci.yml` and `release.yml` must agree — `bin/check-bun-versions` refuses drift among them. The committed `bun.lock` is v2 — bun < 1.4 cannot read it. Node is `>=22` per `engines.node`.
+- A refused frozen install is that bun being older than the lockfile format, not a bad dependency: `bin/setup` prints `bun --version`, the `.bun-version` pin, `bun.lock`'s `lockfileVersion` and the CI-pinned bun version before it exits non-zero. Never edit `bun.lock` to make an install succeed.
 - npm release is OIDC trusted publishing only (`release.yml`) — no `NPM_TOKEN` anywhere. The release tag MUST equal `v` + `package.json` version, and the commit MUST be an ancestor of `origin/main`; pre-releases are refused.
