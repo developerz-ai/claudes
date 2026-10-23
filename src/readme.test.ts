@@ -6,6 +6,7 @@ import { parseLoginArgs } from "./commands/login-args";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { dispatch } from "./dispatch";
 import { buildArgv } from "./launch/argv";
+import { type RefusalRow, readmeRefusalRows } from "./test-support/readme-table";
 
 /**
  * claudes has no --help output of its own: dispatch() routes the first
@@ -25,19 +26,36 @@ const LOGIN_URL = "https://router.invalid";
 const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "-p"]);
 
 /**
- * Flags claudes refuses outright, with exit 64 and the exact message the
- * README's "Refusals and exit codes" table quotes (both are defined in
- * src/launch/argv.ts, which exports no constant for them — hence the
- * literals). The refusal is claudes' own behaviour, so these flags are NOT
- * allowlisted above: a change that made claudes accept them would fail the
- * refusal test below.
+ * Flags claudes refuses outright. The exit code and the message come from
+ * the README's own "Refusals and exit codes" table (parsed by
+ * src/test-support/readme-table.ts), so a doc-side edit fails the refusal
+ * test below too. The refusal is claudes' own behaviour, so these flags are
+ * NOT allowlisted above: a change that made claudes accept them would fail
+ * the refusal test below.
  */
-const REFUSED_FLAGS: Readonly<Record<string, string>> = {
-  "--settings":
-    "claudes: --settings is not supported — claudes writes its own settings file to point claude at the router",
-  "--key":
-    "claudes: --key is not supported — the router key comes from the config written by `claudes login`",
-};
+const REFUSED_FLAGS: ReadonlySet<string> = new Set(["--settings", "--key"]);
+
+/**
+ * The README row that documents the refusal of `flag`: the one whose "When"
+ * cell names the flag in a code span. Exactly one row must match, and it
+ * must quote a message — a refusal row without one documents nothing.
+ */
+function refusalRowFor(flag: string): RefusalRow & { readonly message: string } {
+  const rows = readmeRefusalRows().filter((row) => row.when.includes(`\`${flag}\``));
+  if (rows.length !== 1) {
+    throw new Error(
+      `README refusals table: ${rows.length} rows document ${flag}, expected exactly 1`,
+    );
+  }
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error(`README refusals table: no row documents ${flag}`);
+  }
+  if (row.message === undefined) {
+    throw new Error(`README refusals table: the ${flag} row quotes no message`);
+  }
+  return { ...row, message: row.message };
+}
 
 /**
  * Flags of the other commands in the README's shell snippets: npm's `-g` and
@@ -139,7 +157,7 @@ describe("README flags", () => {
         (flag) =>
           !CLAUDE_FLAGS.has(flag) &&
           !(flag in CLAUDES_FLAG_CHECKS) &&
-          !(flag in REFUSED_FLAGS) &&
+          !REFUSED_FLAGS.has(flag) &&
           !SHELL_FLAGS.has(flag),
       )
       .sort();
@@ -159,12 +177,20 @@ describe("README flags", () => {
   });
 
   test("claudes refuses --settings and --key with exit 64 and the README's message", () => {
-    for (const [flag, message] of Object.entries(REFUSED_FLAGS)) {
+    for (const flag of REFUSED_FLAGS) {
+      const row = refusalRowFor(flag);
+      // The README's row is the source of truth for the exit code too; the
+      // refusal is a usage error, so the README must say 64.
+      expect(row.exit).toBe(64);
       // Both spellings hit the same refusal: the separated value and
       // `--flag=value`. run() turns this ArgvResult into the process's exit
       // code and stderr line — covered end to end in readme-refusals.test.ts.
       for (const args of [[flag, "x"], [`${flag}=x`]]) {
-        expect(buildArgv(args, "/tmp/settings.json")).toEqual({ ok: false, exitCode: 64, message });
+        expect(buildArgv(args, "/tmp/settings.json")).toEqual({
+          ok: false,
+          exitCode: 64,
+          message: row.message,
+        });
       }
     }
   });
