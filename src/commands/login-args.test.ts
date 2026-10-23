@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { login } from "./login";
+import { parseLoginArgs } from "./login-args";
 import { configPath, harness, KEY, ROUTER } from "./login-harness";
 
 let home: string;
@@ -55,6 +56,74 @@ describe("login argument handling", () => {
       expect(message).not.toContain(KEY);
       expect(h.prompts).toEqual([]);
     }
+  });
+
+  test("a flag-shaped next token is a missing value, rejected by the requiring flag's name", () => {
+    const cases: Array<[readonly string[], string]> = [
+      [["--url", ROUTER, "--opus", "--haiku", "claude-haiku-4-5"], "--opus"],
+      [["--url", ROUTER, "--sonnet", "--opus", "claude-opus-5-5"], "--sonnet"],
+      [["--url", "--opus"], "--url"],
+      [["--url", "--haiku", "claude-haiku-4-5"], "--url"],
+    ];
+    for (const [argv, flag] of cases) {
+      const result = parseLoginArgs(argv);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      // USAGE itself names every flag, so only the first line can assert the
+      // rejection names the requiring flag and nothing else.
+      const lede = result.ok === false ? (result.message ?? "").split("\n\n")[0] : "";
+      expect(lede).toBe(`claudes login: ${flag} requires a value`);
+    }
+  });
+
+  test("a flag-shaped inline value (--x=--y) is also a missing value", () => {
+    for (const [argv, flag] of [
+      [["--url=--opus"], "--url"],
+      [[`--url=${ROUTER}`, "--opus=--haiku"], "--opus"],
+    ] as Array<[readonly string[], string]>) {
+      const result = parseLoginArgs(argv);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      const lede = result.ok === false ? (result.message ?? "").split("\n\n")[0] : "";
+      expect(lede).toBe(`claudes login: ${flag} requires a value`);
+    }
+  });
+
+  test("a key-shaped value still gets the key-refusal message, not the missing-value one", () => {
+    for (const argv of [
+      ["--url", ROUTER, "--opus", KEY],
+      ["--url", KEY],
+    ]) {
+      const result = parseLoginArgs(argv);
+      expect(result).toMatchObject({ ok: false, exitCode: 64 });
+      const message = result.ok === false ? (result.message ?? "") : "";
+      expect(message).toContain("looks like a router key");
+      expect(message).not.toContain("requires a value");
+      expect(message).not.toContain(KEY);
+    }
+  });
+
+  test("valid model ids and a valid https --url remain accepted, next-token and inline", () => {
+    const result = parseLoginArgs([
+      "--url",
+      ROUTER,
+      "--opus",
+      "claude-opus-5-5",
+      "--sonnet=claude-sonnet-5-0",
+      "--haiku",
+      "claude-haiku-4-5",
+    ]);
+    expect(result).toEqual({
+      ok: true,
+      args: {
+        url: ROUTER,
+        overrides: {
+          opus: "claude-opus-5-5",
+          sonnet: "claude-sonnet-5-0",
+          haiku: "claude-haiku-4-5",
+        },
+      },
+    });
+    const inlineUrl = parseLoginArgs([`--url=${ROUTER}`]);
+    expect(inlineUrl).toEqual({ ok: true, args: { url: ROUTER, overrides: {} } });
   });
 
   test("rejects an invalid --url before any I/O, without echoing the value", async () => {
