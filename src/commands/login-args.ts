@@ -33,7 +33,7 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
   let url: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? "";
-    // The scan runs on the whole token so --url VALUE, --tier=VALUE and
+    // The scan runs on the whole token so --url VALUE, --opus=VALUE and
     // positionals are all covered, whatever position the key lands in.
     if (arg.includes(ROUTER_KEY_PREFIX)) {
       return refusedKey("claudes login: refusing an argument that looks like a router key");
