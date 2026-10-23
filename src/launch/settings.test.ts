@@ -162,6 +162,22 @@ describe("buildSettings", () => {
     });
   }
 
+  // The parent-only CA names are omitted as a SET, not one name at a time: with
+  // BOTH names set to "" in the same parent env, neither may appear in the
+  // generated settings. An empty string is NOT unset downstream (Claude Code
+  // applies the settings env to every subprocess, and python urllib/pip, wget,
+  // openssl and ruby read SSL_CERT_FILE/SSL_CERT_DIR="" as an empty CA store
+  // and fail every HTTPS request with CERTIFICATE_VERIFY_FAILED), so emitting
+  // either name with an empty value would silently break TLS trust for the
+  // session's OpenSSL subprocesses.
+  test("never emits either SSL_CERT name when the parent env has both empty", () => {
+    const parent: Env = { SSL_CERT_FILE: "", SSL_CERT_DIR: "" };
+    const env = buildSettings(config(), SELF, parent).env;
+    for (const name of PARENT_ONLY_TRANSPORT_ENV) {
+      expect(name in env).toBe(false);
+    }
+  });
+
   // A proxy is pinned per PAIR, never per name: tools export either case, and
   // subprocesses read either case, so one name set and its twin "" would let a
   // case-sensitive client slip around the developer's proxy intent.
