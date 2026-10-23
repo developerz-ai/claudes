@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# bun-version pin agreement guard. The bun version is pinned in three
+# independent places — .bun-version and the bun-version: key of
+# .github/workflows/ci.yml and .github/workflows/release.yml — and drift
+# between them must fail the gate, never pick a winner. Nothing here needs
+# node_modules, so bin/check runs this before its tool-presence loop.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# The checkout's own pin: first non-empty line of .bun-version, trimmed.
+checkout="$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' .bun-version 2>/dev/null || true)"
+# The workflow pins, extracted exactly the way bin/setup extracts ci.yml's.
+ci="$(sed -n 's/^[[:space:]]*bun-version:[[:space:]]*//p' .github/workflows/ci.yml 2>/dev/null | head -n 1 || true)"
+release="$(sed -n 's/^[[:space:]]*bun-version:[[:space:]]*//p' .github/workflows/release.yml 2>/dev/null | head -n 1 || true)"
+
+# Every refusal names each source WITH the value it yielded, so the drift (or
+# the missing source) is diagnosable from the message alone.
+report() {
+  {
+    echo "bin/check-bun-versions: $1"
+    echo "  .bun-version:                  ${checkout:-<missing or empty>}"
+    echo "  .github/workflows/ci.yml:      ${ci:-<no bun-version pin>}"
+    echo "  .github/workflows/release.yml: ${release:-<no bun-version pin>}"
+  } >&2
+}
+
+if [ -z "$checkout" ] || [ -z "$ci" ] || [ -z "$release" ]; then
+  report "a bun-version pin source is missing or unparseable; refusing to guess"
+  exit 1
+fi
+
+if [ "$checkout" != "$ci" ] || [ "$checkout" != "$release" ]; then
+  report "bun-version pins disagree"
+  exit 1
+fi
+
+echo "bin/check-bun-versions: bun $checkout — .bun-version, ci.yml and release.yml agree"

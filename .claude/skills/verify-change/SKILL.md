@@ -27,7 +27,8 @@ passes it locally passes everywhere.
 - `bin/setup` printing "already satisfied" is a real answer, not a skipped step: it
   compared every `bun.lock` devDependency pin against what is installed. Only a
   refused `bun install --frozen-lockfile` needs you — it prints `bun --version`,
-  the `lockfileVersion` and the bun version CI installs. A bun older than the
+  the pin `.bun-version` requires, the `lockfileVersion` and the bun version CI
+  installs. A bun older than the
   committed lockfile format is the usual cause; never edit `bun.lock` to get past it.
 
 ## Exit codes `bin/check` must use

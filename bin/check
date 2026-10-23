@@ -6,6 +6,11 @@ set -eu
 # the same from a subdirectory.
 cd "$(dirname "$0")/.."
 
+# The bun version is pinned in three independent places (.bun-version, ci.yml,
+# release.yml) and drift between them must fail CI — so this guard runs first:
+# it needs nothing installed, and a refusal here beats a toolchain error later.
+bin/check-bun-versions
+
 # Never use bunx here: it silently auto-installs the unrelated npm packages
 # "biome" and "tsc". Require the pinned devDependencies instead.
 for tool in biome tsc; do

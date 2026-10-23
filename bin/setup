@@ -82,12 +82,16 @@ fi
 
 # A refused frozen install is nearly always a bun older than the lockfile format,
 # not a dependency the repo got wrong — and "lockfile had changes" does not say
-# which. Name the three numbers that decide it, none of them hardcoded here.
+# which. Name the four facts that decide it, none of them hardcoded here: the
+# bun that actually ran, the pin this checkout requires, the lockfile format and
+# the bun CI installs.
 bun_version="$(bun --version 2>&1)" || bun_version="unrunnable (bun --version failed)"
+checkout_bun="$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' .bun-version 2>/dev/null)" || checkout_bun=""
 ci_bun="$(sed -n 's/^[[:space:]]*bun-version:[[:space:]]*//p' .github/workflows/ci.yml | head -n 1)"
 {
   echo "bin/setup: bun install --frozen-lockfile failed (exit $rc)"
   echo "  bun --version:              $bun_version"
+  echo "  bun version .bun-version requires: ${checkout_bun:-unknown} (.bun-version)"
   echo "  bun.lock lockfileVersion:   ${lockfile_version:-unknown}"
   echo "  bun version CI installs:    ${ci_bun:-unknown} (.github/workflows/ci.yml); this lockfile format needs that bun or newer"
 } >&2
