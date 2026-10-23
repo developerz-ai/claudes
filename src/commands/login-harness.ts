@@ -15,10 +15,8 @@ export interface StubOptions {
   failWith?: Error;
 }
 
-export function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; calls: string[] } {
-  const calls: string[] = [];
-  const fetchImpl: FetchLike = async (url) => {
-    calls.push(url);
+export function stubFetch(options: StubOptions = {}): FetchLike {
+  return async (url) => {
     if (options.failWith !== undefined) {
       throw options.failWith;
     }
@@ -39,7 +37,6 @@ export function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; ca
       { status: options.modelsStatus ?? 200 },
     );
   };
-  return { fetchImpl, calls };
 }
 
 export interface Harness {
@@ -68,7 +65,7 @@ export function harness(home: string, overrides: HarnessOptions = {}): Harness {
   const prompts: string[] = [];
   const writeConfigCalls: { path: string; config: unknown }[] = [];
   const fetchCalls: string[] = [];
-  const inner = overrides.fetch ?? stubFetch().fetchImpl;
+  const inner = overrides.fetch ?? stubFetch();
   const deps: LoginDeps = {
     env: overrides.env ?? { HOME: home },
     // Wrapped so tests can assert on whether the network was touched at all.

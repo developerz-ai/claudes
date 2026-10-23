@@ -3,14 +3,11 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configDir, configFile } from "../config/paths";
 import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { runLogin } from "./login";
+import { configPath, KEY, ROUTER, stubFetch } from "./login-harness";
 import type { StdinLike } from "./login-input";
-
-const ROUTER = "https://router.example.test";
-const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
 
 let home: string;
 
@@ -78,31 +75,6 @@ function ttyStdin(
   return { stdin: stdin as unknown as StdinLike, rawModes };
 }
 
-interface StubOptions {
-  healthStatus?: number;
-  modelsStatus?: number;
-  failWith?: Error;
-}
-
-function stubFetch(options: StubOptions = {}): FetchLike {
-  return async (url) => {
-    if (options.failWith !== undefined) {
-      throw options.failWith;
-    }
-    if (url.endsWith("/healthz")) {
-      return new Response(JSON.stringify({ version: "1.4.2" }), {
-        status: options.healthStatus ?? 200,
-      });
-    }
-    return new Response(
-      JSON.stringify({
-        data: [{ id: "claude-opus-4-1" }, { id: "claude-sonnet-4-5" }, { id: "claude-haiku-4-5" }],
-      }),
-      { status: options.modelsStatus ?? 200 },
-    );
-  };
-}
-
 interface Driven {
   code: number;
   out: string;
@@ -131,20 +103,16 @@ function expectEndsWithNewline(driven: Driven): void {
   expect(last?.endsWith("\n")).toBe(true);
 }
 
-function configPath(): string {
-  return configFile(configDir({ HOME: home }));
-}
-
 describe("runLogin (real wiring, injected writers)", () => {
   test("success: exit 0, report on out, key redacted, config written", async () => {
     const driven = await drive(["--url", ROUTER], pipedStdin(KEY), stubFetch());
     expect(driven.code).toBe(0);
     expect(driven.out).toContain(`logged in to ${ROUTER} (router version 1.4.2)`);
     expect(driven.out).toContain("key mar_live_…");
-    expect(driven.out).toContain(`config saved to ${configPath()}`);
+    expect(driven.out).toContain(`config saved to ${configPath(home)}`);
     expect(driven.err).toBe("");
     assertNoKeyFragment(`${driven.out}\n${driven.err}`, KEY);
-    expect(existsSync(configPath())).toBe(true);
+    expect(existsSync(configPath(home))).toBe(true);
   });
 
   test("TTY stdin: real hidden reader, prompt without a newline, exit 0", async () => {
@@ -157,7 +125,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.errCalls).toEqual(["Router key: ", "\n"]);
     expect(rawModes).toEqual([true, false]);
     assertNoKeyFragment(`${driven.out}\n${driven.err}`, KEY);
-    expect(existsSync(configPath())).toBe(true);
+    expect(existsSync(configPath(home))).toBe(true);
   });
 
   test("TTY Ctrl-C at the prompt: exit 130, prompt plus newline on err, terminal restored", async () => {
@@ -169,7 +137,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.out).toBe("");
     expect(rawModes).toEqual([true, false]);
     assertNoKeyFragment(`${driven.out}\n${driven.err}`, KEY);
-    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(configPath(home))).toBe(false);
   });
 
   test("401 from the router: exit 1, the rejection line on err", async () => {
@@ -183,7 +151,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.out).toBe("");
     expectEndsWithNewline(driven);
     assertNoKeyFragment(`${driven.out}\n${driven.err}`, KEY);
-    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(configPath(home))).toBe(false);
   });
 
   test("5xx from the health check: exit 1, status named, newline-terminated", async () => {
@@ -197,7 +165,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.out).toBe("");
     expectEndsWithNewline(driven);
     assertNoKeyFragment(`${driven.out}\n${driven.err}`, KEY);
-    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(configPath(home))).toBe(false);
   });
 
   test("a failing config write: exit 1, could-not-save on err, newline-terminated", async () => {
@@ -206,9 +174,9 @@ describe("runLogin (real wiring, injected writers)", () => {
     writeFileSync(join(home, ".config"), "not a directory", "utf8");
     const driven = await drive(["--url", ROUTER], pipedStdin(KEY), stubFetch());
     expect(driven.code).toBe(1);
-    expect(driven.err).toContain(`could not save the config to ${configPath()}`);
+    expect(driven.err).toContain(`could not save the config to ${configPath(home)}`);
     expectEndsWithNewline(driven);
-    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(configPath(home))).toBe(false);
   });
 
   test("stdin closing under the TTY prompt: exit 1, stdin closed, newline-terminated", async () => {
@@ -220,7 +188,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.errCalls).toEqual(["Router key: ", "\n", "claudes login: stdin closed\n"]);
     expect(driven.out).toBe("");
     expect(rawModes).toEqual([true, false]);
-    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(configPath(home))).toBe(false);
   });
 
   test("a 1 MiB unterminated line on stdin: exit 64, input too long, newline-terminated", async () => {
@@ -233,7 +201,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.err).toContain("claudes login: input too long for a router key");
     expectEndsWithNewline(driven);
     expect(driven.err).not.toContain("aaaa");
-    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(configPath(home))).toBe(false);
   });
 
   test("an invalid --url: exit 64, invalid --url on err, newline-terminated", async () => {
@@ -267,7 +235,7 @@ describe("runLogin (real wiring, injected writers)", () => {
     expect(driven.err).toBe(
       "claudes login: that is not a valid router key (expected the mar_live_… prefix followed by 32 characters)\n",
     );
-    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(configPath(home))).toBe(false);
   });
 
   test("bad argv (a key on the command line): exit 64, refusal without the key", async () => {
