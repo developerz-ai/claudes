@@ -54,7 +54,7 @@ function trappingStatusResponse(): Response {
 describe("login validation and output", () => {
   test("health failure names the endpoint and exits 1", async () => {
     const h = harness(home, {
-      fetch: stubFetch({ healthStatus: 503, healthBody: "overloaded" }).fetchImpl,
+      fetch: stubFetch({ healthStatus: 503, healthBody: "overloaded" }),
     });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 1 });
@@ -64,7 +64,7 @@ describe("login validation and output", () => {
 
   test("models 401 maps to 'router rejected the key'", async () => {
     const h = harness(home, {
-      fetch: stubFetch({ modelsStatus: 401, modelsBody: "denied" }).fetchImpl,
+      fetch: stubFetch({ modelsStatus: 401, modelsBody: "denied" }),
     });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 1 });
@@ -105,7 +105,7 @@ describe("login validation and output", () => {
 
   test("an invalid router version string is refused, not printed", async () => {
     const h = harness(home, {
-      fetch: stubFetch({ healthBody: JSON.stringify({ version: "1.4.2\nrm -rf /" }) }).fetchImpl,
+      fetch: stubFetch({ healthBody: JSON.stringify({ version: "1.4.2\nrm -rf /" }) }),
     });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 1 });
@@ -151,7 +151,7 @@ describe("login REDACTION end to end", () => {
     const deps: LoginDeps = {
       // No injected writeConfig: the real store writes to the temp HOME.
       env: { HOME: home },
-      fetch: stubFetch().fetchImpl,
+      fetch: stubFetch(),
       stdinIsTTY: false,
       readStdinLine: async () => KEY,
       readSecret: async () => {
@@ -182,7 +182,7 @@ describe("login REDACTION end to end", () => {
     await login(["--url", ROUTER], harness(home, { realStore: true }).deps);
     const second = harness(home, {
       stdin: "mar_live_SECONDKEYabcdef0123456789abcdefg",
-      fetch: stubFetch().fetchImpl,
+      fetch: stubFetch(),
       realStore: true,
     });
     const result = await login(["--url", "https://other.example.test"], second.deps);
@@ -198,13 +198,13 @@ describe("login REDACTION end to end", () => {
       {
         name: "401 from the router",
         h: harness(home, {
-          fetch: stubFetch({ modelsStatus: 401, modelsBody: "denied" }).fetchImpl,
+          fetch: stubFetch({ modelsStatus: 401, modelsBody: "denied" }),
         }),
       },
       {
         name: "5xx from the router",
         h: harness(home, {
-          fetch: stubFetch({ healthStatus: 503, healthBody: "overloaded" }).fetchImpl,
+          fetch: stubFetch({ healthStatus: 503, healthBody: "overloaded" }),
         }),
       },
       {
@@ -212,7 +212,7 @@ describe("login REDACTION end to end", () => {
         h: harness(home, {
           fetch: stubFetch({
             failWith: new TypeError(`Headers.append: "Bearer ${KEY}" is an invalid header value`),
-          }).fetchImpl,
+          }),
         }),
       },
       {
@@ -238,7 +238,7 @@ describe("login REDACTION end to end", () => {
     const h = harness(home, {
       fetch: stubFetch({
         failWith: new Error(`Headers.append: "Bearer ${KEY}" is an invalid header value`),
-      }).fetchImpl,
+      }),
     });
     const result = await login(["--url", ROUTER], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 1 });
