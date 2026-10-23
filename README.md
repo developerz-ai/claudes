@@ -122,7 +122,8 @@ and your own login; that usage isn't attributed to your router key.
 | 64 | You passed `--settings` | `claudes: --settings is not supported — claudes writes its own settings file to point claude at the router` |
 | 64 | You passed `--key` | `claudes: --key is not supported — the router key comes from the config written by \`claudes login\`` |
 | 64 | An argument looks like a router key (in any position, including after the `--` terminator) | `claudes: refusing an argument that looks like a router key — a key on the command line leaks into shell history and process listings` |
-| 64 | An unknown `CLAUDE_CODE_USE_*` toggle, `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` or `CLAUDE_CODE_HOST_AUTH_ENV_VAR` is set truthy | `claudes: refusing: <name> is set, so this session would not go to the router` |
+| 64 | `CLAUDE_CODE_HOST_AUTH_ENV_VAR` is set to any non-empty value, `0` and `false` included | `claudes: refusing: <name> is set, so this session would not go to the router` |
+| 64 | An unknown `CLAUDE_CODE_USE_*` toggle or `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` is set truthy | `claudes: refusing: <name> is set, so this session would not go to the router` |
 | 64 | `BUN_CONFIG_VERBOSE_FETCH` is set truthy | `claudes: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed` |
 | 64 | `claudes key` ran at a terminal | `claudes key is for apiKeyHelper only` |
 | 69 | The router did not answer the pre-launch check | (message above) |
@@ -135,6 +136,14 @@ launch refusal: they are stripped from the child environment and pinned off
 in the generated settings. Unknown `CLAUDE_CODE_USE_*` names are refused,
 because `claudes` cannot know that they do not reroute the session; three
 known-benign tool toggles are allowlisted.
+
+The two env refusals above gate on different things, and both name the
+variable in the message. `CLAUDE_CODE_HOST_AUTH_ENV_VAR` carries the *name*
+of the env var holding the host's credential, so any non-empty value counts
+— `0` and `false` included, because the variable is read as a name, not as a
+flag. `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` and the unknown
+`CLAUDE_CODE_USE_*` toggles are flags, so only a truthy value counts: unset,
+empty, `0` and `false` are all left alone.
 
 ## `claudes doctor`
 

@@ -5,16 +5,16 @@ import { readmeRefusalRows, readmeRouterDownMessage } from "./readme-table";
  * The parser's own contract, checked against the README as it stands. The
  * guards that use the parser (src/readme-refusals.test.ts, src/readme.test.ts)
  * assert the behaviour the table promises; this file asserts that the table
- * is read the way they assume — ten rows, code spans unquoted, the
+ * is read the way they assume — eleven rows, code spans unquoted, the
  * "(message above)" cell resolved and the prose cell left without a message.
  */
 
 const rows = readmeRefusalRows();
 
 describe("README refusals table", () => {
-  test("the table has the ten documented rows", () => {
-    expect(rows.length).toBe(10);
-    expect(rows.map((row) => row.exit)).toEqual([64, 64, 64, 64, 64, 64, 69, 78, 127, 1]);
+  test("the table has the eleven documented rows", () => {
+    expect(rows.length).toBe(11);
+    expect(rows.map((row) => row.exit)).toEqual([64, 64, 64, 64, 64, 64, 64, 69, 78, 127, 1]);
   });
 
   test("the --key row unescapes its backticks", () => {
@@ -30,13 +30,18 @@ describe("README refusals table", () => {
     expect(row?.message).toBe("no claudes config: run `claudes login --url <router>`");
   });
 
-  test("the rerouting row keeps the <name> template", () => {
-    const row = rows.find((candidate) => candidate.message?.includes("<name>") === true);
-    expect(row).toBeDefined();
-    expect(row?.exit).toBe(64);
-    expect(row?.message).toBe(
-      "claudes: refusing: <name> is set, so this session would not go to the router",
-    );
+  test("the rerouting rows keep the <name> template", () => {
+    // Both env-refusal rows quote the same message with a <name> template:
+    // one for the variable refused on any non-empty value, one for the
+    // truthy-gated ones. Every row carrying the template must quote it.
+    const rerouting = rows.filter((candidate) => candidate.message?.includes("<name>") === true);
+    expect(rerouting.length).toBe(2);
+    for (const row of rerouting) {
+      expect(row.exit).toBe(64);
+      expect(row.message).toBe(
+        "claudes: refusing: <name> is set, so this session would not go to the router",
+      );
+    }
   });
 
   test("the router-down row resolves to the block above the table", () => {
