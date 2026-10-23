@@ -119,12 +119,17 @@ afterEach(() => {
 });
 
 /**
- * A fake repo root: the shipped bin/setup copied in, a lockfile, a CI workflow
- * and the fake bun. Nothing here is the checkout's own bun.lock or node_modules —
- * a sibling run in the same tree would collide — so the fixture writes only into
- * the scratch root and there is nothing to snapshot and restore.
+ * A fake repo root: the shipped bin/setup copied in, a lockfile, a CI workflow,
+ * a .bun-version pin and the fake bun. Nothing here is the checkout's own
+ * bun.lock or node_modules — a sibling run in the same tree would collide — so
+ * the fixture writes only into the scratch root and there is nothing to
+ * snapshot and restore.
  */
-function makeFixture(lock: string, ciYaml = readFileSync(CI_WORKFLOW, "utf8")): Fixture {
+function makeFixture(
+  lock: string,
+  ciYaml = readFileSync(CI_WORKFLOW, "utf8"),
+  bunVersion: string | null = "1.4.3\n",
+): Fixture {
   const id = fixtures++;
   const root = join(scratch, `repo-${id}`);
   mkdirSync(join(root, "bin"), { recursive: true });
@@ -134,6 +139,9 @@ function makeFixture(lock: string, ciYaml = readFileSync(CI_WORKFLOW, "utf8")): 
   chmodSync(setup, 0o755);
   writeFileSync(join(root, "bun.lock"), lock, "utf8");
   writeFileSync(join(root, ".github", "workflows", "ci.yml"), ciYaml, "utf8");
+  if (bunVersion !== null) {
+    writeFileSync(join(root, ".bun-version"), bunVersion, "utf8");
+  }
   const stubBin = join(scratch, `stub-bin-${id}`);
   mkdirSync(stubBin, { recursive: true });
   const bun = join(stubBin, "bun");
@@ -256,12 +264,12 @@ describe("bin/setup on a checkout that already holds bun.lock's pins", () => {
 
 describe("bin/setup when bun refuses the frozen install", () => {
   /** A refused install: no node_modules, so the tree is unsatisfied whatever bun says. */
-  function refusingFixture(ciYaml?: string): Fixture {
-    return makeFixture(readFileSync(BUN_LOCK, "utf8"), ciYaml);
+  function refusingFixture(ciYaml?: string, bunVersion?: string | null): Fixture {
+    return makeFixture(readFileSync(BUN_LOCK, "utf8"), ciYaml, bunVersion);
   }
 
   test(
-    "exit 1, and stderr names the three numbers that classify the refusal",
+    "exit 1, and stderr names the four facts that classify the refusal",
     () => {
       const fixture = refusingFixture();
       const res = runSetup(fixture, {
@@ -273,11 +281,40 @@ describe("bin/setup when bun refuses the frozen install", () => {
       expect(res.status).toBe(1);
       // The bare refusal is still shown, and never silently replaced.
       expect(res.stdout).toContain("lockfile had changes");
+      // The executing bun (FAKE_BUN_VERSION) and the pin this checkout requires
+      // (.bun-version) are distinct facts from distinct sources.
       expect(res.stderr).toMatch(labelled("bun --version:", "1.1.9"));
+      expect(res.stderr).toMatch(labelled("bun version .bun-version requires:", "1.4.3"));
       expect(res.stderr).toMatch(labelled("bun.lock lockfileVersion:", "2"));
       expect(res.stderr).toMatch(labelled("bun version CI installs:", "1.4.3"));
       // A refusal is not a reason to re-run the install without --frozen-lockfile.
       expect(bunCalls(fixture)).toEqual(["install --frozen-lockfile", "--version"]);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "the checkout pin comes from .bun-version, not from the script",
+    () => {
+      const fixture = refusingFixture(undefined, "9.9.9-pin-fixture\n");
+      const res = runSetup(fixture, { FAKE_BUN_INSTALL_EXIT: "1" });
+      expect(res.error).toBeUndefined();
+      expect(res.status).toBe(1);
+      expect(res.stderr).toMatch(
+        labelled("bun version .bun-version requires:", "9.9.9-pin-fixture"),
+      );
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "an unreadable .bun-version is named 'unknown', never a hardcoded pin",
+    () => {
+      const fixture = refusingFixture(undefined, null);
+      const res = runSetup(fixture, { FAKE_BUN_INSTALL_EXIT: "1" });
+      expect(res.error).toBeUndefined();
+      expect(res.status).toBe(1);
+      expect(res.stderr).toMatch(labelled("bun version .bun-version requires:", "unknown"));
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
