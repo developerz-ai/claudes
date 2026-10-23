@@ -66,4 +66,5 @@ triage:
 # stays with a human.
 escalate:
   always: [hostile_tone, direct_mention]
-  ask_before_acting: [breaking_change, major_dep_bump, first_time_contributor, large_pr]
+  # Nothing held for a human (owner ruling 2026-10-22: "AI is the dev and makes all the shots"); the platform's security/license/CLA asks still apply.
+  ask_before_acting: []
