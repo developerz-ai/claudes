@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Env } from "../config/paths";
 import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { runLogin } from "./login";
@@ -83,13 +84,18 @@ interface Driven {
   errCalls: string[];
 }
 
-async function drive(argv: string[], stdin: StdinLike, fetch: FetchLike): Promise<Driven> {
+async function drive(
+  argv: string[],
+  stdin: StdinLike,
+  fetch: FetchLike,
+  env: Env = { HOME: home },
+): Promise<Driven> {
   const out: string[] = [];
   const errCalls: string[] = [];
   const code = await runLogin(argv, {
     out: (text) => out.push(text),
     err: (text) => errCalls.push(text),
-    env: { HOME: home },
+    env,
     fetch,
     stdin,
   });
@@ -104,6 +110,68 @@ function expectEndsWithNewline(driven: Driven): void {
 }
 
 describe("runLogin (real wiring, injected writers)", () => {
+  const refusal =
+    "claudes login: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed\n";
+  const truthyValues = ["1", "true", "TRUE", "yes", " ", "run-login-secret-sentinel-643", KEY];
+  const falsyValues = [undefined, "", "0", "false", "FALSE", "False"];
+
+  for (const isTTY of [false, true]) {
+    for (const [index, value] of truthyValues.entries()) {
+      test(`verbose fetch refuses without input or fetch (TTY=${isTTY}, case ${index})`, async () => {
+        const tty = ttyStdin(`${KEY}\r`);
+        const stdin = isTTY ? tty.stdin : pipedStdin(KEY);
+        const fetchCalls: string[] = [];
+        const inner = stubFetch();
+        const driven = await drive(
+          ["--url", ROUTER],
+          stdin,
+          async (url, init) => {
+            fetchCalls.push(url);
+            return inner(url, init);
+          },
+          { HOME: home, BUN_CONFIG_VERBOSE_FETCH: value },
+        );
+        expect(driven.code).toBe(64);
+        expect(driven.err).toBe(refusal);
+        expect(driven.errCalls).toEqual([refusal]);
+        expect(driven.out).toBe("");
+        expect(fetchCalls).toEqual([]);
+        expect(tty.rawModes).toEqual([]);
+        expect(existsSync(configPath(home))).toBe(false);
+        const output = `${driven.out}\n${driven.err}`;
+        assertNoKeyFragment(output, KEY);
+        if (value !== " ") {
+          expect(output).not.toContain(value);
+        }
+      });
+    }
+
+    for (const [index, value] of falsyValues.entries()) {
+      test(`verbose fetch off succeeds (TTY=${isTTY}, case ${index})`, async () => {
+        const tty = ttyStdin(`${KEY}\r`);
+        const stdin = isTTY ? tty.stdin : pipedStdin(KEY);
+        const fetchCalls: string[] = [];
+        const inner = stubFetch();
+        const driven = await drive(
+          ["--url", ROUTER],
+          stdin,
+          async (url, init) => {
+            fetchCalls.push(url);
+            return inner(url, init);
+          },
+          { HOME: home, BUN_CONFIG_VERBOSE_FETCH: value },
+        );
+        expect(driven.code).toBe(0);
+        expect(fetchCalls).toEqual([`${ROUTER}/healthz`, `${ROUTER}/v1/models`]);
+        expect(driven.out).toContain("sonnet claude-sonnet-4-5");
+        expect(driven.errCalls).toEqual(isTTY ? ["Router key: ", "\n"] : []);
+        expect(tty.rawModes).toEqual(isTTY ? [true, false] : []);
+        expect(existsSync(configPath(home))).toBe(true);
+        assertNoKeyFragment(`${driven.out}\n${driven.err}`, KEY);
+      });
+    }
+  }
+
   test("success: exit 0, report on out, key redacted, config written", async () => {
     const driven = await drive(["--url", ROUTER], pipedStdin(KEY), stubFetch());
     expect(driven.code).toBe(0);

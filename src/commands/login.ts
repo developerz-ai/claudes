@@ -7,6 +7,7 @@ import {
   ROUTER_KEY_PREFIX,
 } from "../config/schema";
 import { writeConfig } from "../config/store";
+import { isTruthyToggle } from "../launch/provider-switches";
 import { errorName, type FetchLike, health, isRouterError, models, scrub } from "../router/client";
 import { resolveTiers } from "../tiers";
 import { parseLoginArgs } from "./login-args";
@@ -57,6 +58,13 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
   const parsed = parseLoginArgs(argv);
   if (!parsed.ok) {
     return { ok: false, exitCode: parsed.exitCode, message: parsed.message };
+  }
+
+  if (isTruthyToggle(deps.env.BUN_CONFIG_VERBOSE_FETCH)) {
+    return failure(
+      64,
+      "claudes login: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed",
+    );
   }
 
   // Resolve where the config will land before reading the key or touching the
