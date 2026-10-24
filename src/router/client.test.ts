@@ -534,6 +534,79 @@ describe("models", () => {
   });
 });
 
+describe("unread response disposal", () => {
+  for (const endpoint of ["health", "models"] as const) {
+    const path = endpoint === "health" ? "/healthz" : "/v1/models";
+    for (const refusal of ["non-200", "declared oversize"] as const) {
+      const status = refusal === "declared oversize" ? 200 : endpoint === "health" ? 503 : 401;
+      const message =
+        refusal === "non-200"
+          ? `GET ${BASE}${path} failed: HTTP ${status}`
+          : `GET ${BASE}${path} response body exceeds ${CAP} bytes`;
+
+      for (const disposal of ["success", "reject", "throw", "null body"] as const) {
+        test(`${endpoint}: ${refusal} preserves its error with ${disposal} disposal`, async () => {
+          let cancellations = 0;
+          let pulls = 0;
+          // A timeout-shaped cleanup error must not reclassify the refusal or
+          // expose its key-bearing message or certificate-verification cause.
+          const cleanupError = Object.assign(new Error(`cleanup failed: ${KEY}`), {
+            name: "TimeoutError",
+            cause: { code: "CERT_HAS_EXPIRED" },
+          });
+          const stream = new ReadableStream<Uint8Array>(
+            {
+              pull() {
+                pulls++;
+                // Leave the body open: reading it would stall instead of refusing.
+              },
+              cancel() {
+                cancellations++;
+                if (disposal === "reject") {
+                  return Promise.reject(cleanupError);
+                }
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          if (disposal === "throw") {
+            // An underlying source's throwing cancel hook becomes a rejected
+            // promise; override the method to exercise an actual synchronous throw.
+            stream.cancel = () => {
+              cancellations++;
+              throw cleanupError;
+            };
+          }
+          const response = new Response(disposal === "null body" ? null : stream, {
+            status,
+            headers:
+              refusal === "declared oversize" ? { "content-length": String(CAP + 1) } : undefined,
+          });
+          const { fetchImpl } = stubFetch({
+            healthResponse: response,
+            modelsResponse: response,
+          });
+          const result = await (endpoint === "health"
+            ? health(BASE, fetchImpl)
+            : models(BASE, KEY, fetchImpl)
+          ).catch((err: unknown) => err);
+
+          expect(result).toBeInstanceOf(RouterError);
+          const error = result as RouterError;
+          assertNoKeyFragment(String(error), KEY);
+          assertNoKeyFragment(error.stack ?? "", KEY);
+          expect(error.message).toBe(message);
+          expect(error.status).toBe(refusal === "non-200" ? status : undefined);
+          expect(error.timedOut).toBe(false);
+          expect(error.tlsVerifyCode).toBeUndefined();
+          expect(cancellations).toBe(disposal === "null body" ? 0 : 1);
+          expect(pulls).toBe(0);
+        });
+      }
+    }
+  }
+});
+
 describe("scrub", () => {
   test("replaces anything after mar_live_ up to whitespace with an ellipsis", () => {
     expect(scrub(`Bearer ${KEY} went out`)).toBe("Bearer mar_live_… went out");

@@ -50,6 +50,7 @@ export async function health(
   const endpoint = `${baseUrl}/healthz`;
   const res = await request(endpoint, {}, fetchImpl, timeoutMs);
   if (res.status !== 200) {
+    await cancelUnreadBody(res);
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
   const body = await parseJson(endpoint, res, timeoutMs);
@@ -78,6 +79,7 @@ export async function models(
   const endpoint = `${baseUrl}/v1/models`;
   const res = await request(endpoint, { Authorization: `Bearer ${key}` }, fetchImpl, timeoutMs);
   if (res.status !== 200) {
+    await cancelUnreadBody(res);
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
   const body = await parseJson(endpoint, res, timeoutMs);
@@ -265,12 +267,22 @@ async function parseJson(endpoint: string, res: Response, timeoutMs: number): Pr
   }
 }
 
+/** Best-effort disposal must never replace the refusal or expose cleanup errors. */
+async function cancelUnreadBody(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // Both synchronous throws and rejected cancellations leave the refusal intact.
+  }
+}
+
 /** Reads the response body, refusing anything larger than MAX_BODY_BYTES. */
 async function readBodyCapped(endpoint: string, res: Response): Promise<string> {
   const declared = res.headers.get("content-length");
   if (declared !== null) {
     const length = Number(declared);
     if (Number.isFinite(length) && length > MAX_BODY_BYTES) {
+      await cancelUnreadBody(res);
       throw new RouterError(`GET ${endpoint} response body exceeds ${MAX_BODY_BYTES} bytes`);
     }
   }
