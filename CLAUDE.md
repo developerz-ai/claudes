@@ -58,7 +58,7 @@ Dependency direction (the live import graph under `src/`, checkable with `grep '
 - TypeScript `strict: true` with `noUncheckedIndexedAccess: true`; Biome lints with `noExplicitAny: error` — no ESLint, no Prettier.
 - 2-space indent, 100-char line width, `esnext` modules — all owned by Biome (`biome.json`); do not hand-format.
 - Two `tsconfig.*` files: `tsconfig.json` (types: `bun` + `node`, includes `**/*.ts`) for tests; `tsconfig.build.json` (types: `node`, includes `src/**/*.ts`, excludes `src/**/*.test.ts`) for the bundle.
-- ESM only (`"type": "module"`); no `require()` outside `bin/check`.
+- ESM only (`"type": "module"`) in application/module source (`src/**/*.ts`, `scripts/`): `require()` never appears in module code. The `require()` calls that do exist are workflow glue, not module code: `bin/check:44`'s `node -p "require('./package.json').version"` shell one-liner, and both `node -p` snippets in `.github/workflows/release.yml` — line 72's `require('./package.json')` and line 197's `require("fs").readFileSync(...)`. (`src/launch/run.e2e.test.ts:43` also holds a `require("node:fs")`, but inside the FAKE_CLAUDE template string — a script written to disk and run by `node`, not module code.)
 - Public exports use `export function` / `export type`; never default-export an internal helper.
 
 ## Test layout
