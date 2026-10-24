@@ -95,8 +95,8 @@ afterEach(() => {
  * passes and the tool-presence loop is what decides the outcome, and a no-op
  * executable stub for every tool the loop iterates. Nothing of the checkout's
  * own is written — a sibling run in the same tree would collide — and no host
- * bun, biome or tsc decides anything: every scenario below stops at or before
- * the loop.
+ * bun, biome or tsc decides anything: precondition scenarios stop at or before
+ * the loop; artifact scenarios add local stubs to reach the shipped smoke checks.
  */
 function makeFixture(overrides: { releaseYaml?: string } = {}): Fixture {
   const id = fixtures++;
@@ -138,11 +138,117 @@ function makeFixture(overrides: { releaseYaml?: string } = {}): Fixture {
 function runCheck(fixture: Fixture) {
   return spawnSync(fixture.check, [], {
     cwd: fixture.cwd,
-    env: { PATH: process.env.PATH ?? "", HOME: fixture.cwd, TERM: "dumb" },
+    env: {
+      PATH: `${join(fixture.root, "bin")}:${process.env.PATH ?? ""}`,
+      HOME: fixture.cwd,
+      TERM: "dumb",
+    },
     encoding: "utf8",
     timeout: SPAWN_TEST_TIMEOUT_MS,
   });
 }
+
+function fixtureKeyBody(): string {
+  const match = /^CHECK_KEY="mar_live_([A-Za-z0-9_-]{32})"$/m.exec(
+    readFileSync(SHIPPED_CHECK, "utf8"),
+  );
+  if (!match?.[1]) throw new Error("bin/check: synthetic CHECK_KEY assignment not found");
+  return match[1];
+}
+
+const CHECK_KEY_BODY = fixtureKeyBody();
+const LEAK_DIAGNOSTIC = "bin/check: ./dist/claudes.js doctor leaked key bytes";
+
+/** Never include the matched material in a test failure, even if the guard regresses. */
+function assertSafeDiagnostics(output: string): void {
+  let leaked = output.includes(`mar_live_${CHECK_KEY_BODY}`);
+  for (let i = 0; i <= CHECK_KEY_BODY.length - 8; i++) {
+    leaked ||= output.includes(CHECK_KEY_BODY.slice(i, i + 8));
+  }
+  expect(leaked).toBe(false);
+}
+
+/** No build, recursive test suite, network, or real CLI: only the shipped shell assertions. */
+function makeArtifactFixture(stdout: string, stderr: string): Fixture {
+  const fixture = makeFixture();
+  for (const [name, script] of [
+    ["bun", "#!/bin/sh\nexit 0\n"],
+    ["uname", "#!/bin/sh\necho FixtureOS\n"],
+  ]) {
+    if (name === undefined || script === undefined) throw new Error("invalid tool stub");
+    const path = join(fixture.root, "bin", name);
+    writeFileSync(path, script);
+    chmodSync(path, 0o755);
+  }
+  writeFileSync(join(fixture.root, "package.json"), JSON.stringify({ version: "0.0.0" }));
+  writeFileSync(join(fixture.root, "doctor-output.json"), JSON.stringify({ stdout, stderr }));
+  mkdirSync(join(fixture.root, "dist"));
+  const cli = join(fixture.root, "dist", "claudes.js");
+  writeFileSync(
+    cli,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.join(__dirname, "..");
+const config = path.join(process.env.XDG_CONFIG_HOME || "", "claudes", "config.json");
+switch (process.argv[2]) {
+  case "--version": console.log("0.0.0"); break;
+  case "login": console.error("usage"); process.exitCode = 64; break;
+  case "doctor": {
+    if (fs.existsSync(config)) {
+      const output = JSON.parse(fs.readFileSync(path.join(root, "doctor-output.json"), "utf8"));
+      process.stdout.write(output.stdout);
+      process.stderr.write(output.stderr);
+    } else console.log("FAIL no config");
+    process.exitCode = 1;
+    break;
+  }
+  case "key": process.stdout.write(JSON.parse(fs.readFileSync(config, "utf8")).key); break;
+  default:
+    console.error("no claudes config: run \u0060claudes login --url <router>\u0060");
+    process.exitCode = 78;
+}
+`,
+  );
+  chmodSync(cli, 0o755);
+  return fixture;
+}
+
+describe("bin/check keyed doctor artifact assertion", () => {
+  for (const stream of ["stdout", "stderr"] as const) {
+    for (let i = 0; i <= CHECK_KEY_BODY.length - 8; i++) {
+      test(
+        `rejects prefix-free window ${i} on ${stream}`,
+        () => {
+          const fragment = CHECK_KEY_BODY.slice(i, i + 8);
+          const fixture = makeArtifactFixture(
+            stream === "stdout" ? fragment : "",
+            stream === "stderr" ? fragment : "",
+          );
+          const res = runCheck(fixture);
+          assertSafeDiagnostics(res.stdout + res.stderr);
+          expect(res.error === undefined).toBe(true);
+          expect(res.status).toBe(1);
+          expect(res.stderr === `${LEAK_DIAGNOSTIC}\n`).toBe(true);
+        },
+        SPAWN_TEST_TIMEOUT_MS,
+      );
+    }
+  }
+
+  test(
+    "permits safe output including the redacted display prefix",
+    () => {
+      const res = runCheck(makeArtifactFixture("PASS config mar_live_…\n", "FAIL router\n"));
+      assertSafeDiagnostics(res.stdout + res.stderr);
+      expect(res.error === undefined).toBe(true);
+      expect(res.status).toBe(0);
+      expect(res.stderr === "").toBe(true);
+      expect(res.stdout.includes("skipping the pty refusal check")).toBe(true);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+});
 
 describe("bin/check precondition classification", () => {
   test(
