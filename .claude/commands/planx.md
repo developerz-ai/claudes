@@ -21,6 +21,10 @@ $ARGUMENTS
 
 1. Resolve the directory: `date +%Y %m %d`, then the highest existing `1NN-*` under
    `docs/plans/<YYYY>/<MM>/<DD>/` plus 1, else `101`. Slug kebab-case, 5 words max.
+   The numbering is derived from the day's **committed** directories — an uncommitted
+   plan reserves nothing. Same-day sequence: `101-foo` is written and committed, then
+   `102-<slug>` — a fresh checkout holding only the first committed plan shows `101-foo`,
+   so the next number is `102`.
 2. Explore read-only first — find the patterns to follow and the files to change.
 3. Write `overview.md`: goal (1-2 sentences), context (only the facts the executor needs,
    as `path:line`), the slice files in execution order, done-when, risks.
@@ -37,4 +41,11 @@ $ARGUMENTS
 - **Split by area of work, never by chapter.** A slice boundary is the file-set boundary the
   build fans out on, and that file set is one pull request.
 - **`status.yml` is the only tracker.** No checkboxes in a `.md` — two trackers disagree.
+- **The plan directory is committed output.** `docs/plans/YYYY/MM/DD/1NN-slug/` is added
+  and committed with the change, never left as a local artifact — a plan that stays local
+  dies with the session.
+- **Index every plan page.** Every generated plan page gets a line in `docs/README.md`;
+  the index table says "Add a line when you add a page", and an unindexed plan cannot be found.
+- **No placeholder plans.** Never create a plan solely to make a directory exist — a
+  placeholder is an empty promise in a committed index.
 - **Skip the plan for a one-file fix.** Writing it costs more than the change.
