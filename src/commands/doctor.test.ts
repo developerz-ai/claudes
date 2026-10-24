@@ -185,7 +185,7 @@ describe("runDoctor", () => {
       expect(await runDoctor(["--nonsense"], h.deps)).toBe(64);
       expect(h.out.join("")).toBe("");
       expect(h.err.join("")).toBe(
-        "claudes doctor: unknown argument --nonsense\nusage: claudes doctor [--live]\n",
+        "claudes doctor: unknown argument #1\nusage: claudes doctor [--live]\n",
       );
       assertNoKeyFragment(h.err.join(""), KEY);
       expect(h.calls).toEqual({
@@ -317,19 +317,54 @@ describe("runDoctor", () => {
     }
   });
 
-  test("an unknown argument is a usage error: exit 64, nothing else runs", async () => {
-    const d = drive();
-    try {
-      const { deps: theDeps, out, err } = deps(d);
-      const code = await runDoctor(["--nonsense"], theDeps);
-      expect(code).toBe(64);
-      expect(err.join("")).toContain("unknown argument --nonsense");
-      expect(err.join("")).toContain("usage: claudes doctor [--live]");
-      expect(out.join("")).toBe("");
-    } finally {
-      rmSync(d.home, { recursive: true, force: true });
+  const rejectedArgs = [
+    "--nonsense",
+    "doctor-sensitive-sentinel-7d39",
+    KEY,
+    KEY.slice(9, 25),
+    "--token=doctor-sensitive-sentinel-7d39",
+    `--token=${KEY}`,
+    "doctor-escape-\u001b[31m-sentinel",
+    "doctor-osc-\u001b]0;sentinel\u0007",
+    "doctor-return-\r-sentinel",
+    "doctor-newline-\n-sentinel",
+    "doctor-tab-\t-sentinel",
+    "doctor-backspace-\b-sentinel",
+    "doctor-delete-\u007f-sentinel",
+    "doctor-null-\0-sentinel",
+  ];
+  for (const prefix of [[], ["--live"]]) {
+    for (const [index, value] of rejectedArgs.entries()) {
+      test(`unknown argument case ${index} at position ${prefix.length + 1} stops all checks`, async () => {
+        const d = drive();
+        try {
+          const h = verboseFetchHarness(d, undefined);
+          expect(await runDoctor([...prefix, value, "--also-invalid"], h.deps)).toBe(64);
+          expect(h.out.join("")).toBe("");
+          const text = h.err.join("");
+          expect(text).toBe(
+            `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live]\n`,
+          );
+          expect(text).not.toContain(value);
+          for (const byte of [0, 7, 8, 9, 13, 27, 127]) {
+            expect(text).not.toContain(String.fromCharCode(byte));
+          }
+          assertNoKeyFragment(text + h.out.join(""), KEY);
+          expect(h.calls).toEqual({
+            gets: 0,
+            posts: 0,
+            loads: 0,
+            probes: 0,
+            reads: 0,
+            resolves: 0,
+            temps: 0,
+          });
+        } finally {
+          rmSync(d.home, { recursive: true, force: true });
+        }
+      });
     }
-  });
+  }
 
   test("a managed-settings conflict FAILs the run", async () => {
     const d = drive();
