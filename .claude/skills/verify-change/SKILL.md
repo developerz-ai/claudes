@@ -23,7 +23,7 @@ everywhere.
 |------|---------|------------|
 | install | `bin/setup` | `bun install --frozen-lockfile`, skipped when `node_modules` already holds every pin `bun.lock` declares |
 | run | `bin/dev` | true — on developerz.ai runs, start it with code_bash_background when you need a running stack |
-| prove | `bin/check` | bin/check |
+| prove | `bin/check` | `bin/check-bun-versions` (bun-pin agreement) → biome lint (`--error-on-warnings`) → `tsc` on both tsconfigs (`tsconfig.json`, `tsconfig.build.json`) → `bun test` → `bun scripts/build.ts` → shebang / `--version` / exit-code smoke on the built `dist/claudes.js` |
 | stop | `bin/stop` | true — on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself |
 
 ## Rules
