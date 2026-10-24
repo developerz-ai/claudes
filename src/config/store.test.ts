@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import type { Config } from "./schema";
 import { ConfigError, InsecureConfigError, readConfig, writeConfig } from "./store";
 
@@ -24,8 +25,8 @@ let path: string;
 function sampleConfig(overrides: Partial<Config> = {}): Config {
   return {
     version: 1,
-    baseUrl: "https://router.example.test",
-    key: "mar_live_TESTKEYabcdef0123456789abcdefghi",
+    baseUrl: ROUTER,
+    key: KEY,
     tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
     ...overrides,
   };

@@ -8,11 +8,10 @@ import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import { BENIGN_USE_TOGGLES, PROVIDER_SWITCHES } from "../launch/provider-switches";
 import { buildSettings } from "../launch/settings";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { runKey } from "./key";
 
-const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
-const ROUTER = "https://router.example.test";
 const SELF = { nodePath: "/usr/local/bin/node", scriptPath: "/opt/claudes/bin/claudes.js" };
 
 let home: string;

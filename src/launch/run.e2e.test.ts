@@ -18,12 +18,11 @@ import { configDir, configFile, settingsFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { ROUTER_UNREACHABLE_MESSAGE } from "./preflight";
 import { type Child, CLAUDE_NOT_FOUND_MESSAGE, run, type SignalWiring, type SpawnFn } from "./run";
 
-const ROUTER = "https://router.example.test";
-const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
 /** Explicit timeout for every test that spawns a child; the default is too tight under load. */
 const SPAWN_TEST_TIMEOUT_MS = 30_000;
 

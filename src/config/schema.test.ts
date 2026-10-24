@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { type Config, configSchema, keySchema, ROUTER_KEY_PATTERN } from "./schema";
 
 function sampleConfig(overrides: Partial<Config> = {}): Config {
   return {
     version: 1,
-    baseUrl: "https://router.example.test",
-    key: "mar_live_SOMEKEYabcdef0123456789abcdefghi",
+    baseUrl: ROUTER,
+    key: KEY,
     tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
     ...overrides,
   };

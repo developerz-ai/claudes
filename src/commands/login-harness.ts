@@ -1,11 +1,11 @@
 import { configDir, configFile } from "../config/paths";
 import type { FetchLike } from "../router/client";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import type { LoginDeps } from "./login";
 
 /** Shared fixtures for the login test files; deliberately framework-free. */
-export const ROUTER = "https://router.example.test";
-export const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
+export { KEY, ROUTER };
 
 export interface StubOptions {
   healthStatus?: number;

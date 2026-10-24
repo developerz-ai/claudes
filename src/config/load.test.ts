@@ -2,18 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { loadConfig, MISSING_CONFIG_MESSAGE } from "./load";
 import { configDir, configFile } from "./paths";
 import type { Config } from "./schema";
 import { writeConfig } from "./store";
 
-const KEY = "mar_live_TESTKEYabcdef0123456789abcdefghi";
-
 function sampleConfig(overrides: Partial<Config> = {}): Config {
   return {
     version: 1,
-    baseUrl: "https://router.example.test",
+    baseUrl: ROUTER,
     key: KEY,
     tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
     ...overrides,

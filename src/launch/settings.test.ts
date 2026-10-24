@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import type { Env } from "../config/paths";
 import type { Config } from "../config/schema";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { PROVIDER_SWITCHES } from "./provider-switches";
 import {
@@ -17,8 +18,8 @@ const SELF = { nodePath: "/usr/local/bin/node", scriptPath: "/opt/claudes/bin/cl
 function config(overrides: Partial<Config> = {}): Config {
   return {
     version: 1,
-    baseUrl: "https://router.example.test",
-    key: "mar_live_FAKEKEYabcdef0123456789abcdefghi",
+    baseUrl: ROUTER,
+    key: KEY,
     tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
     ...overrides,
   };
