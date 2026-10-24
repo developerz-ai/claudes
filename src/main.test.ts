@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { scrub } from "./router/errors";
+import { assertNoKeyFragment } from "./test-support/redact";
 import { VERSION } from "./version";
 
 /**
@@ -105,15 +106,41 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expectNoKeyMaterial(res.stderr);
   });
 
-  test("doctor: the argv.slice(1) handoff names the offending argument", () => {
-    const res = runMain(["doctor", "--nonsense"]);
-    expect(res.status).toBe(64);
-    // doctor names the argument it was handed, so this text is only possible
-    // when runDoctor received exactly ["--nonsense"].
-    expect(res.stderr).toContain("claudes doctor: unknown argument --nonsense");
-    expect(res.stdout).toBe("");
-    expectNoKeyMaterial(res.stderr);
-  });
+  const doctorKey = `mar_live_${"SyntheticDoctorKeyBody0123456789AB"}`;
+  const rejectedDoctorArgs = [
+    "--nonsense",
+    "doctor-sensitive-sentinel-7d39",
+    doctorKey,
+    doctorKey.slice(9, 25),
+    "--token=doctor-sensitive-sentinel-7d39",
+    `--token=${doctorKey}`,
+    "doctor-escape-\u001b[31m-sentinel",
+    "doctor-osc-\u001b]0;sentinel\u0007",
+    "doctor-return-\r-sentinel",
+    "doctor-newline-\n-sentinel",
+    "doctor-tab-\t-sentinel",
+    "doctor-backspace-\b-sentinel",
+    "doctor-delete-\u007f-sentinel",
+  ];
+  for (const prefix of [[], ["--live"]]) {
+    for (const [index, value] of rejectedDoctorArgs.entries()) {
+      test(`doctor handoff case ${index} reports position ${prefix.length + 1} without input`, () => {
+        const res = runMain(["doctor", ...prefix, value]);
+        expect(res.status).toBe(64);
+        // Positions exclude the command word; #2 also proves --live was accepted.
+        expect(res.stderr).toBe(
+          `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live]\n`,
+        );
+        expect(res.stdout).toBe("");
+        expect(res.stderr).not.toContain(value);
+        for (const byte of [7, 8, 9, 13, 27, 127]) {
+          expect(res.stderr).not.toContain(String.fromCharCode(byte));
+        }
+        assertNoKeyFragment(res.stdout + res.stderr, doctorKey);
+        expectNoKeyMaterial(res.stderr);
+      });
+    }
+  }
 
   test("doctor with no config: exit 1 and a [FAIL] line", () => {
     const res = runMain(["doctor"]);

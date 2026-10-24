@@ -52,12 +52,12 @@ export interface DoctorDeps {
  */
 export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Promise<number> {
   let live = false;
-  for (const arg of argv) {
+  for (const [index, arg] of argv.entries()) {
     if (arg === "--live") {
       live = true;
       continue;
     }
-    deps.stderr(scrub(`claudes doctor: unknown argument ${arg}\n${USAGE}\n`));
+    deps.stderr(scrub(`claudes doctor: unknown argument #${index + 1}\n${USAGE}\n`));
     return 64;
   }
 
