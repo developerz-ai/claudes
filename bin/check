@@ -12,11 +12,15 @@ cd "$(dirname "$0")/.."
 bin/check-bun-versions
 
 # Never use bunx here: it silently auto-installs the unrelated npm packages
-# "biome" and "tsc". Require the pinned devDependencies instead.
+# "biome" and "tsc". Require the pinned devDependencies instead. A missing
+# tool is a gate resource being unreachable, not the change being red: the
+# exit-code contract (.claude/skills/verify-change/SKILL.md) reserves 75 for
+# "a resource the gate NEEDS is unreachable — it refused to grade", where the
+# platform blames the environment; exit 1 would tell it the change failed.
 for tool in biome tsc; do
   if [ ! -x "node_modules/.bin/$tool" ]; then
-    echo "bin/check: node_modules/.bin/$tool not found — run bun install first" >&2
-    exit 1
+    echo "bin/check: node_modules/.bin/$tool not found — run bin/setup first" >&2
+    exit 75
   fi
 done
 
