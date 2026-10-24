@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KEY, ROUTER } from "../test-support/fixtures";
@@ -35,11 +35,15 @@ afterEach(() => {
 
 describe("loadConfig", () => {
   test("no config yet: the missing-config remedy and exit 78", () => {
-    expect(loadConfig({ HOME: home })).toEqual({
+    const result = loadConfig({ HOME: home });
+    expect(result).toEqual({
       ok: false,
       exitCode: 78,
       message: MISSING_CONFIG_MESSAGE,
     });
+    if (!result.ok) {
+      assertNoKeyFragment(result.message, KEY);
+    }
   });
 
   test("no usable HOME or XDG_CONFIG_HOME is also just a missing config", () => {
@@ -49,6 +53,39 @@ describe("loadConfig", () => {
         exitCode: 78,
         message: MISSING_CONFIG_MESSAGE,
       });
+    }
+  });
+
+  test("a dangling config symlink: replacement remedy and exit 78, not missing config", () => {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+    symlinkSync(join(dir, "missing-target.json"), path);
+
+    const result = loadConfig({ HOME: home });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(78);
+      expect(result.message).toContain("is a symbolic link");
+      expect(result.message).toContain('run "claudes login" again to replace it');
+      expect(result.message).not.toBe(MISSING_CONFIG_MESSAGE);
+      assertNoKeyFragment(result.message, KEY);
+    }
+  });
+
+  test("a non-directory ancestor: directory diagnostic and exit 78, not missing config", () => {
+    const ancestor = join(home, "not-a-directory");
+    writeFileSync(ancestor, "", { mode: 0o600 });
+    const xdg = join(ancestor, "config");
+    const blockedDir = configDir({ XDG_CONFIG_HOME: xdg });
+
+    const result = loadConfig({ XDG_CONFIG_HOME: xdg });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(78);
+      expect(result.message).toContain(`cannot read the config directory ${blockedDir} (ENOTDIR)`);
+      expect(result.message).toContain('remove it and re-run "claudes login"');
+      expect(result.message).not.toBe(MISSING_CONFIG_MESSAGE);
+      assertNoKeyFragment(result.message, KEY);
     }
   });
 
