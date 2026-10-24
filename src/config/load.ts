@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { configDir, configFile, type Env } from "./paths";
 import type { Config } from "./schema";
 import { ConfigError, readConfig } from "./store";
@@ -41,10 +41,11 @@ export function loadConfig(env: Env): LoadResult {
 /** Distinguishes "nothing was saved yet" from "what was saved is unusable". */
 function configExists(path: string): boolean {
   try {
-    statSync(path);
+    lstatSync(path);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // Only absence bypasses readConfig; other failures need its refusal diagnostics.
+    return (err as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 
