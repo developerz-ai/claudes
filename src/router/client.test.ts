@@ -20,6 +20,7 @@ interface StubOptions {
   modelsBody?: string;
   failWith?: Error;
   healthResponse?: Response;
+  modelsResponse?: Response;
 }
 
 function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; calls: Call[] } {
@@ -36,6 +37,9 @@ function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; calls: Ca
           status: options.healthStatus ?? 200,
         })
       );
+    }
+    if (options.modelsResponse !== undefined) {
+      return options.modelsResponse;
     }
     return new Response(
       options.modelsBody ??
@@ -420,7 +424,35 @@ describe("health", () => {
       expect(err).toBeInstanceOf(RouterError);
       const message = (err as RouterError).message;
       expect(message).toBe(`GET ${BASE}/healthz body could not be read (Error)`);
+      // An unrelated body-read failure stays an unreadable body — never a timeout.
+      expect((err as RouterError).timedOut).toBe(false);
       assertNoKeyFragment(message, KEY);
+    }
+  });
+
+  test("a timeout-shaped body-read rejection is the injected-budget timeout", async () => {
+    // A stall after the headers classifies exactly like a pre-headers stall:
+    // same timedOut flag, same message shape, same budget (25 ms → "0.025s").
+    // Both abort-shape names matter — see isTimeoutName's two classification
+    // sites in client.ts.
+    for (const name of ["TimeoutError", "AbortError"]) {
+      const failure = new Error("the operation timed out");
+      failure.name = name;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(failure);
+        },
+      });
+      const { fetchImpl } = stubFetch({ healthResponse: new Response(stream, { status: 200 }) });
+      try {
+        await health(BASE, fetchImpl, 25);
+        throw new Error("expected health to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(RouterError);
+        expect((err as RouterError).timedOut).toBe(true);
+        expect((err as RouterError).message).toBe(`GET ${BASE}/healthz timed out after 0.025s`);
+        assertNoKeyFragment((err as RouterError).message, KEY);
+      }
     }
   });
 });
@@ -474,6 +506,30 @@ describe("models", () => {
       expect(message).toBe(`could not reach ${BASE}/v1/models (TypeError)`);
       expect(message).not.toContain(KEY);
       assertNoKeyFragment(message, KEY);
+    }
+  });
+
+  test("a timeout-shaped body-read rejection is the injected-budget timeout", async () => {
+    // Same classification as health: the budget threads through to the body
+    // read, and both abort-shape names count.
+    for (const name of ["TimeoutError", "AbortError"]) {
+      const failure = new Error("the operation timed out");
+      failure.name = name;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(failure);
+        },
+      });
+      const { fetchImpl } = stubFetch({ modelsResponse: new Response(stream, { status: 200 }) });
+      try {
+        await models(BASE, KEY, fetchImpl, 25);
+        throw new Error("expected models to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(RouterError);
+        expect((err as RouterError).timedOut).toBe(true);
+        expect((err as RouterError).message).toBe(`GET ${BASE}/v1/models timed out after 0.025s`);
+        assertNoKeyFragment((err as RouterError).message, KEY);
+      }
     }
   });
 });

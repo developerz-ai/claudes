@@ -52,7 +52,7 @@ export async function health(
   if (res.status !== 200) {
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
-  const body = await parseJson(endpoint, res);
+  const body = await parseJson(endpoint, res, timeoutMs);
   if (
     typeof body !== "object" ||
     body === null ||
@@ -80,7 +80,7 @@ export async function models(
   if (res.status !== 200) {
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
-  const body = await parseJson(endpoint, res);
+  const body = await parseJson(endpoint, res, timeoutMs);
   if (
     typeof body !== "object" ||
     body === null ||
@@ -119,10 +119,26 @@ async function request(
   }
 }
 
-function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterError {
+/**
+ * The abort-shape names a signal-budget expiry can surface as — `TimeoutError`
+ * from `AbortSignal.timeout` itself, `AbortError` from an aborted read. Both
+ * mean the budget expired, so every timeout classification must accept
+ * exactly these two names, together: pre-headers in `unreachable`, mid-body
+ * in `parseJson`.
+ */
+function isTimeoutName(err: unknown): boolean {
   const name = errorName(err);
-  if (name === "TimeoutError" || name === "AbortError") {
-    return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`, undefined, true);
+  return name === "TimeoutError" || name === "AbortError";
+}
+
+/** The one timeout RouterError, so both classification sites stay byte-identical. */
+function timeoutError(endpoint: string, timeoutMs: number): RouterError {
+  return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`, undefined, true);
+}
+
+function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterError {
+  if (isTimeoutName(err)) {
+    return timeoutError(endpoint, timeoutMs);
   }
   // Flagged by errno only, so no underlying message text decides the hint.
   return new RouterError(
@@ -226,13 +242,19 @@ function causeCodeOf(err: Error): string | undefined {
   }
 }
 
-async function parseJson(endpoint: string, res: Response): Promise<unknown> {
+async function parseJson(endpoint: string, res: Response, timeoutMs: number): Promise<unknown> {
   let text: string;
   try {
     text = await readBodyCapped(endpoint, res);
   } catch (err) {
     if (isRouterError(err)) {
       throw err;
+    }
+    // The signal budget guards the body read too: a stall after the headers
+    // is the same timeout as a pre-headers stall — same message, budget and
+    // flag — not a degraded "body could not be read".
+    if (isTimeoutName(err)) {
+      throw timeoutError(endpoint, timeoutMs);
     }
     throw new RouterError(`GET ${endpoint} body could not be read (${errorName(err)})`);
   }
