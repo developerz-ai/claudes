@@ -23,7 +23,7 @@ const MODEL_SUFFIX = "[1m]";
  */
 const KEY_ON_ARGV = new RegExp(`${ROUTER_KEY_PREFIX}[A-Za-z0-9_-]{8,}`);
 
-export function looksLikeRouterKey(token: string | undefined): boolean {
+function looksLikeRouterKey(token: string | undefined): boolean {
   return token !== undefined && KEY_ON_ARGV.test(token);
 }
 
