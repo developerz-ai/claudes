@@ -6,11 +6,11 @@ import { configDir, configFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { type Child, run, type SignalWiring, type SpawnFn } from "./run";
 
 /** Shared fixtures for the run test files; the spawn seam is always a stub. */
-export const ROUTER = "https://router.example.test";
-export const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
+export { KEY, ROUTER };
 export const NODE = "/usr/local/bin/node";
 export const SCRIPT = "/opt/claudes/bin/claudes.js";
 

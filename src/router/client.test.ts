@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { errorName, type FetchLike, health, models, RouterError, scrub } from "./client";
 
-const BASE = "https://router.example.test";
-const KEY = "mar_live_TESTKEYabcdef0123456789abcdefghi";
+const BASE = ROUTER;
 const CAP = 2 ** 20;
 
 interface Call {

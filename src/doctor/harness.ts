@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import type { Config } from "../config/schema";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import type { RunProc } from "./run-proc";
 
 /** Shared fixtures for the doctor test files; nothing here touches a network. */
-export const ROUTER = "https://router.example.test";
-export const KEY = "mar_live_DOCTORTEST0123456789abcdefghijkl";
+export { KEY, ROUTER };
 /** A second, wrong credential: what a competing source would hand to claude. */
 export const FOREIGN_CREDENTIAL = "sk-ant-api03-someone-elses";
 

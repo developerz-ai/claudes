@@ -4,9 +4,9 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configDir, configFile } from "../config/paths";
+import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 
-const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
 const MAIN = join(import.meta.dir, "../main.ts");
 const SPAWN_TEST_TIMEOUT_MS = 30_000;
 
@@ -21,7 +21,7 @@ function scratchHome(): string {
     path,
     JSON.stringify({
       version: 1,
-      baseUrl: "https://router.example.test",
+      baseUrl: ROUTER,
       key: KEY,
       tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
     }),

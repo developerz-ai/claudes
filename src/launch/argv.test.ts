@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { KEY } from "../test-support/fixtures";
 import { buildArgv } from "./argv";
 
 const SETTINGS = "/home/dev/.config/claudes/settings.json";
-const KEY = "mar_live_FAKEKEYabcdef0123456789abcdefghi";
 
 describe("buildArgv", () => {
   test("prepends --settings with the generated settings path", () => {
