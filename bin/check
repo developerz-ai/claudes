@@ -136,9 +136,10 @@ chmod 600 "$scratch/keyxdg/claudes/config.json"
 
 # doctor against the KEYED config: a real key is loaded into the process now,
 # so this is the leak guard that can actually fail. The synthetic router is
-# unreachable, so the run must exit non-zero — and no key bytes may appear on
-# either stream. (The config check prints the "mar_live_…" display prefix, so
-# the grep requires eight real key characters after the prefix.)
+# unreachable, so the run must exit non-zero. Reject every overlapping eight-byte
+# window of the key body in the combined streams, even without its prefix. The
+# redacted "mar_live_…" display prefix is safe. Read the key from the config path,
+# never argv, and emit only a fixed diagnostic, never the matched bytes.
 rc=0
 env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" \
   ./dist/claudes.js doctor >"$scratch/doctor-keyed.out" 2>&1 || rc=$?
@@ -146,10 +147,25 @@ if [ "$rc" -eq 0 ]; then
   echo "bin/check: ./dist/claudes.js doctor exited 0 against an unreachable router, expected non-zero" >&2
   exit 1
 fi
-if grep -q "mar_live_[A-Za-z0-9_-]\{8\}" "$scratch/doctor-keyed.out"; then
-  echo "bin/check: ./dist/claudes.js doctor leaked key bytes" >&2
-  exit 1
-fi
+node - "$scratch/keyxdg/claudes/config.json" "$scratch/doctor-keyed.out" <<'NODE'
+const fs = require("node:fs");
+try {
+  const { key } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  const output = fs.readFileSync(process.argv[3], "utf8");
+  const body = key.slice("mar_live_".length);
+  let leaked = /mar_live_[A-Za-z0-9_-]{8}/.test(output);
+  for (let i = 0; i <= body.length - 8; i++) {
+    leaked ||= output.includes(body.slice(i, i + 8));
+  }
+  if (leaked) {
+    console.error("bin/check: ./dist/claudes.js doctor leaked key bytes");
+    process.exitCode = 1;
+  }
+} catch {
+  console.error("bin/check: could not check doctor output for key bytes");
+  process.exitCode = 1;
+}
+NODE
 
 rc=0
 env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" \
