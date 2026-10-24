@@ -102,6 +102,61 @@ describe("run: router pre-flight", () => {
     expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
   });
 
+  /**
+   * A 200 Response whose body stream errors with a TimeoutError-named Error:
+   * the headers have arrived, the body never does — the shape a body read
+   * rejects with when the probe's AbortSignal fires mid-read. The client must
+   * classify it exactly like a pre-headers timeout, so the retry and the
+   * note below fire for it too.
+   */
+  function stalledBodyFetch(behavior: (call: number) => "stall" | "healthy"): FetchLike {
+    let calls = 0;
+    return async () => {
+      calls += 1;
+      if (behavior(calls) === "stall") {
+        const stall = new Error("the operation timed out");
+        stall.name = "TimeoutError";
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(stall);
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });
+    };
+  }
+
+  test("a body stalling after the headers is retried like a timeout, and a healthy retry launches", async () => {
+    let attempts = 0;
+    const code = await h.drive(["-p", "hi"], {
+      fetch: stalledBodyFetch((call) => {
+        attempts = call;
+        return call === 1 ? "stall" : "healthy";
+      }),
+      spawnScript: (child) => child.emit("exit", 0, null),
+    });
+    expect(code).toBe(0);
+    expect(attempts).toBe(2); // the post-headers stall was retried, not fatal
+    expect(h.spawnCalls.length).toBe(1);
+    expect(errText()).toBe(""); // and the timeout note never printed
+  });
+
+  test("a body stalling on both attempts: exit 69, two fetches, no spawn, the timeout note", async () => {
+    let calls = 0;
+    const alwaysStall = stalledBodyFetch(() => {
+      calls += 1;
+      return "stall";
+    });
+    expect(await h.drive(["-p", "hi"], { fetch: alwaysStall })).toBe(69);
+    expect(calls).toBe(2);
+    expect(h.spawnCalls).toEqual([]);
+    expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
+    assertNoKeyFragment(errText(), KEY);
+  });
+
   test("a proxy set and a double timeout: both notes, proxy note first", async () => {
     const alwaysTimeout: FetchLike = async () => {
       const err = new Error("the probe timed out");
