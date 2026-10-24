@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertNoKeyFragment } from "../test-support/redact";
 import { login } from "./login";
 import { configPath, harness, KEY, ROUTER } from "./login-harness";
 import { InputTooLongError, StdinClosedError } from "./login-input";
@@ -17,6 +18,88 @@ afterEach(() => {
 });
 
 describe("login environment", () => {
+  const refusal =
+    "claudes login: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed";
+  const truthyValues = ["1", "true", "TRUE", "yes", " ", "login-secret-sentinel-927", KEY];
+  const falsyValues = [undefined, "", "0", "false", "FALSE", "False"];
+
+  for (const stdinIsTTY of [false, true]) {
+    for (const [index, value] of truthyValues.entries()) {
+      test(`verbose fetch refuses before I/O (TTY=${stdinIsTTY}, case ${index})`, async () => {
+        const h = harness(home, {
+          env: { HOME: home, BUN_CONFIG_VERBOSE_FETCH: value },
+          stdinIsTTY,
+          ttyKey: KEY,
+        });
+        let secretReads = 0;
+        let stdinReads = 0;
+        const result = await login(["--url", ROUTER], {
+          ...h.deps,
+          readSecret: async (prompt) => {
+            secretReads++;
+            return h.deps.readSecret(prompt);
+          },
+          readStdinLine: async () => {
+            stdinReads++;
+            return h.deps.readStdinLine();
+          },
+        });
+        expect(result).toEqual({ ok: false, exitCode: 64, message: refusal });
+        expect(h.stdout).toEqual([]);
+        expect(h.prompts).toEqual([]);
+        expect(secretReads).toBe(0);
+        expect(stdinReads).toBe(0);
+        expect(h.fetchCalls).toEqual([]);
+        expect(h.writeConfigCalls).toEqual([]);
+        expect(existsSync(configPath(home))).toBe(false);
+        const output = `${result.ok ? "" : result.message}\n${h.stdout.join("\n")}`;
+        assertNoKeyFragment(output, KEY);
+        if (value !== " ") {
+          expect(output).not.toContain(value);
+        }
+      });
+    }
+
+    for (const [index, value] of falsyValues.entries()) {
+      test(`verbose fetch off retains login (TTY=${stdinIsTTY}, case ${index})`, async () => {
+        const h = harness(home, {
+          env: { HOME: home, BUN_CONFIG_VERBOSE_FETCH: value },
+          stdinIsTTY,
+          ttyKey: KEY,
+        });
+        const result = await login(["--url", ROUTER], h.deps);
+        expect(result.ok).toBe(true);
+        expect(h.fetchCalls).toEqual([`${ROUTER}/healthz`, `${ROUTER}/v1/models`]);
+        expect(h.writeConfigCalls).toHaveLength(1);
+        expect(h.stdout.join("\n")).toContain("sonnet claude-sonnet-4-5");
+        assertNoKeyFragment(h.stdout.join("\n"), KEY);
+      });
+    }
+  }
+
+  test("verbose fetch refusal precedes config resolution", async () => {
+    const h = harness(home, { env: { BUN_CONFIG_VERBOSE_FETCH: "1" } });
+    expect(await login(["--url", ROUTER], h.deps)).toEqual({
+      ok: false,
+      exitCode: 64,
+      message: refusal,
+    });
+    expect(h.fetchCalls).toEqual([]);
+    expect(h.writeConfigCalls).toEqual([]);
+  });
+
+  test("argv errors take precedence over verbose fetch refusal", async () => {
+    const h = harness(home, { env: { BUN_CONFIG_VERBOSE_FETCH: KEY } });
+    const result = await login([], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 64 });
+    const message = result.ok ? "" : (result.message ?? "");
+    expect(message).toContain("usage: claudes login --url");
+    expect(message).not.toContain("BUN_CONFIG_VERBOSE_FETCH");
+    assertNoKeyFragment(`${message}\n${h.stdout.join("\n")}`, KEY);
+    expect(h.fetchCalls).toEqual([]);
+    expect(h.writeConfigCalls).toEqual([]);
+  });
+
   test("resolves the config path first: no HOME means exit 78 before any prompt or fetch", async () => {
     const h = harness(home, { env: {} });
     const result = await login(["--url", ROUTER], h.deps);

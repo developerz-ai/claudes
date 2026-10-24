@@ -12,6 +12,7 @@ import { checkWiring } from "../doctor/checks/wiring";
 import { anyFailed, type CheckResult } from "../doctor/results";
 import { type RunProc, realRunProc } from "../doctor/run-proc";
 import type { RouterStub } from "../doctor/stub-server";
+import { isTruthyToggle } from "../launch/provider-switches";
 import { resolveExecutable, runningScriptPath } from "../launch/run";
 import type { FetchLike } from "../router/client";
 import { scrub } from "../router/errors";
@@ -57,6 +58,15 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
       continue;
     }
     deps.stderr(scrub(`claudes doctor: unknown argument ${arg}\n${USAGE}\n`));
+    return 64;
+  }
+
+  if (isTruthyToggle(deps.env.BUN_CONFIG_VERBOSE_FETCH)) {
+    deps.stderr(
+      scrub(
+        "claudes doctor: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed\n",
+      ),
+    );
     return 64;
   }
 

@@ -76,7 +76,132 @@ function deps(
   };
 }
 
+function verboseFetchHarness(d: Drive, value: string | undefined) {
+  const fake = fakeClaudeProc();
+  const h = deps(d, { runProc: fake.runProc });
+  const calls = { gets: 0, posts: 0, loads: 0, probes: 0, reads: 0, resolves: 0, temps: 0 };
+  const config = sampleConfig();
+  const theDeps: DoctorDeps = {
+    ...h.deps,
+    env: { ...d.env, BUN_CONFIG_VERBOSE_FETCH: value },
+    fetch: async (url, init) => {
+      calls.gets += 1;
+      if (url === `${config.baseUrl}/healthz`) {
+        return healthyRouter(url, init);
+      }
+      expect(url).toBe(`${config.baseUrl}/v1/models`);
+      expect(init.headers.Authorization).toBe(`Bearer ${KEY}`);
+      return healthyRouter(url, init);
+    },
+    postFetch: async (url, init) => {
+      calls.posts += 1;
+      expect(url).toBe(`${config.baseUrl}/v1/messages`);
+      expect(init.method).toBe("POST");
+      expect(init.headers.authorization).toBe(`Bearer ${KEY}`);
+      return new Response("{}", { status: 200 });
+    },
+    load: (env) => {
+      calls.loads += 1;
+      return loadConfig(env);
+    },
+    runProc: (...args) => {
+      calls.probes += 1;
+      return fake.runProc(...args);
+    },
+    readFile: () => {
+      calls.reads += 1;
+      return undefined;
+    },
+    resolveExecutable: () => {
+      calls.resolves += 1;
+      return CLAUDE;
+    },
+    mkdtemp: () => {
+      calls.temps += 1;
+      return mkdtempSync(join(tmpdir(), "doctor-cmd-probe-"));
+    },
+  };
+  return { ...h, deps: theDeps, calls };
+}
+
 describe("runDoctor", () => {
+  for (const argv of [[], ["--live"]]) {
+    const mode = argv.length === 0 ? "doctor" : "doctor --live";
+    const truthy = ["1", "true", "TRUE", "yes", " ", "doctor-secret-sentinel-94e2", KEY];
+    for (const [index, value] of truthy.entries()) {
+      test(`${mode} refuses verbose fetch truthy case ${index} before any checks`, async () => {
+        const d = drive();
+        try {
+          const h = verboseFetchHarness(d, value);
+          expect(await runDoctor(argv, h.deps)).toBe(64);
+          expect(h.out.join("")).toBe("");
+          const text = h.err.join("");
+          expect(text).toBe(
+            "claudes doctor: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed\n",
+          );
+          assertNoKeyFragment(text, KEY);
+          if (value !== " ") {
+            expect(text).not.toContain(value);
+          }
+          expect(h.calls).toEqual({
+            gets: 0,
+            posts: 0,
+            loads: 0,
+            probes: 0,
+            reads: 0,
+            resolves: 0,
+            temps: 0,
+          });
+        } finally {
+          rmSync(d.home, { recursive: true, force: true });
+        }
+      });
+    }
+
+    for (const [index, value] of [undefined, "", "0", "false", "FALSE", "False"].entries()) {
+      test(`${mode} allows verbose fetch falsy case ${index} with authenticated requests`, async () => {
+        const d = drive();
+        try {
+          const h = verboseFetchHarness(d, value);
+          expect(await runDoctor(argv, h.deps)).toBe(0);
+          expect(h.calls.gets).toBe(2);
+          expect(h.calls.posts).toBe(argv.length === 0 ? 0 : 1);
+          expect(h.calls.loads).toBe(1);
+          expect(h.calls.probes).toBe(2);
+          expect(h.err.join("")).toBe("");
+          expect(h.out.join("")).toContain("[PASS] wiring probe");
+          assertNoKeyFragment(h.out.join("") + h.err.join(""), KEY);
+        } finally {
+          rmSync(d.home, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+
+  test("argument errors take precedence over verbose-fetch refusal", async () => {
+    const d = drive();
+    try {
+      const h = verboseFetchHarness(d, KEY);
+      expect(await runDoctor(["--nonsense"], h.deps)).toBe(64);
+      expect(h.out.join("")).toBe("");
+      expect(h.err.join("")).toBe(
+        "claudes doctor: unknown argument --nonsense\nusage: claudes doctor [--live]\n",
+      );
+      assertNoKeyFragment(h.err.join(""), KEY);
+      expect(h.calls).toEqual({
+        gets: 0,
+        posts: 0,
+        loads: 0,
+        probes: 0,
+        reads: 0,
+        resolves: 0,
+        temps: 0,
+      });
+    } finally {
+      rmSync(d.home, { recursive: true, force: true });
+    }
+  });
+
   test("a full healthy run prints every check and exits 0", async () => {
     const d = drive();
     try {
