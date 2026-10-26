@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { sampleConfig, TIERS } from "../harness";
+import { ROUTER_KEY_PREFIX } from "../../config/schema";
+import { assertNoKeyFragment } from "../../test-support/redact";
+import { KEY, sampleConfig, TIERS } from "../harness";
 import { checkLive, type PostFetch } from "./live";
 
 interface Posted {
@@ -51,6 +53,66 @@ describe("checkLive", () => {
     expect(result.status).toBe("FAIL");
     expect(result.title).toContain("HTTP 503");
     expect(result.title).toContain("req-503");
+  });
+
+  test("a request id carrying the whole router key is withheld, not printed", async () => {
+    const { fetch } = stubPost(
+      () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "x-request-id": sampleConfig().key },
+        }),
+    );
+    const result = await checkLive({ config: sampleConfig(), fetch });
+    expect(result.status).toBe("PASS");
+    expect(result.title).toContain("withheld");
+    expect(result.title).not.toContain(sampleConfig().key);
+    assertNoKeyFragment(result.title, KEY);
+  });
+
+  test("a request id carrying a bare window of the key body is withheld", async () => {
+    // The first 8 characters of the key body, derived from the configured key:
+    // `mar_live_` is 9 characters long, and 8 is the window the leak rule uses.
+    const fragment = sampleConfig().key.slice(9, 17);
+    const { fetch } = stubPost(
+      () => new Response("{}", { status: 200, headers: { "x-request-id": fragment } }),
+    );
+    const result = await checkLive({ config: sampleConfig(), fetch });
+    expect(result.status).toBe("PASS");
+    expect(result.title).not.toContain(fragment);
+    assertNoKeyFragment(result.title, KEY);
+  });
+
+  test("a request id carrying only the bare key prefix is withheld", async () => {
+    // The prefix alone is key material for the doctor: the rest of the key may
+    // lie outside the id. This id carries fewer than 8 body characters, so no
+    // window of the key body matches it — only the prefix rule can withhold it.
+    const id = `${ROUTER_KEY_PREFIX}ZZZZ`;
+    const { fetch } = stubPost(
+      () => new Response("{}", { status: 200, headers: { "x-request-id": id } }),
+    );
+    const result = await checkLive({ config: sampleConfig(), fetch });
+    expect(result.status).toBe("PASS");
+    expect(result.title).toContain("withheld");
+    expect(result.title).not.toContain(id);
+    expect(result.title).not.toContain(ROUTER_KEY_PREFIX);
+    assertNoKeyFragment(result.title, KEY);
+  });
+
+  test("a non-200 with a key-bearing request id FAILs and names no id", async () => {
+    const { fetch } = stubPost(
+      () =>
+        new Response("no", {
+          status: 503,
+          headers: { "x-request-id": sampleConfig().key },
+        }),
+    );
+    const result = await checkLive({ config: sampleConfig(), fetch });
+    expect(result.status).toBe("FAIL");
+    expect(result.title).toContain("HTTP 503");
+    expect(result.title).not.toContain("request id");
+    expect(result.title).not.toContain(sampleConfig().key);
+    assertNoKeyFragment(result.title, KEY);
   });
 
   test("an unreachable router FAILs by error name, never by message", async () => {

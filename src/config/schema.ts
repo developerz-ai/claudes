@@ -13,6 +13,32 @@ export const ROUTER_KEY_PREFIX = "mar_live_";
 export const ROUTER_KEY_PATTERN = /^mar_live_[A-Za-z0-9_-]{32}$/;
 
 /**
+ * How much of the key body counts as a leak: eight characters. Half a key is
+ * still a key, so the rule is a window over the body, not the whole secret.
+ */
+export const KEY_FRAGMENT_WINDOW = 8;
+
+/**
+ * The offset, into the key's body (the characters after `ROUTER_KEY_PREFIX`),
+ * of the first `KEY_FRAGMENT_WINDOW`-character window of that body appearing
+ * in `text`; undefined when the text carries no window of the body. This is
+ * the one implementation of the window rule: the test helper and the doctor's
+ * request-id gate both call it, so the window cannot drift apart. The gate
+ * adds a rule of its own on top — it also treats the bare `mar_live_` prefix
+ * as a leak — while the helper checks the window only, because scrubbed
+ * output legitimately keeps that prefix.
+ */
+export function keyFragmentOffset(text: string, key: string): number | undefined {
+  const body = key.slice(ROUTER_KEY_PREFIX.length);
+  for (let offset = 0; offset + KEY_FRAGMENT_WINDOW <= body.length; offset++) {
+    if (text.includes(body.slice(offset, offset + KEY_FRAGMENT_WINDOW))) {
+      return offset;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Router base URL: `https://` for any host, `http://` only for loopback, and a
  * bare origin only — no path, query, fragment, trailing slash, credentials,
  * whitespace, or an explicit default port (the URL parser silently accepts all
