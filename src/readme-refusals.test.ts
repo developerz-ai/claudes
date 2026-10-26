@@ -4,7 +4,7 @@ import { type DoctorDeps, runDoctor } from "./commands/doctor";
 import { runKey } from "./commands/key";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { cleanup, deadFetch, type Harness, harness, KEY } from "./launch/run-harness";
-import { type FetchLike } from "./router/client";
+import type { FetchLike } from "./router/client";
 import { type RefusalRow, readmeRefusalRows } from "./test-support/readme-table";
 
 /**
