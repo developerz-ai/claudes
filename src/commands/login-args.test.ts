@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TIER_FAMILIES } from "../tiers";
 import { login } from "./login";
 import { parseLoginArgs } from "./login-args";
-import { configPath, harness, KEY, ROUTER } from "./login-harness";
+import { configPath, expectNoKeyLeak, harness, KEY, ROUTER } from "./login-harness";
 
 let home: string;
 
@@ -125,6 +126,66 @@ describe("login argument handling", () => {
     const inlineUrl = parseLoginArgs([`--url=${ROUTER}`]);
     expect(inlineUrl).toEqual({ ok: true, args: { url: ROUTER, overrides: {} } });
   });
+
+  test("accepts undecorated major, minor and dated tier ids for every flag and form", () => {
+    for (const tier of TIER_FAMILIES) {
+      for (const family of TIER_FAMILIES) {
+        for (const version of ["9", "9-8", "9-20260101", "9-8-20260101"]) {
+          const id = `claude-${family}-${version}`;
+          for (const args of [[`--${tier}`, id], [`--${tier}=${id}`]]) {
+            expect(parseLoginArgs(["--url", ROUTER, ...args])).toEqual({
+              ok: true,
+              args: { url: ROUTER, overrides: { [tier]: id } },
+            });
+          }
+        }
+      }
+    }
+  });
+
+  for (const tier of TIER_FAMILIES) {
+    for (const bad of [`claude-${tier}-5[1m]`, `claude-${tier}-5-fast`, `claude-${tier}`, tier]) {
+      for (const inline of [false, true]) {
+        test(`rejects ${tier} override ${bad} (${inline ? "inline" : "next-token"}) before I/O`, async () => {
+          const flag = `--${tier}`;
+          const argv = ["--url", ROUTER, ...(inline ? [`${flag}=${bad}`] : [flag, bad])];
+          const parsed = parseLoginArgs(argv);
+          expect(parsed).toMatchObject({ ok: false, exitCode: 64 });
+          if (parsed.ok) {
+            throw new Error("invalid tier override was accepted");
+          }
+          const message = parsed.message;
+          expect(message.split("\n\n")[0]).toBe(
+            `claudes login: ${flag} is not a valid model id — use an undecorated Claude tier ID`,
+          );
+          if (bad !== tier) {
+            expect(message).not.toContain(bad);
+          }
+          const usage = parseLoginArgs([]);
+          expect(message.split("\n\n").slice(1).join("\n\n")).toBe(usage.ok ? "" : usage.message);
+          for (const stdinIsTTY of [false, true]) {
+            const h = harness(home, { stdinIsTTY });
+            let stdinReads = 0;
+            const result = await login(argv, {
+              ...h.deps,
+              readStdinLine: async () => {
+                stdinReads++;
+                return KEY;
+              },
+            });
+            expect(result).toEqual(parsed);
+            expect(stdinReads).toBe(0);
+            expect(h.prompts).toEqual([]);
+            expect(h.fetchCalls).toEqual([]);
+            expect(h.stdout).toEqual([]);
+            expect(h.writeConfigCalls).toEqual([]);
+            expect(existsSync(configPath(home))).toBe(false);
+            expectNoKeyLeak(h, result);
+          }
+        });
+      }
+    }
+  }
 
   test("rejects an invalid --url before any I/O, without echoing the value", async () => {
     const h = harness(home);
