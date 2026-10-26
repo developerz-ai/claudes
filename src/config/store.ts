@@ -45,9 +45,11 @@ export function writeConfig(path: string, config: Config, hooks: WriteHooks = {}
 
 /**
  * Reads and validates the config at `path`. The file is opened with O_NOFOLLOW
- * (and O_NONBLOCK, so a FIFO at the path cannot hang the open) and every check
- * runs on the fd's own fstat, so a symlink swap or a chmod between the check
- * and the read cannot slide a different file in. Ownership is checked before
+ * (and O_NONBLOCK, so a FIFO at the path cannot hang the open); the file's own
+ * checks — isDirectory, isFile, uid, mode — run on the fd's own fstat, so a
+ * symlink swap or a chmod between the check and the read cannot slide a
+ * different file in. The directory's uid and mode are checked first, by path
+ * (`statSync(dir)`), before the file is opened. Ownership is checked before
  * permissions: a foreign-owned file or directory is replaced, not chmodded.
  */
 export function readConfig(path: string, options: ReadOptions = {}): Config {

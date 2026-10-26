@@ -36,7 +36,7 @@ Bun + TypeScript
 | `src/config/schema.ts` | zod: `ROUTER_KEY_PREFIX`/`ROUTER_KEY_PATTERN`, `baseUrlSchema` (https-only, no creds, bare origin), `configSchema` |
 | `src/config/errors.ts` | `ConfigError` and its `InsecureConfigError` subclass — the vocabulary `config/store.ts` and `config/private-file.ts` raise for every refusal they own (`config/paths.ts` throws a plain `Error`, not one of these); re-exported by `config/store.ts` |
 | `src/config/private-file.ts` | `writePrivateFile`: the one atomic private write (`mkdir 0700` → symlink and ownership refusals → `chmod 0700` → temp `O_EXCL 0600` → write → `fsync` → `fstat` size check → `rename` → dir `fsync`), shared by the config store and the launcher's generated settings file |
-| `src/config/store.ts` | `writeConfig` validates with `configSchema` and delegates the whole atomic write to `writePrivateFile`; `readConfig` opens `O_NOFOLLOW \| O_NONBLOCK` and runs uid and mode checks against the fd's own `fstat` (directory checked before file) |
+| `src/config/store.ts` | `writeConfig` validates with `configSchema` and delegates the whole atomic write to `writePrivateFile`; `readConfig` checks the config directory's uid and mode by a path stat, then opens `O_NOFOLLOW \| O_NONBLOCK` and checks the file's uid and mode against the fd's own `fstat` (directory checked before file) |
 | `src/config/load.ts` | `loadConfig` for the commands that need credentials (the launcher, `claudes key`): no config at all → `MISSING_CONFIG_MESSAGE` + exit 78; a config it refuses to trust keeps the store's own message |
 | `src/launch/` | The passthrough to `claude`: `run.ts` resolves the executable, writes the per-pid settings file and spawns, forwarding `SIGINT`/`SIGTERM`/`SIGHUP`; `argv.ts` builds the child argv (refusing `--settings`, `--key` and any key-shaped token); `env.ts` strips inherited credentials; `settings.ts` generates the `--settings` payload; `settings-file.ts` names, sweeps and refuses that file; `preflight.ts` holds the router health check and its notes; `provider-switches.ts` the switch list; `unsupported.ts` the features turned off; `run-harness.ts` the framework-free launch fixtures |
 | `src/doctor/` | One module per check (`checks/{runtime,config,router,conflicts,wiring,live,effective-model}.ts`) plus `results.ts` (`CheckResult`, `anyFailed`), `run-proc.ts` (the spawn seam), `claude-version.ts` (`MIN_CLAUDE_VERSION`), `stub-server.ts` (the recording router) and `harness.ts` (fixtures) |
@@ -83,7 +83,7 @@ Dependency direction (the live import graph under `src/`, checkable with `grep '
 
 ## Config safety (non-negotiable)
 
-- Config directory mode `0700`, file mode `0600`, atomic temp-then-rename write, `O_NOFOLLOW` on read; uid and mode checks run against the fd's own `fstat`, not the path. Every defence is independent — do not collapse them.
+- Config directory mode `0700`, file mode `0600`, atomic temp-then-rename write, `O_NOFOLLOW` on read; the config directory's uid and mode are checked by a path stat, and the file's uid and mode against the fd's own `fstat` (directory checked before file). Every defence is independent — do not collapse them.
 
 ## Build / release (non-negotiable)
 

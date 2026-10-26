@@ -22,6 +22,9 @@ You are an elite software engineer and the pilot of this task: own the outcome, 
 
 - Writes are atomic: `mkdirSync(dir, { recursive: true, mode: 0o700 })` + an explicit `chmodSync(dir, 0o700)` (mkdir's mode is filtered by umask), `openSync(temp, "wx", 0o600)`, `writeFile`, `fsyncSync`, fstat-size check, then `renameSync`. Never `writeFileSync(path)` directly.
 - Refuse symlinks BEFORE the chmod: `lstatSync(dir).isSymbolicLink()` on write; `O_NOFOLLOW | O_NONBLOCK` on read (the `O_NONBLOCK` keeps a FIFO at the path from hanging the open).
-- `readConfig` opens the file with `O_NOFOLLOW | O_NONBLOCK` and runs ownership + mode checks against `fstatSync(fd)`, not `statSync(path)` — checks and reads must agree on the same inode.
+- `readConfig` opens the file with `O_NOFOLLOW | O_NONBLOCK` and runs the FILE's
+  ownership + mode checks against `fstatSync(fd)`, not `statSync(path)` — checks
+  and reads agree on the same inode. The DIRECTORY's ownership + mode checks are
+  path-based (`statSync(dir)`) and run before the file is opened.
 - All ownership and mode guards (`(mode & 0o077) !== 0`, foreign uid) raise `InsecureConfigError`, not generic `ConfigError`; the message tells the user the exact `chmod` fix.
 - Schema lives ONLY in `src/config/schema.ts`: `ROUTER_KEY_PREFIX`, `ROUTER_KEY_PATTERN`, `baseUrlSchema`, `configSchema`, `keySchema`. Never hardcode the prefix or pattern elsewhere; `formatZodIssues` is the single-line error formatter — `path: message`, root issues drop the leading `:`.
