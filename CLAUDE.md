@@ -42,6 +42,7 @@ Bun + TypeScript
 | `src/doctor/` | One module per check (`checks/{runtime,config,router,conflicts,wiring,live,effective-model}.ts`) plus `results.ts` (`CheckResult`, `anyFailed`), `run-proc.ts` (the spawn seam), `claude-version.ts` (`MIN_CLAUDE_VERSION`), `stub-server.ts` (the recording router) and `harness.ts` (fixtures) |
 | `src/router/client.ts` | `/healthz` and `/v1/models`, 10 s timeout, body cap 1 MiB, `redirect: "error"`; `scrub`, `RouterError`, `isRouterError` and `errorName` are defined in `router/errors.ts` and re-exported here |
 | `src/router/errors.ts` | Defines `scrub`, `RouterError` (`status`/`timedOut`/`tlsVerifyCode`), the trap-safe `isRouterError` and the class-shaped-only `errorName`; no `err.message` is ever interpolated, because Node's `fetch` quotes header values verbatim |
+| `src/test-support/fixtures.ts` | Framework-free shared fake `ROUTER`/`KEY` fixtures used by tests and harnesses |
 | `src/test-support/redact.ts` | `assertNoKeyFragment` (no 8-char window of the key body may appear in any output) |
 | `src/test-support/readme-table.ts` | Parses README.md's "Refusals and exit codes" table into rows (`exit`, `when`, `message`); code-span messages are unquoted and `(message above)` resolves to the router-down block |
 | `scripts/build.ts` | `Bun.build({ target: "node" })` of `src/main.ts` → `dist/claudes.js`, prepends `#!/usr/bin/env node`, `chmod 755` |
