@@ -63,7 +63,10 @@ fi
 # A passthrough with no config behind an empty HOME must exit 78 (EX_CONFIG)
 # with the exact remedy, newline-terminated — without touching the network.
 scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
+# The synthetic router below is a background process: the trap takes it down
+# with the scratch dir, so no router outlives the gate.
+router_pid=""
+trap 'if [ -n "$router_pid" ]; then kill "$router_pid" 2>/dev/null || true; wait "$router_pid" 2>/dev/null || true; fi; rm -rf "$scratch"' EXIT
 
 # "doctor" with no config behind an empty HOME: a real run now, so it must
 # exit non-zero and print a FAIL line — in the same env -i isolation as the key
@@ -118,35 +121,151 @@ fi
 # rightly refuses) or an ambient ANTHROPIC_BASE_URL (a developer shell behind
 # a gateway, which differs from the synthetic router).
 CHECK_KEY="mar_live_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
+
+# The synthetic router's own answers. Its version is router-controlled text
+# that doctor prints in the router check's title; its request id is a bare
+# window of the key body, so doctor must withhold it and no window of the
+# body may reach the output. The tiers are the ones the config pins.
+CHECK_ROUTER_VERSION="9.9.9-synthetic"
+CHECK_TIER_OPUS="claude-opus-5-5"
+CHECK_TIER_SONNET="claude-sonnet-5-5"
+CHECK_TIER_HAIKU="claude-haiku-4-5"
+# The first eight characters of the key's body (the body follows the
+# nine-character "mar_live_" prefix). The key never reaches a command line:
+# it travels through the pipe, not through argv.
+CHECK_REQUEST_ID="$(printf '%s' "$CHECK_KEY" | LC_ALL=C sed 's/^mar_live_//' | LC_ALL=C cut -c1-8)"
+
+# The synthetic router: a local loopback server that answers the three
+# endpoints doctor probes. No external host, no live credential — the key
+# above is synthetic and every answer is the router's own. It is written into
+# the scratch dir, never into the checkout.
+cat >"$scratch/router.mjs" <<'ROUTER_JS'
+import { createServer } from "node:http";
+
+const version = process.env.ROUTER_VERSION ?? "0.0.0";
+const requestId = process.env.ROUTER_REQUEST_ID ?? "";
+const models = (process.env.ROUTER_MODELS ?? "").split(",").filter((id) => id !== "");
+
+const server = createServer((req, res) => {
+  req.resume();
+  const path = (req.url ?? "/").split("?")[0];
+  const json = (status, body, headers = {}) => {
+    res.writeHead(status, { "content-type": "application/json", ...headers });
+    res.end(JSON.stringify(body));
+  };
+  if (req.method === "GET" && path === "/healthz") {
+    json(200, { version });
+    return;
+  }
+  if (req.method === "GET" && path === "/v1/models") {
+    json(200, { data: models.map((id) => ({ id })) });
+    return;
+  }
+  if (req.method === "POST" && path === "/v1/messages") {
+    json(
+      200,
+      {
+        id: "msg_synthetic",
+        type: "message",
+        role: "assistant",
+        model: models[0] ?? "synthetic",
+        content: [],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { "x-request-id": requestId },
+    );
+    return;
+  }
+  json(404, { error: { type: "not_found" } });
+});
+
+server.listen(0, "127.0.0.1", () => {
+  const address = server.address();
+  process.stdout.write(`http://127.0.0.1:${address.port}\n`);
+});
+ROUTER_JS
+
+# The router's base URL arrives on a FIFO: it writes the URL the moment it is
+# listening, so the gate waits for the answer instead of polling for it. The
+# port is the OS's choice; nothing asserts on it.
+mkfifo "$scratch/router.url"
+ROUTER_VERSION="$CHECK_ROUTER_VERSION" \
+ROUTER_REQUEST_ID="$CHECK_REQUEST_ID" \
+ROUTER_MODELS="$CHECK_TIER_OPUS,$CHECK_TIER_SONNET,$CHECK_TIER_HAIKU" \
+  node "$scratch/router.mjs" >"$scratch/router.url" 2>"$scratch/router.err" &
+router_pid=$!
+base=""
+IFS= read -r base <"$scratch/router.url" || base=""
+if [ -z "$base" ]; then
+  echo "bin/check: the synthetic router did not report a base URL" >&2
+  # The router's own stderr is the cause of the silence. It is empty when the
+  # router started fine, so printing it here names the failure instead of the
+  # symptom — every line is prefixed, so its origin stays clear.
+  if [ -s "$scratch/router.err" ]; then
+    sed 's/^/bin\/check: synthetic router: /' "$scratch/router.err" >&2
+  fi
+  exit 1
+fi
+
 mkdir -p "$scratch/keyhome" "$scratch/keyxdg/claudes"
 chmod 700 "$scratch/keyxdg/claudes"
 cat >"$scratch/keyxdg/claudes/config.json" <<JSON
 {
   "version": 1,
-  "baseUrl": "https://router.example.test",
+  "baseUrl": "$base",
   "key": "$CHECK_KEY",
   "tiers": {
-    "opus": "claude-opus-5-5",
-    "sonnet": "claude-sonnet-5-5",
-    "haiku": "claude-haiku-4-5"
+    "opus": "$CHECK_TIER_OPUS",
+    "sonnet": "$CHECK_TIER_SONNET",
+    "haiku": "$CHECK_TIER_HAIKU"
   }
 }
 JSON
 chmod 600 "$scratch/keyxdg/claudes/config.json"
 
-# doctor against the KEYED config: a real key is loaded into the process now,
-# so this is the leak guard that can actually fail. The synthetic router is
-# unreachable, so the run must exit non-zero. Reject every overlapping eight-byte
-# window of the key body in the combined streams, even without its prefix. The
-# redacted "mar_live_…" display prefix is safe. Read the key from the config path,
-# never argv, and emit only a fixed diagnostic, never the matched bytes.
+# doctor against the KEYED config, with --live: a real key is loaded into the
+# process now, so this is the leak guard that can actually fail. The synthetic
+# router answers /healthz, /v1/models and POST /v1/messages, so the two
+# router-controlled titles doctor prints — the router's own version and the
+# live request's request id — are exercised for the first time.
 rc=0
 env -i HOME="$scratch/keyhome" XDG_CONFIG_HOME="$scratch/keyxdg" PATH="$PATH" \
-  ./dist/claudes.js doctor >"$scratch/doctor-keyed.out" 2>&1 || rc=$?
-if [ "$rc" -eq 0 ]; then
-  echo "bin/check: ./dist/claudes.js doctor exited 0 against an unreachable router, expected non-zero" >&2
+  ./dist/claudes.js doctor --live >"$scratch/doctor-keyed.out" 2>&1 || rc=$?
+
+# The router has answered everything it was asked; stop it here, so no
+# synthetic router outlives the gate.
+kill "$router_pid" 2>/dev/null || true
+wait "$router_pid" 2>/dev/null || true
+router_pid=""
+
+# The doctor's exit code is its own verdict — a missing `claude` FAILs the
+# runtime and wiring checks — so it is not the gate's criterion. Anything else
+# (a usage error, an unusable config) means the run never got that far.
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+  echo "bin/check: ./dist/claudes.js doctor --live exited $rc, expected 0 or 1" >&2
   exit 1
 fi
+
+# Both router-controlled titles must be on screen: the router's version (or
+# the withheld form the router check prints when the version carries key
+# material) and the live request's request id. The markers are structural,
+# not the router's exact strings, so a leak inside either title reaches the
+# guard below instead of being masked by a title assertion it would break.
+if ! grep -qE 'router [^ ]+ \(version ' "$scratch/doctor-keyed.out"; then
+  echo "bin/check: ./dist/claudes.js doctor printed no router version title" >&2
+  exit 1
+fi
+if ! grep -qF 'live request: POST /v1/messages answered HTTP 200 (request id' "$scratch/doctor-keyed.out"; then
+  echo "bin/check: ./dist/claudes.js doctor printed no live request id title" >&2
+  exit 1
+fi
+
+# Reject every overlapping eight-byte window of the key body in the combined
+# streams, even without its prefix, and the whole key with it. The redacted
+# "mar_live_…" display prefix is safe. Read the key from the config path,
+# never argv, and emit only a fixed diagnostic, never the matched bytes.
 node - "$scratch/keyxdg/claudes/config.json" "$scratch/doctor-keyed.out" <<'NODE'
 const fs = require("node:fs");
 try {

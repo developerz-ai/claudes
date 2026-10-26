@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -156,8 +157,36 @@ function fixtureKeyBody(): string {
   return match[1];
 }
 
+/** The version the shipped gate's synthetic router answers with. */
+function fixtureRouterVersion(): string {
+  const match = /^CHECK_ROUTER_VERSION="([^"]+)"$/m.exec(readFileSync(SHIPPED_CHECK, "utf8"));
+  if (!match?.[1]) {
+    throw new Error("bin/check: synthetic CHECK_ROUTER_VERSION assignment not found");
+  }
+  return match[1];
+}
+
 const CHECK_KEY_BODY = fixtureKeyBody();
+const CHECK_ROUTER_VERSION = fixtureRouterVersion();
 const LEAK_DIAGNOSTIC = "bin/check: ./dist/claudes.js doctor leaked key bytes";
+
+/**
+ * The two router-controlled titles the keyed smoke requires: the router's own
+ * version and the live request's request id. A `leak` replaces both router
+ * answers with key material — the shape of the regression the gate exists to
+ * catch — while leaving the titles recognisable, so the gate reaches its leak
+ * guard instead of stopping at a title assertion the leak itself would break.
+ * The base URL is a fixture's own: the gate never connects to it, and the
+ * synthetic router's real port is the OS's choice.
+ */
+function doctorTitles(leak = ""): string {
+  const version = leak === "" ? CHECK_ROUTER_VERSION : leak;
+  const requestId = leak === "" ? "withheld" : leak;
+  return (
+    `[PASS] router http://127.0.0.1:1 (version ${version})\n` +
+    `[PASS] live request: POST /v1/messages answered HTTP 200 (request id ${requestId})\n`
+  );
+}
 
 /** Never include the matched material in a test failure, even if the guard regresses. */
 function assertSafeDiagnostics(output: string): void {
@@ -168,8 +197,55 @@ function assertSafeDiagnostics(output: string): void {
   expect(leaked).toBe(false);
 }
 
-/** No build, recursive test suite, network, or real CLI: only the shipped shell assertions. */
-function makeArtifactFixture(stdout: string, stderr: string): Fixture {
+/**
+ * The real node, as an absolute path: a PATH stub must delegate to it for
+ * every call except the one it refuses, and the gate needs node itself for
+ * its version step and its leak guard. Probed by running it, so a broken
+ * shim on PATH is not mistaken for a working node.
+ */
+function realNodePath(): string {
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (dir === "") continue;
+    const candidate = join(dir, "node");
+    if (!existsSync(candidate)) continue;
+    const probe = spawnSync(candidate, ["--version"], { encoding: "utf8", timeout: 10_000 });
+    if (probe.status === 0) return candidate;
+  }
+  throw new Error("bin/check: no working node on PATH for the fixture's node stub");
+}
+
+/**
+ * A PATH stub that refuses ONLY the synthetic router script — recognised by
+ * its file name — and delegates every other call to the real node. The
+ * router then dies without reporting a base URL, so the gate's base-URL
+ * refusal is the only thing that can stop the run.
+ */
+function stubNodeRefusingRouter(fixture: Fixture): void {
+  const path = join(fixture.root, "bin", "node");
+  writeFileSync(
+    path,
+    `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    *router.mjs)
+      echo "fixture node: refusing to run the synthetic router" >&2
+      exit 1
+      ;;
+  esac
+done
+exec "${realNodePath()}" "$@"
+`,
+    "utf8",
+  );
+  chmodSync(path, 0o755);
+}
+
+/**
+ * No build, recursive test suite, network, or real CLI: only the shipped
+ * shell assertions. `doctorExitCode` is the exit code the fake claudes.js
+ * takes for the doctor run against the keyed config.
+ */
+function makeArtifactFixture(stdout: string, stderr: string, doctorExitCode = 1): Fixture {
   const fixture = makeFixture();
   for (const [name, script] of [
     ["bun", "#!/bin/sh\nexit 0\n"],
@@ -181,7 +257,10 @@ function makeArtifactFixture(stdout: string, stderr: string): Fixture {
     chmodSync(path, 0o755);
   }
   writeFileSync(join(fixture.root, "package.json"), JSON.stringify({ version: "0.0.0" }));
-  writeFileSync(join(fixture.root, "doctor-output.json"), JSON.stringify({ stdout, stderr }));
+  writeFileSync(
+    join(fixture.root, "doctor-output.json"),
+    JSON.stringify({ stdout, stderr, exitCode: doctorExitCode }),
+  );
   mkdirSync(join(fixture.root, "dist"));
   const cli = join(fixture.root, "dist", "claudes.js");
   writeFileSync(
@@ -199,8 +278,11 @@ switch (process.argv[2]) {
       const output = JSON.parse(fs.readFileSync(path.join(root, "doctor-output.json"), "utf8"));
       process.stdout.write(output.stdout);
       process.stderr.write(output.stderr);
-    } else console.log("FAIL no config");
-    process.exitCode = 1;
+      process.exitCode = typeof output.exitCode === "number" ? output.exitCode : 1;
+    } else {
+      console.log("FAIL no config");
+      process.exitCode = 1;
+    }
     break;
   }
   case "key": process.stdout.write(JSON.parse(fs.readFileSync(config, "utf8")).key); break;
@@ -222,8 +304,8 @@ describe("bin/check keyed doctor artifact assertion", () => {
         () => {
           const fragment = CHECK_KEY_BODY.slice(i, i + 8);
           const fixture = makeArtifactFixture(
-            stream === "stdout" ? fragment : "",
-            stream === "stderr" ? fragment : "",
+            stream === "stdout" ? doctorTitles(fragment) : "",
+            stream === "stderr" ? doctorTitles(fragment) : "",
           );
           const res = runCheck(fixture);
           assertSafeDiagnostics(res.stdout + res.stderr);
@@ -237,9 +319,96 @@ describe("bin/check keyed doctor artifact assertion", () => {
   }
 
   test(
+    "rejects the whole key inside the router-controlled titles",
+    () => {
+      const fixture = makeArtifactFixture(doctorTitles(`mar_live_${CHECK_KEY_BODY}`), "");
+      const res = runCheck(fixture);
+      assertSafeDiagnostics(res.stdout + res.stderr);
+      expect(res.error === undefined).toBe(true);
+      expect(res.status).toBe(1);
+      expect(res.stderr === `${LEAK_DIAGNOSTIC}\n`).toBe(true);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "rejects a bare key-body window inside the router-controlled titles",
+    () => {
+      const fixture = makeArtifactFixture(doctorTitles(CHECK_KEY_BODY.slice(0, 8)), "");
+      const res = runCheck(fixture);
+      assertSafeDiagnostics(res.stdout + res.stderr);
+      expect(res.error === undefined).toBe(true);
+      expect(res.status).toBe(1);
+      expect(res.stderr === `${LEAK_DIAGNOSTIC}\n`).toBe(true);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "fails when the doctor output carries no router version title",
+    () => {
+      const fixture = makeArtifactFixture(
+        "[PASS] live request: POST /v1/messages answered HTTP 200 (request id withheld)\n",
+        "",
+      );
+      const res = runCheck(fixture);
+      expect(res.error === undefined).toBe(true);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("printed no router version title");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "fails when the doctor output carries no live request id title",
+    () => {
+      const fixture = makeArtifactFixture(
+        `[PASS] router http://127.0.0.1:1 (version ${CHECK_ROUTER_VERSION})\n`,
+        "",
+      );
+      const res = runCheck(fixture);
+      expect(res.error === undefined).toBe(true);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("printed no live request id title");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "fails with the router's own stderr when the synthetic router reports no base URL",
+    () => {
+      const fixture = makeArtifactFixture(doctorTitles(), "");
+      stubNodeRefusingRouter(fixture);
+      const res = runCheck(fixture);
+      assertSafeDiagnostics(res.stdout + res.stderr);
+      expect(res.error === undefined).toBe(true);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("the synthetic router did not report a base URL");
+      // The captured router stderr names the cause of the silence.
+      expect(res.stderr).toContain("fixture node: refusing to run the synthetic router");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "fails when the keyed doctor exits with a code that is neither 0 nor 1",
+    () => {
+      const fixture = makeArtifactFixture(doctorTitles(), "", 64);
+      const res = runCheck(fixture);
+      assertSafeDiagnostics(res.stdout + res.stderr);
+      expect(res.error === undefined).toBe(true);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("doctor --live exited 64, expected 0 or 1");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "permits safe output including the redacted display prefix",
     () => {
-      const res = runCheck(makeArtifactFixture("PASS config mar_live_…\n", "FAIL router\n"));
+      const res = runCheck(
+        makeArtifactFixture(`${doctorTitles()}PASS config mar_live_…\n`, "FAIL runtime\n"),
+      );
       assertSafeDiagnostics(res.stdout + res.stderr);
       expect(res.error === undefined).toBe(true);
       expect(res.status).toBe(0);
