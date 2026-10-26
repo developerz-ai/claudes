@@ -1,5 +1,5 @@
 import { ROUTER_KEY_PREFIX } from "../config/schema";
-import type { TierName } from "../tiers";
+import { parseTierId, type TierName } from "../tiers";
 
 const USAGE = `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]
 
@@ -12,9 +12,8 @@ export interface ParsedArgs {
 }
 
 /**
- * Tier values are opaque router model ids, but bounded, printable, shell-safe
- * ones: no whitespace, control bytes, quotes, or anything else that could make
- * the stored (or echoed) config a trap.
+ * Bound input to printable, shell-safe characters before applying the shared
+ * Claude tier-id contract: undecorated ids only, not aliases or variants.
  */
 const MODEL_ID_PATTERN = /^[A-Za-z0-9._:[\]-]{1,100}$/;
 
@@ -66,12 +65,14 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
           return usageError("claudes login: --url may only be given once");
         }
         url = value;
-      } else if (MODEL_ID_PATTERN.test(value)) {
+      } else if (MODEL_ID_PATTERN.test(value) && parseTierId(value) !== undefined) {
         overrides[name.slice(2) as TierName] = value;
       } else {
         // Names the flag, never the value: a model id slot is exactly where a
         // pasted key or other junk would otherwise be echoed back.
-        return usageError(`claudes login: ${name} is not a valid model id`);
+        return usageError(
+          `claudes login: ${name} is not a valid model id — use an undecorated Claude tier ID`,
+        );
       }
       continue;
     }
