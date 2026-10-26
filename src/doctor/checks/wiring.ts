@@ -75,6 +75,12 @@ export interface WiringDeps {
   readonly signals?: ProbeSignalWiring;
   readonly createStub?: () => Promise<RouterStub>;
   readonly timeoutMs?: number;
+  /**
+   * The launcher's argv builder; the seam for the probe's own refusal branch.
+   * Defaults to the real one — a test injects a builder to reach the branch
+   * without changing the probe's arguments.
+   */
+  readonly buildArgv?: typeof buildArgv;
 }
 
 const defaultRm = (path: string): void => {
@@ -288,9 +294,16 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
     const probeHome = join(probeRoot, "home");
     createPrivateDir(probeHome, "probe directory");
 
-    const argv = buildArgv([...WIRING_ARGS], settingsPath);
+    const argv = (deps.buildArgv ?? buildArgv)([...WIRING_ARGS], settingsPath);
     if (!argv.ok) {
-      outcome = { status: "FAIL", title: `wiring probe: ${argv.message}` };
+      // The probe's arguments are claudes' own constant, not the user's, so a
+      // refusal here is a claudes defect — the remedy must not send the user
+      // to `claudes login` for a config they never broke.
+      outcome = {
+        status: "FAIL",
+        title: `wiring probe: ${argv.message}`,
+        fix: "the probe's own arguments were refused by claudes — this is a claudes defect, not a config problem; update claudes and re-run `claudes doctor`",
+      };
     } else {
       const childEnv = buildChildEnv(deps.env);
       childEnv.HOME = probeHome;

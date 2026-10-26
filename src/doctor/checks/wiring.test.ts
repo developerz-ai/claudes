@@ -14,6 +14,7 @@ import { createServer as httpCreateServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { configDir } from "../../config/paths";
+import { buildArgv } from "../../launch/argv";
 import { assertNoKeyFragment } from "../../test-support/redact";
 import { FOREIGN_CREDENTIAL, fakeClaudeProc, KEY, sampleConfig, TIERS } from "../harness";
 import { createRouterStub, credentialHash, type RouterStub } from "../stub-server";
@@ -653,6 +654,40 @@ describe("checkWiring", () => {
       expect(result.title).toContain("claude not found on PATH");
       // No probe tree was created for a probe that never ran.
       expect(existsSync(s.dir)).toBe(false);
+    } finally {
+      cleanup(s);
+    }
+  });
+
+  test("FAILs with a remedy when the launcher's argv builder refuses the probe's arguments", async () => {
+    const s = scratch();
+    try {
+      const fake = fakeClaudeProc();
+      const seen: { args: readonly string[]; settingsPath: string }[] = [];
+      const result = await checkWiring(
+        {
+          ...deps(s, fake.runProc),
+          // The launcher's real refusal, produced by the production builder:
+          // a key-shaped token is refused by naming the shape, never the value.
+          buildArgv: (args, settingsPath) => {
+            seen.push({ args: [...args], settingsPath });
+            return buildArgv([KEY], settingsPath);
+          },
+        },
+        sampleConfig(),
+      );
+      expect(result.status).toBe("FAIL");
+      expect(result.title).toContain("refusing an argument that looks like a router key");
+      // The remedy every doctor FAIL line owes the reader.
+      expect(result.fix).toBeDefined();
+      expect(result.fix ?? "").toContain("update claudes");
+      // Neither the title nor the remedy carries the key, not even a fragment.
+      expect(result.title).not.toContain(KEY);
+      assertNoKeyFragment(`${result.title}\n${result.fix ?? ""}`, KEY);
+      // The probe's own arguments are unchanged, and the probe never ran.
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.args).toEqual([...WIRING_ARGS]);
+      expect(fake.calls).toHaveLength(0);
     } finally {
       cleanup(s);
     }
