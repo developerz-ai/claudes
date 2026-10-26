@@ -15,6 +15,7 @@ import {
   preflight,
   preflightTimeoutMs,
   proxyNoteNeeded,
+  ROUTER_INVALID_VERSION_MESSAGE,
   ROUTER_UNREACHABLE_MESSAGE,
   tlsVerifyNote,
 } from "./preflight";
@@ -123,6 +124,12 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     await preflight(loaded.config.baseUrl, deps.fetch, preflightTimeoutMs(deps.env));
   } catch (err) {
     const routerError = err instanceof RouterError ? err : undefined;
+    if (routerError?.invalidVersion === true) {
+      // The router answered the check but reported no usable version: a
+      // different refusal from an unreachable router, and the proxy, TLS and
+      // timeout notes do not apply — the probe answered.
+      return fail(deps, 69, ROUTER_INVALID_VERSION_MESSAGE);
+    }
     const tlsNote = tlsVerifyNote(routerError?.tlsVerifyCode);
     return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, [
       ...(proxyNoteNeeded(deps.env) ? [PROXY_NOTE_MESSAGE] : []),

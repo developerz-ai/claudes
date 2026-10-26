@@ -3,6 +3,14 @@ import { type FetchLike, health, RouterError, TLS_VERIFY_CODES } from "../router
 
 export const ROUTER_UNREACHABLE_MESSAGE =
   "router unreachable: run `claudes doctor`, or use plain `claude` with your own login (usage won't be attributed)";
+/**
+ * The refusal for a router that answered the pre-launch check but reported
+ * no usable version: a different failure from an unreachable router, with
+ * the same exit code and no notes (the probe answered, so the proxy, TLS and
+ * timeout hints do not apply).
+ */
+export const ROUTER_INVALID_VERSION_MESSAGE =
+  "router answered the pre-launch check with an invalid version: the configured router URL does not point at a router claudes can use — run `claudes doctor`";
 export const PROXY_NOTE_MESSAGE =
   "note: claudes' router check does not use HTTP(S)_PROXY; set NODE_USE_ENV_PROXY=1 if your network needs a proxy";
 export const TLS_VERIFY_NOTE_MESSAGE =

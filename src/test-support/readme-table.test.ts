@@ -10,16 +10,16 @@ import {
  * The parser's own contract, checked against the README as it stands. The
  * guards that use the parser (src/readme-refusals.test.ts, src/readme.test.ts)
  * assert the behaviour the table promises; this file asserts that the table
- * is read the way they assume — eleven rows, code spans unquoted, the
+ * is read the way they assume — twelve rows, code spans unquoted, the
  * "(message above)" cell resolved and the prose cell left without a message.
  */
 
 const rows = readmeRefusalRows();
 
 describe("README refusals table", () => {
-  test("the table has the eleven documented rows", () => {
-    expect(rows.length).toBe(11);
-    expect(rows.map((row) => row.exit)).toEqual([64, 64, 64, 64, 64, 64, 64, 69, 78, 127, 1]);
+  test("the table has the twelve documented rows", () => {
+    expect(rows.length).toBe(12);
+    expect(rows.map((row) => row.exit)).toEqual([64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1]);
   });
 
   test("the --key row unescapes its backticks", () => {
@@ -50,7 +50,13 @@ describe("README refusals table", () => {
   });
 
   test("the router-down row resolves to the block above the table", () => {
-    const row = rows.find((candidate) => candidate.exit === 69);
+    // Named by its "When" cell, not by its exit code: the table has a second
+    // 69 row (the router that answered with an unusable version), and this
+    // one must not be picked up by accident.
+    const routerDown = "did not answer the pre-launch check";
+    const row = rows.find((candidate) => candidate.when.includes(routerDown));
+    expect(row).toBeDefined();
+    expect(row?.exit).toBe(69);
     expect(row?.message).toBe(readmeRouterDownMessage());
     expect(row?.message).toBe(
       "router unreachable: run `claudes doctor`, or use plain `claude` with your own login (usage won't be attributed)",

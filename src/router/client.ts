@@ -53,18 +53,18 @@ export async function health(
     await cancelUnreadBody(res);
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
-  const body = await parseJson(endpoint, res, timeoutMs);
+  const body = await parseJson(endpoint, res, timeoutMs, true);
   if (
     typeof body !== "object" ||
     body === null ||
     typeof (body as { version?: unknown }).version !== "string"
   ) {
-    throw new RouterError(`GET ${endpoint} returned JSON without a string "version"`);
+    throw invalidVersionError(`GET ${endpoint} returned JSON without a string "version"`);
   }
   const version = (body as { version: string }).version;
   if (!VERSION_PATTERN.test(version)) {
     // The version is printed to the user; never relay raw router bytes.
-    throw new RouterError(`GET ${endpoint}: router returned an invalid version string`);
+    throw invalidVersionError(`GET ${endpoint}: router returned an invalid version string`);
   }
   return version;
 }
@@ -82,7 +82,7 @@ export async function models(
     await cancelUnreadBody(res);
     throw new RouterError(`GET ${endpoint} failed: HTTP ${res.status}`, res.status);
   }
-  const body = await parseJson(endpoint, res, timeoutMs);
+  const body = await parseJson(endpoint, res, timeoutMs, false);
   if (
     typeof body !== "object" ||
     body === null ||
@@ -136,6 +136,15 @@ function isTimeoutName(err: unknown): boolean {
 /** The one timeout RouterError, so both classification sites stay byte-identical. */
 function timeoutError(endpoint: string, timeoutMs: number): RouterError {
   return new RouterError(`GET ${endpoint} timed out after ${timeoutMs / 1000}s`, undefined, true);
+}
+
+/**
+ * The error for a /healthz answer that carried no usable version: the probe
+ * answered, so the launcher refuses it differently from an unreachable
+ * router. The version itself is never relayed — it can carry key material.
+ */
+function invalidVersionError(message: string): RouterError {
+  return new RouterError(message, undefined, false, undefined, true);
 }
 
 function unreachable(endpoint: string, err: unknown, timeoutMs: number): RouterError {
@@ -244,7 +253,18 @@ function causeCodeOf(err: Error): string | undefined {
   }
 }
 
-async function parseJson(endpoint: string, res: Response, timeoutMs: number): Promise<unknown> {
+/**
+ * Reads the body as JSON. `healthProbe` marks the /healthz probe: there an
+ * unusable payload means the router answered without a usable version, which
+ * the launcher refuses differently from an unreachable router. /v1/models
+ * carries no version, so its non-JSON body stays an ordinary refusal.
+ */
+async function parseJson(
+  endpoint: string,
+  res: Response,
+  timeoutMs: number,
+  healthProbe: boolean,
+): Promise<unknown> {
   let text: string;
   try {
     text = await readBodyCapped(endpoint, res);
@@ -263,7 +283,11 @@ async function parseJson(endpoint: string, res: Response, timeoutMs: number): Pr
   try {
     return JSON.parse(text);
   } catch {
-    throw new RouterError(`GET ${endpoint} returned a non-JSON body`);
+    const message = `GET ${endpoint} returned a non-JSON body`;
+    if (healthProbe) {
+      throw invalidVersionError(message);
+    }
+    throw new RouterError(message);
   }
 }
 
