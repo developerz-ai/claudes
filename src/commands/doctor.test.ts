@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { loadConfig } from "../config/load";
 import { configDir, configFile, type Env } from "../config/paths";
 import { writeConfig } from "../config/store";
 import type { PostFetch } from "../doctor/checks/live";
+import { createProbeDir } from "../doctor/checks/wiring";
 import { fakeClaudeProc, KEY, sampleConfig, TIERS, versionProc } from "../doctor/harness";
 import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
@@ -44,15 +45,17 @@ function deps(
     readonly postFetch?: PostFetch;
     readonly readFile?: DoctorDeps["readFile"];
   } = {},
-): { deps: DoctorDeps; out: string[]; err: string[] } {
+): { deps: DoctorDeps; out: string[]; err: string[]; probeDirs: string[] } {
   const out: string[] = [];
   const err: string[] = [];
+  const probeDirs: string[] = [];
   const postFetch: PostFetch =
     overrides.postFetch ??
     (async () => new Response("{}", { status: 200, headers: { "x-request-id": "req-1" } }));
   return {
     out,
     err,
+    probeDirs,
     deps: {
       env: d.env,
       platform: "linux",
@@ -66,7 +69,12 @@ function deps(
       resolveExecutable: () => CLAUDE,
       load: overrides.load ?? loadConfig,
       readFile: overrides.readFile ?? (() => undefined),
-      mkdtemp: () => mkdtempSync(join(tmpdir(), "doctor-cmd-probe-")),
+      // The probe's own tree, under the config dir — the seam only watches it.
+      probeDir: (base) => {
+        const dir = createProbeDir(base);
+        probeDirs.push(dir);
+        return dir;
+      },
       rm: (path) => {
         rmSync(path, { recursive: true, force: true });
       },
@@ -79,7 +87,7 @@ function deps(
 function verboseFetchHarness(d: Drive, value: string | undefined) {
   const fake = fakeClaudeProc();
   const h = deps(d, { runProc: fake.runProc });
-  const calls = { gets: 0, posts: 0, loads: 0, probes: 0, reads: 0, resolves: 0, temps: 0 };
+  const calls = { gets: 0, posts: 0, loads: 0, probes: 0, reads: 0, resolves: 0, probeDirs: 0 };
   const config = sampleConfig();
   const theDeps: DoctorDeps = {
     ...h.deps,
@@ -116,9 +124,9 @@ function verboseFetchHarness(d: Drive, value: string | undefined) {
       calls.resolves += 1;
       return CLAUDE;
     },
-    mkdtemp: () => {
-      calls.temps += 1;
-      return mkdtempSync(join(tmpdir(), "doctor-cmd-probe-"));
+    probeDir: (base) => {
+      calls.probeDirs += 1;
+      return createProbeDir(base);
     },
   };
   return { ...h, deps: theDeps, calls };
@@ -150,7 +158,7 @@ describe("runDoctor", () => {
             probes: 0,
             reads: 0,
             resolves: 0,
-            temps: 0,
+            probeDirs: 0,
           });
         } finally {
           rmSync(d.home, { recursive: true, force: true });
@@ -195,7 +203,7 @@ describe("runDoctor", () => {
         probes: 0,
         reads: 0,
         resolves: 0,
-        temps: 0,
+        probeDirs: 0,
       });
     } finally {
       rmSync(d.home, { recursive: true, force: true });
@@ -223,6 +231,30 @@ describe("runDoctor", () => {
       expect(text).not.toContain("[FAIL]");
       // The config path is the temp XDG one.
       expect(text).toContain(configFile(configDir(d.env)));
+    } finally {
+      rmSync(d.home, { recursive: true, force: true });
+    }
+  });
+
+  test("the wiring probe's tree is created under the config dir and is gone when the run ends", async () => {
+    const d = drive();
+    try {
+      const fake = fakeClaudeProc();
+      const { deps: theDeps, out, probeDirs } = deps(d, { runProc: fake.runProc });
+      expect(await runDoctor([], theDeps)).toBe(0);
+      expect(probeDirs.length).toBe(1);
+      const probeDir = probeDirs[0] as string;
+      // Under the config directory the user config lives in — not a tree of
+      // the OS temp directory, which the documented uninstall never reaches.
+      expect(dirname(probeDir)).toBe(configDir(d.env));
+      expect(basename(probeDir)).toMatch(/^probe\.\d+$/);
+      // The key's only disk copy lived inside that tree, and it is gone with it.
+      const wiring = fake.calls.find((call) => call.argv.includes("--settings"));
+      const xdg = wiring?.env.XDG_CONFIG_HOME as string;
+      expect(xdg).toBe(join(probeDir, "xdg"));
+      expect(existsSync(join(xdg, "claudes", "config.json"))).toBe(false);
+      expect(existsSync(probeDir)).toBe(false);
+      assertNoKeyFragment(out.join(""), KEY);
     } finally {
       rmSync(d.home, { recursive: true, force: true });
     }
@@ -357,7 +389,7 @@ describe("runDoctor", () => {
             probes: 0,
             reads: 0,
             resolves: 0,
-            temps: 0,
+            probeDirs: 0,
           });
         } finally {
           rmSync(d.home, { recursive: true, force: true });
