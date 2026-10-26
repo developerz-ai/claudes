@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import type { LoadResult } from "../config/load";
 import type { Env } from "../config/paths";
 import { checkConfig } from "../doctor/checks/config";
@@ -8,7 +7,7 @@ import { checkEffectiveModel } from "../doctor/checks/effective-model";
 import { checkLive, type PostFetch } from "../doctor/checks/live";
 import { checkRouter } from "../doctor/checks/router";
 import { checkRuntime } from "../doctor/checks/runtime";
-import { checkWiring } from "../doctor/checks/wiring";
+import { checkWiring, type ProbeSignalWiring } from "../doctor/checks/wiring";
 import { anyFailed, type CheckResult } from "../doctor/results";
 import { type RunProc, realRunProc } from "../doctor/run-proc";
 import type { RouterStub } from "../doctor/stub-server";
@@ -36,8 +35,15 @@ export interface DoctorDeps {
   readonly resolveExecutable?: (name: string, env: Env) => string | undefined;
   readonly load?: (env: Env) => LoadResult;
   readonly readFile?: ReadText;
-  readonly mkdtemp?: () => string;
+  /**
+   * Creates the wiring probe's throwaway tree under the config directory.
+   * Defaults to the probe's own `createProbeDir`; the seam exists so the
+   * probe's directory can be watched, never so it can be moved elsewhere.
+   */
+  readonly probeDir?: (base: string) => string;
   readonly rm?: (path: string) => void;
+  /** The signals the wiring probe traps so it can delete the key copy. */
+  readonly signals?: ProbeSignalWiring;
   readonly createStub?: () => Promise<RouterStub>;
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
@@ -134,8 +140,9 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
         scriptPath: deps.scriptPath,
         claudePath,
         runProc: deps.runProc,
-        mkdtemp: deps.mkdtemp,
+        probeDir: deps.probeDir,
         rm: deps.rm,
+        signals: deps.signals,
         createStub: deps.createStub,
       },
       configCheck.config,
@@ -165,7 +172,6 @@ export function realDoctorDeps(): DoctorDeps {
     postFetch: (url, init) => fetch(url, init),
     runProc: realRunProc,
     readFile: defaultReadFile,
-    mkdtemp: () => mkdtempSync(`${tmpdir()}/claudes-doctor-`),
     rm: (path) => {
       rmSync(path, { recursive: true, force: true });
     },
