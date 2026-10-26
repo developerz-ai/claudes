@@ -4,6 +4,7 @@ import { type DoctorDeps, runDoctor } from "./commands/doctor";
 import { runKey } from "./commands/key";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { cleanup, deadFetch, type Harness, harness, KEY } from "./launch/run-harness";
+import { type FetchLike } from "./router/client";
 import { type RefusalRow, readmeRefusalRows } from "./test-support/readme-table";
 
 /**
@@ -42,6 +43,14 @@ interface Scenario {
   /** Runs the behaviour and returns what it produced. */
   readonly run: (h: Harness) => Promise<Observed[]> | Observed[];
 }
+
+/**
+ * A router that answers the pre-launch check but reports no usable version:
+ * the version carries the key body and a newline, which the client's version
+ * shape refuses. The refusal must relay none of it.
+ */
+const unusableVersionFetch: FetchLike = async () =>
+  new Response(JSON.stringify({ version: `${KEY}\n` }), { status: 200 });
 
 /**
  * The scenarios, in the README's row order. Each one names the row it
@@ -177,6 +186,18 @@ function scenarios(): Scenario[] {
       run: async (h) => [
         {
           code: await h.drive(["-p", "hi"], { fetch: deadFetch }),
+          text: h.err.join(""),
+          spawned: h.spawnCalls.length > 0,
+        },
+      ],
+    },
+    {
+      // A router that answered the check but reported no usable version: a
+      // different refusal from the router-down row, with the same exit code.
+      when: "answered the pre-launch check without a usable version",
+      run: async (h) => [
+        {
+          code: await h.drive(["-p", "hi"], { fetch: unusableVersionFetch }),
           text: h.err.join(""),
           spawned: h.spawnCalls.length > 0,
         },
@@ -434,7 +455,7 @@ describe("README refusals and exit codes table", () => {
     // The guard rejects the table and names the row no scenario ever
     // asserted against.
     await expect(assertRowsMatchScenarios(rows.concat(fragment), list)).rejects.toThrow(
-      /1 of 12 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
+      /1 of 13 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
     );
   });
 });

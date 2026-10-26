@@ -78,20 +78,62 @@ describe("health", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(RouterError);
       expect((err as RouterError).message).toContain("HTTP 503");
+      // A router that answered with a failure is not a router that answered
+      // without a usable version.
+      expect((err as RouterError).invalidVersion).toBe(false);
     }
   });
 
   test("rejects a body without a string version", async () => {
-    const { fetchImpl } = stubFetch({ healthBody: JSON.stringify({ version: 7 }) });
-    await expect(health(BASE, fetchImpl)).rejects.toThrow('"version"');
+    for (const version of [7, { raw: KEY }]) {
+      const { fetchImpl } = stubFetch({ healthBody: JSON.stringify({ version }) });
+      try {
+        await health(BASE, fetchImpl);
+        throw new Error("expected health to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(RouterError);
+        const routerError = err as RouterError;
+        expect(routerError.invalidVersion).toBe(true);
+        expect(routerError.message).toContain('"version"');
+        // The payload can carry key material; the refusal relays none of it.
+        expect(routerError.message).not.toContain("FAKEKEYabcdef");
+        assertNoKeyFragment(routerError.message, KEY);
+      }
+    }
+    // A body that is not JSON at all is the same failure: the probe answered,
+    // the payload was unusable.
     const badJson = stubFetch({ healthBody: "<html>not json</html>" });
-    await expect(health(BASE, badJson.fetchImpl)).rejects.toThrow("non-JSON body");
+    try {
+      await health(BASE, badJson.fetchImpl);
+      throw new Error("expected health to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      const routerError = err as RouterError;
+      expect(routerError.invalidVersion).toBe(true);
+      expect(routerError.message).toContain("non-JSON body");
+      // The body is the router's own bytes: the refusal relays none of it.
+      assertNoKeyFragment(routerError.message, KEY);
+    }
   });
 
   test("rejects a version string outside [0-9A-Za-z.+_-]{1,64}", async () => {
-    for (const version of ["1.4.2\nSET X y", "1.4.2 hack", `${"v".repeat(65)}`, ""]) {
+    for (const version of ["1.4.2\nSET X y", "1.4.2 hack", "v".repeat(65), "", `${KEY}\n`]) {
       const { fetchImpl } = stubFetch({ healthBody: JSON.stringify({ version }) });
-      await expect(health(BASE, fetchImpl)).rejects.toThrow("invalid version string");
+      try {
+        await health(BASE, fetchImpl);
+        throw new Error("expected health to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(RouterError);
+        const routerError = err as RouterError;
+        expect(routerError.invalidVersion).toBe(true);
+        expect(routerError.message).toContain("invalid version string");
+        // The version is the router's own text: never relayed, never scrubbed
+        // into the refusal.
+        if (version !== "") {
+          expect(routerError.message).not.toContain(version);
+        }
+        assertNoKeyFragment(routerError.message, KEY);
+      }
     }
     // The shapes the router really ships still pass through untouched.
     for (const version of ["1.4.2", "2.0.0-rc+meta", "v1_2024-01-01.5"]) {
@@ -492,6 +534,22 @@ describe("models", () => {
     await expect(models(BASE, KEY, missing.fetchImpl)).rejects.toThrow('"data" array');
     const badEntry = stubFetch({ modelsBody: JSON.stringify({ data: [{ id: 42 }] }) });
     await expect(models(BASE, KEY, badEntry.fetchImpl)).rejects.toThrow("malformed model entry");
+  });
+
+  test("a non-JSON body is not an unusable version: only /healthz answers that", async () => {
+    // /v1/models carries no version, so the flag stays with the health probe:
+    // a model list that is not JSON says nothing about a version.
+    const { fetchImpl } = stubFetch({ modelsBody: "<html>not json</html>" });
+    try {
+      await models(BASE, KEY, fetchImpl);
+      throw new Error("expected models to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      const routerError = err as RouterError;
+      expect(routerError.invalidVersion).toBe(false);
+      expect(routerError.message).toContain("non-JSON body");
+      assertNoKeyFragment(routerError.message, KEY);
+    }
   });
 
   test("a fetch error quoting the key in its message never reaches the error text", async () => {

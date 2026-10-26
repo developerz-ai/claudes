@@ -27,18 +27,27 @@ export class RouterError extends Error {
    * their own).
    */
   readonly tlsVerifyCode: string | undefined;
+  /**
+   * True when the router answered /healthz but reported no usable version:
+   * the probe succeeded, the payload did not. A different failure from an
+   * unreachable router (the launcher refuses it differently), and never a
+   * reason to relay the version itself — it can carry key material.
+   */
+  readonly invalidVersion: boolean;
 
   constructor(
     message: string,
     status?: number,
     timedOut: boolean = false,
     tlsVerifyCode: string | undefined = undefined,
+    invalidVersion: boolean = false,
   ) {
     super(scrub(message));
     this.name = "RouterError";
     this.status = status;
     this.timedOut = timedOut;
     this.tlsVerifyCode = tlsVerifyCode;
+    this.invalidVersion = invalidVersion;
   }
 }
 

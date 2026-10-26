@@ -5,6 +5,7 @@ import {
   PREFLIGHT_TIMEOUT_NOTE_MESSAGE,
   PROXY_NOTE_MESSAGE,
   preflightTimeoutMs,
+  ROUTER_INVALID_VERSION_MESSAGE,
   ROUTER_UNREACHABLE_MESSAGE,
   TLS_EXPIRED_NOTE_MESSAGE,
   TLS_HOSTNAME_NOTE_MESSAGE,
@@ -32,7 +33,52 @@ describe("run: router pre-flight", () => {
     const code = await h.drive(["-p", "hi"], { fetch: deadFetch });
     expect(code).toBe(69);
     expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n`);
+    expect(errText()).not.toContain(ROUTER_INVALID_VERSION_MESSAGE);
     expect(h.spawnCalls).toEqual([]);
+  });
+
+  test("a router answering with an unusable version: exit 69, the invalid-version message, no notes, no spawn", async () => {
+    // The router's own version carries the key body and a newline the client's
+    // version shape refuses: the refusal must relay none of it.
+    const rawVersion = `${KEY}\n`;
+    let calls = 0;
+    const invalidVersionFetch: FetchLike = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ version: rawVersion }), { status: 200 });
+    };
+    const code = await h.drive(["-p", "hi"], { fetch: invalidVersionFetch });
+    expect(code).toBe(69);
+    expect(errText()).toBe(`${ROUTER_INVALID_VERSION_MESSAGE}\n`);
+    // The probe answered, so none of the unreachable hints apply.
+    expect(errText()).not.toContain(PROXY_NOTE_MESSAGE);
+    expect(errText()).not.toContain(PREFLIGHT_TIMEOUT_NOTE_MESSAGE);
+    expect(errText()).not.toContain(TLS_VERIFY_NOTE_MESSAGE);
+    expect(calls).toBe(1); // not a timeout: no second attempt
+    expect(h.spawnCalls).toEqual([]);
+    expect(errText()).not.toContain(rawVersion);
+    assertNoKeyFragment(errText(), KEY);
+  });
+
+  test("a router answering /healthz with a non-JSON body: exit 69, the invalid-version message, no notes, no spawn", async () => {
+    // The probe answered, but its payload was not JSON at all — an HTML page
+    // from something that is not a router. That is a router that answered
+    // without a usable version, not one that failed to answer.
+    let calls = 0;
+    const nonJsonFetch: FetchLike = async () => {
+      calls += 1;
+      return new Response("<html>not json</html>", { status: 200 });
+    };
+    const code = await h.drive(["-p", "hi"], { fetch: nonJsonFetch });
+    expect(code).toBe(69);
+    expect(errText()).toBe(`${ROUTER_INVALID_VERSION_MESSAGE}\n`);
+    expect(errText()).not.toContain(ROUTER_UNREACHABLE_MESSAGE);
+    // The probe answered, so none of the unreachable hints apply.
+    expect(errText()).not.toContain(PROXY_NOTE_MESSAGE);
+    expect(errText()).not.toContain(PREFLIGHT_TIMEOUT_NOTE_MESSAGE);
+    expect(errText()).not.toContain(TLS_VERIFY_NOTE_MESSAGE);
+    expect(calls).toBe(1); // not a timeout: no second attempt
+    expect(h.spawnCalls).toEqual([]);
+    assertNoKeyFragment(errText(), KEY);
   });
 
   /** A fetch seam whose attempt throws exactly what a timed-out probe throws. */

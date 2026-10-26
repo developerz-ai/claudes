@@ -113,6 +113,11 @@ followed, when relevant, by one of the proxy, TLS or timeout notes under
 "Network, proxies and certificates". You can keep working with plain `claude`
 and your own login; that usage isn't attributed to your router key.
 
+A router that answers the pre-launch check but reports no usable version is a
+different refusal with the same exit code (69) and no notes: the router is
+reachable, but the configured URL does not point at a router `claudes` can
+use.
+
 ## Refusals and exit codes
 
 `claudes` refuses loudly rather than guess. Messages are quoted exactly.
@@ -127,6 +132,7 @@ and your own login; that usage isn't attributed to your router key.
 | 64 | `BUN_CONFIG_VERBOSE_FETCH` is set truthy | `claudes: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed` |
 | 64 | `claudes key` ran at a terminal | `claudes key is for apiKeyHelper only` |
 | 69 | The router did not answer the pre-launch check | (message above) |
+| 69 | The router answered the pre-launch check without a usable version | `router answered the pre-launch check with an invalid version: the configured router URL does not point at a router claudes can use — run \`claudes doctor\`` |
 | 78 | No config, or a config `claudes` refuses to trust | `no claudes config: run \`claudes login --url <router>\`` |
 | 127 | `claude` is not on `PATH` | `claude not found on PATH` |
 | 1 | `claudes doctor` had at least one FAIL | (the FAIL lines themselves) |
