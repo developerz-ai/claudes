@@ -18,6 +18,13 @@ Bun + TypeScript
 | check | `bin/check` — `bin/check-bun-versions` (the three bun pins agree) → biome (`--error-on-warnings`) → `tsc` on both tsconfigs → `bun test` → `bun scripts/build.ts` → shebang / `--version` / exit-code smoke, incl. the `mar_live_` leak grep against a keyed config |
 | stop | `bin/stop` — true (on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself) |
 
+### Slash commands
+
+Workflow commands live in `.claude/commands/`:
+
+- `/feature` — take a feature or fix from idea through implementation, verification and merge.
+- `/planx` — write a self-contained implementation plan under `docs/plans/` for another agent, without implementing it.
+
 ## Structure
 
 | Path | Purpose |
