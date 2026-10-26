@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { ROUTER_KEY_PREFIX } from "../../config/schema";
 import type { FetchLike } from "../../router/client";
+import { assertNoKeyFragment } from "../../test-support/redact";
 import { KEY, sampleConfig, TIERS } from "../harness";
 import { checkRouter } from "./router";
 
 const IDS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-opus-4-1"];
+/** The 32 secret characters after `mar_live_` — the part a leak must never carry. */
+const KEY_BODY = KEY.slice(ROUTER_KEY_PREFIX.length);
 
 /** One request the stub answered: its URL and the Authorization header sent. */
 interface StubCall {
@@ -29,6 +33,11 @@ function stubFetch(
   };
 }
 
+/** A /healthz answer whose version string is the given text. */
+function healthAnswer(version: string): () => Promise<Response> {
+  return () => Promise.resolve(new Response(JSON.stringify({ version }), { status: 200 }));
+}
+
 describe("checkRouter", () => {
   test("a healthy router passes health, key and tiers, and yields the model ids", async () => {
     const calls: StubCall[] = [];
@@ -40,6 +49,8 @@ describe("checkRouter", () => {
     expect(results.map((r) => r.status)).toEqual(["PASS", "PASS", "PASS"]);
     expect(results[0]?.title).toContain("https://router.example.test");
     expect(results[0]?.title).toContain("1.4.2");
+    // The healthy title's exact shape: a withheld version must not change it.
+    expect(results[0]?.title).toBe("router https://router.example.test (version 1.4.2)");
     expect(results[1]?.title).toContain("4 models");
     expect(results[2]?.title).toContain("every pinned tier is served");
     // The stub saw the right requests: /healthz, then /v1/models with the key.
@@ -83,6 +94,51 @@ describe("checkRouter", () => {
     });
     expect(results[1]?.status).toBe("FAIL");
     expect(results[1]?.title).toContain("HTTP 500");
+    assertNoKeyFragment(results[1]?.title ?? "", KEY);
+  });
+
+  test("a /healthz version echoing the configured key is withheld, and the router PASSes", async () => {
+    const { results, modelIds } = await checkRouter({
+      config: sampleConfig(),
+      fetch: stubFetch({ health: healthAnswer(KEY) }),
+    });
+    expect(results[0]?.status).toBe("PASS");
+    expect(results[0]?.title).toContain("withheld");
+    expect(results[0]?.title).not.toContain("mar_live_");
+    for (const result of results) {
+      assertNoKeyFragment(result.title, KEY);
+    }
+    // The models verdict and the ids are untouched by the withheld version.
+    expect(results[1]?.status).toBe("PASS");
+    expect(results[1]?.title).toContain("4 models");
+    expect(modelIds).toEqual(IDS);
+  });
+
+  test("a /healthz version carrying a bare key-body fragment is withheld", async () => {
+    const { results, modelIds } = await checkRouter({
+      config: sampleConfig(),
+      fetch: stubFetch({ health: healthAnswer(KEY_BODY) }),
+    });
+    expect(results[0]?.status).toBe("PASS");
+    expect(results[0]?.title).toContain("withheld");
+    for (const result of results) {
+      assertNoKeyFragment(result.title, KEY);
+    }
+    expect(results[1]?.status).toBe("PASS");
+    expect(results[1]?.title).toContain("4 models");
+    expect(modelIds).toEqual(IDS);
+  });
+
+  test("an error whose name carries the key body is withheld from the title", async () => {
+    const hostile: FetchLike = async () => {
+      const err = new Error("boom");
+      err.name = KEY_BODY;
+      throw err;
+    };
+    const { results } = await checkRouter({ config: sampleConfig(), fetch: hostile });
+    expect(results[0]?.status).toBe("FAIL");
+    expect(results[0]?.title).toContain("withheld");
+    assertNoKeyFragment(results[0]?.title ?? "", KEY);
   });
 
   test("an unserved pinned tier WARNs with re-login", async () => {
