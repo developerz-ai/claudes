@@ -193,6 +193,13 @@ Ctrl-C or `SIGTERM` deletes it before the process dies. Cleanup deletes the
 copy first, before the signal traps come off and before the stub's socket is
 closed, so an interrupt during teardown finds nothing to strand.
 
+A symlinked path is refused: the config directory, the probe's own
+directory, or a directory inside it. The copy would live in the link's
+target, where neither the uninstall nor the sweep reaches it. And when the
+copy cannot be deleted at all, the probe keeps its signal traps armed — so
+an interrupt during teardown still takes it — and fails with the copy's path
+instead of claiming a clean run.
+
 Pid liveness is judged in the prober's pid namespace, the same rule the
 per-launch settings sweep uses (see "Network, proxies and certificates"), so
 a config directory shared across containers can make another namespace's

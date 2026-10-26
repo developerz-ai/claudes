@@ -511,6 +511,96 @@ describe("checkWiring", () => {
     }
   });
 
+  test("FAILs when the probe's tree path is a symlink: the copy never lands in its target", async () => {
+    const s = scratch();
+    // The tree's own path is a link to a directory outside the config tree:
+    // mkdir and chmod follow it, so the copy would land in the target — where
+    // neither the sweep nor the documented uninstall reaches it.
+    const target = join(s.home, "linked-elsewhere");
+    mkdirSync(target, { recursive: true, mode: 0o700 });
+    mkdirSync(s.dir, { recursive: true, mode: 0o700 });
+    const tree = join(s.dir, `probe.${process.pid}`);
+    symlinkSync(target, tree);
+    try {
+      const fake = fakeClaudeProc();
+      const result = await checkWiring(deps(s, fake.runProc), sampleConfig());
+      expect(result.status).toBe("FAIL");
+      // The verdict names the link.
+      expect(result.title).toContain("symbolic link");
+      expect(result.title).toContain(tree);
+      // Nothing was written into the link's target: no tree, no copy.
+      expect(readdirSync(target)).toEqual([]);
+      expect(existsSync(join(target, "xdg", "claudes", "config.json"))).toBe(false);
+      // And the probe's child never ran.
+      expect(fake.calls.length).toBe(0);
+      assertNoKeyFragment(result.title, KEY);
+      assertNoKeyFragment(result.fix ?? "", KEY);
+    } finally {
+      cleanup(s);
+    }
+  });
+
+  test("FAILs when a directory inside the probe's tree is a symlink: the copy never lands in its target", async () => {
+    const s = scratch();
+    const target = join(s.home, "linked-elsewhere");
+    mkdirSync(target, { recursive: true, mode: 0o700 });
+    // A tree left behind by an earlier run, with a link planted inside it.
+    const tree = join(s.dir, `probe.${process.pid}`);
+    mkdirSync(tree, { recursive: true, mode: 0o700 });
+    symlinkSync(target, join(tree, "xdg"));
+    try {
+      const fake = fakeClaudeProc();
+      const result = await checkWiring(deps(s, fake.runProc), sampleConfig());
+      expect(result.status).toBe("FAIL");
+      expect(result.title).toContain("symbolic link");
+      // Nothing was written into the link's target.
+      expect(readdirSync(target)).toEqual([]);
+      expect(existsSync(join(target, "claudes", "config.json"))).toBe(false);
+      // And the probe's child never ran.
+      expect(fake.calls.length).toBe(0);
+      assertNoKeyFragment(result.title, KEY);
+      assertNoKeyFragment(result.fix ?? "", KEY);
+    } finally {
+      cleanup(s);
+    }
+  });
+
+  test("FAILs when the key's only disk copy cannot be deleted, and keeps the signal traps armed", async () => {
+    const s = scratch();
+    const trap = trapSignals();
+    const tree = join(s.dir, `probe.${process.pid}`);
+    const copy = join(tree, "xdg", "claudes", "config.json");
+    try {
+      const fake = fakeClaudeProc();
+      const result = await checkWiring(
+        deps(s, fake.runProc, {
+          signals: trap.wiring,
+          rm: (path) => {
+            // Nothing under the probe's tree can be removed: the copy stays.
+            if (path.startsWith(tree)) {
+              throw new Error("cannot remove");
+            }
+            rmSync(path, { recursive: true, force: true });
+          },
+        }),
+        sampleConfig(),
+      );
+      // The probe does not claim a clean run while the copy is on disk.
+      expect(result.status).toBe("FAIL");
+      expect(result.title).toContain("could not be deleted");
+      expect(result.title).toContain(copy);
+      expect(existsSync(copy)).toBe(true);
+      // The traps stay armed: a signal arriving during the teardown still
+      // finds the copy to delete.
+      expect(trap.fired.size).toBe(PROBE_SIGNALS.length);
+      expect(trap.raised).toEqual([]);
+      assertNoKeyFragment(result.title, KEY);
+      assertNoKeyFragment(result.fix ?? "", KEY);
+    } finally {
+      cleanup(s);
+    }
+  });
+
   test("PROVEN NEGATIVE: FAILs when the settings file is removed before claude reads it", async () => {
     const s = scratch();
     try {
