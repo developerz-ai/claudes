@@ -1,4 +1,5 @@
 import type { Config } from "../../config/schema";
+import { scrub } from "../../router/errors";
 import type { CheckResult } from "../results";
 
 export interface EffectiveModelDeps {
@@ -30,7 +31,7 @@ export function checkEffectiveModel(deps: EffectiveModelDeps): CheckResult[] {
     return [
       {
         status: "WARN",
-        title: `the router does not serve ${missing.map((entry) => `${entry.role}=${entry.id}`).join(", ")}`,
+        title: `the router does not serve ${missing.map((entry) => `${entry.role}=${scrub(entry.id)}`).join(", ")}`,
         fix: "re-run `claudes login` (or pass a --sonnet/--haiku override) so every effective model is served",
       },
     ];
@@ -38,7 +39,7 @@ export function checkEffectiveModel(deps: EffectiveModelDeps): CheckResult[] {
   return [
     {
       status: "PASS",
-      title: `effective models: ${effective.map((entry) => `${entry.role}=${entry.id}`).join(", ")}`,
+      title: `effective models: ${effective.map((entry) => `${entry.role}=${scrub(entry.id)}`).join(", ")}`,
     },
   ];
 }
