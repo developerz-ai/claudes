@@ -55,10 +55,12 @@ refuses (exit 64).
 ## What it does and doesn't do
 
 - It never writes `~/.claude`. Everything `claudes` writes lives under
-  `~/.config/claudes` (`$XDG_CONFIG_HOME/claudes`): the config, plus one
-  small settings file per launch (see "Network, proxies and certificates").
-  Claude Code itself does write there, as it does under plain `claude`: its
-  `/model` command saves the chosen model to `~/.claude/settings.json`.
+  `~/.config/claudes` (`$XDG_CONFIG_HOME/claudes`): the config, one small
+  settings file per launch (see "Network, proxies and certificates"), and
+  the throwaway directory `claudes doctor`'s wiring probe works in (see
+  "`claudes doctor`"). Claude Code itself does write there, as it does under
+  plain `claude`: its `/model` command saves the chosen model to
+  `~/.claude/settings.json`.
 - The router key stays out of the session environment. Claude Code fetches it
   on demand through the `apiKeyHelper` setting, which runs `claudes key`; the
   generated settings pin `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` to
@@ -180,6 +182,36 @@ indented `fix:` line.
 Without `--live`, doctor costs no router quota: it only asks the router for
 its health and model list, and the wiring probe talks to the local stub.
 
+The wiring probe is the one check that needs the real key on disk: the
+generated settings point Claude Code at the local recording stub, and the
+stub sees the key only when `claudes key` serves it. So the probe writes a
+throwaway copy of the config — the real key, 0600, inside 0700 directories
+— and points the child's `HOME` and `XDG_CONFIG_HOME` at it. The key never
+enters the child's environment: the probe proves the same helper path a real
+session uses.
+
+That copy lives inside the config directory
+(`~/.config/claudes/probe.<pid>`), not in the OS temp directory: the
+documented uninstall reaches it, and the next doctor run sweeps a probe
+directory whose pid is dead. The probe deletes the copy when its child
+exits — on the PASS path and on the FAIL path — and a run interrupted with
+Ctrl-C or `SIGTERM` deletes it before the process dies. Cleanup deletes the
+copy first, before the signal traps come off and before the stub's socket is
+closed, so an interrupt during teardown finds nothing to strand.
+
+A symlinked path is refused: the config directory, the probe's own
+directory, or a directory inside it. The copy would live in the link's
+target, where neither the uninstall nor the sweep reaches it. And when the
+copy cannot be deleted at all, the probe keeps its signal traps armed — so
+an interrupt during teardown still takes it — and fails with the copy's path
+instead of claiming a clean run.
+
+Pid liveness is judged in the prober's pid namespace, the same rule the
+per-launch settings sweep uses (see "Network, proxies and certificates"), so
+a config directory shared across containers can make another namespace's
+live doctor run look dead: that run's probe directory is swept, and the key
+copy under it is deleted while its probe is still running.
+
 ## Network, proxies and certificates
 
 The launcher pins the network-related variables in the generated settings
@@ -242,7 +274,8 @@ npm rm -g @developerz.ai/claudes && rm -rf ~/.config/claudes
 
 (With `XDG_CONFIG_HOME` set, remove `$XDG_CONFIG_HOME/claudes` instead.)
 Nothing else is left behind: `claudes` never writes `~/.claude`, and the
-per-launch settings files live inside the config directory.
+per-launch settings files and `claudes doctor`'s throwaway probe directory
+live inside the config directory.
 
 ## Platforms
 
