@@ -6,7 +6,14 @@ import { parseLoginArgs } from "./commands/login-args";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { dispatch } from "./dispatch";
 import { buildArgv } from "./launch/argv";
-import { type RefusalRow, readmeRefusalRows } from "./test-support/readme-table";
+import * as preflight from "./launch/preflight";
+import { UNSUPPORTED_FEATURES, type UnsupportedFeature } from "./launch/unsupported";
+import {
+  type RefusalRow,
+  readmeKnownGapRows,
+  readmeNetworkNotes,
+  readmeRefusalRows,
+} from "./test-support/readme-table";
 
 /**
  * claudes has no --help output of its own: dispatch() routes the first
@@ -203,5 +210,132 @@ describe("README flags", () => {
     const { deps, err } = noConfigDoctorDeps();
     expect(await runDoctor(["--bogus"], deps)).toBe(64);
     expect(err.join("")).toContain("unknown argument");
+  });
+});
+
+const readmeSource = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+
+function assertDisabledGaps(source: string, features = UNSUPPORTED_FEATURES): void {
+  const documented = readmeKnownGapRows(source)
+    .filter((row) => /^Disabled\b/.test(row.status))
+    .map((row) => {
+      const feature = row.what === "Advisor tool" ? "advisor" : row.what;
+      const status = row.status.match(/^Disabled \(`([^`]+)` in the generated settings\): .+$/);
+      const issue = row.issue.match(/^\[#[0-9]+\]\((https:\/\/github\.com\/[^)]+)\)$/);
+      if (status === null || issue === null) {
+        throw new Error(`README disabled gap has malformed mechanism or issue: ${row.what}`);
+      }
+      const mechanism = status[1] ?? "";
+      const env = mechanism.match(/^([A-Z_][A-Z0-9_]*)=([^=]+)$/);
+      if (mechanism !== "permissions.deny" && env === null) {
+        throw new Error(`README disabled gap has unknown mechanism: ${row.what}`);
+      }
+      // permissions.deny disables the tool named by the row; env rows quote NAME=value.
+      const removedBy =
+        mechanism === "permissions.deny"
+          ? { kind: "deny", rule: feature }
+          : { kind: "env", name: env?.[1], value: env?.[2] };
+      return JSON.stringify({ feature, removedBy, issue: issue[1] });
+    })
+    .sort();
+  const expected = features
+    .map((feature) => {
+      const issue = feature.issue.match(/^([^#]+)#([0-9]+)$/);
+      if (issue === null) {
+        throw new Error(`Unsupported feature has malformed issue: ${feature.issue}`);
+      }
+      return JSON.stringify({
+        feature: feature.feature,
+        removedBy: feature.removedBy,
+        issue: `https://github.com/${issue[1]}/issues/${issue[2]}`,
+      });
+    })
+    .sort();
+  expect(documented).toEqual(expected);
+}
+
+function assertNetworkNotes(
+  source: string,
+  exports: Readonly<Record<string, unknown>> = preflight,
+) {
+  const messages = Object.entries(exports)
+    .filter(([name]) => name.endsWith("_NOTE_MESSAGE"))
+    .map(([name, value]) => {
+      if (typeof value !== "string") {
+        throw new Error(`${name} must be a string`);
+      }
+      return value;
+    });
+  expect(messages.length).toBeGreaterThan(0);
+  // Compare sorted arrays, not sets: multiplicity is part of the contract.
+  expect(readmeNetworkNotes(source).sort()).toEqual(messages.sort());
+}
+
+describe("README disabled-feature guard", () => {
+  test("Disabled rows match production bijectively, leaving informational gaps alone", () => {
+    assertDisabledGaps(readmeSource);
+  });
+
+  const disabledRows = readmeSource.split("\n").filter((line) => line.includes("| Disabled ("));
+  for (const row of disabledRows) {
+    for (const [label, replacement] of Object.entries({
+      removed: "",
+      duplicated: `${row}\n${row}`,
+      added: `${row}\n${row.replace(/^\| [^|]+ \|/, "| New feature |")}`,
+      "changed feature": row.replace(/^\| [^|]+ \|/, "| Renamed feature |"),
+      "changed mechanism": row.replace(/`[^`]+`/, "`WRONG_SWITCH=1`"),
+      "changed issue URL": row.replace(/issues\/\d+/, "issues/999"),
+      "no longer Disabled": row.replace("Disabled", "Informational"),
+    })) {
+      test(`rejects ${label}: ${row.split("|")[1]?.trim()}`, () => {
+        const source =
+          label === "removed"
+            ? readmeSource.replace(`${row}\n`, "")
+            : readmeSource.replace(row, replacement);
+        expect(() => assertDisabledGaps(source)).toThrow();
+      });
+    }
+  }
+
+  test("also catches production additions and removals", () => {
+    const extra: UnsupportedFeature = {
+      feature: "New feature",
+      reason: "fixture",
+      removedBy: { kind: "deny", rule: "New feature" },
+      issue: "developerz-ai/multi-ai-router#999",
+    };
+    expect(() => assertDisabledGaps(readmeSource, [...UNSUPPORTED_FEATURES, extra])).toThrow();
+    expect(() => assertDisabledGaps(readmeSource, UNSUPPORTED_FEATURES.slice(1))).toThrow();
+  });
+});
+
+describe("README network-note guard", () => {
+  test("quotes every exported preflight *_NOTE_MESSAGE exactly once", () => {
+    assertNetworkNotes(readmeSource);
+  });
+
+  for (const note of readmeNetworkNotes(readmeSource)) {
+    for (const [label, replacement] of Object.entries({
+      changed: `${note} changed`,
+      removed: "",
+      duplicated: `${note}\n${note}`,
+      added: `${note}\nnote: unexpected additional hint`,
+    })) {
+      test(`rejects ${label} note: ${note}`, () => {
+        const mutated = readmeSource.replace(note, replacement);
+        // Remove the whole line, rather than turning it into a malformed blank note.
+        const source = label === "removed" ? readmeSource.replace(`${note}\n`, "") : mutated;
+        expect(() => assertNetworkNotes(source)).toThrow();
+      });
+    }
+  }
+
+  test("discovers new exports rather than using a fixed note list", () => {
+    expect(() =>
+      assertNetworkNotes(readmeSource, {
+        ...preflight,
+        FUTURE_NOTE_MESSAGE: "note: newly exported hint",
+      }),
+    ).toThrow();
   });
 });

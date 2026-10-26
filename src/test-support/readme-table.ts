@@ -39,8 +39,8 @@ function readme(): string {
  * The lines of the section that starts at `heading`, up to the next heading
  * of the same level. Throws when the heading is missing.
  */
-function section(heading: string): string[] {
-  const lines = readme().split("\n");
+function section(heading: string, source = readme()): string[] {
+  const lines = source.split("\n");
   const start = lines.findIndex((line) => line.trimEnd() === heading);
   if (start === -1) {
     throw new Error(`README has no "${heading}" section`);
@@ -179,4 +179,74 @@ export function readmeRefusalRows(): RefusalRow[] {
     throw new Error(`README refusals table under "${TABLE_HEADING}" has no rows`);
   }
   return rows;
+}
+
+export type KnownGapRow = {
+  readonly what: string;
+  readonly status: string;
+  readonly issue: string;
+};
+
+/** All gap cells, including informational rows; markdown is preserved. */
+export function readmeKnownGapRows(source = readme()): KnownGapRow[] {
+  const heading = "## Known gaps through Claude subscriptions";
+  const body = section(heading, source);
+  const start = body.findIndex((line) => line.trim().startsWith("|"));
+  if (start === -1) {
+    throw new Error("README has no known-gaps table");
+  }
+  const header = cells(body[start] ?? "");
+  if (header.join("|") !== "What|Status in a claudes session|Router issue") {
+    throw new Error("README known-gaps table has unexpected columns");
+  }
+  const separator = cells(body[start + 1] ?? "");
+  if (separator.length !== 3 || !separator.every((cell) => /^:?-{3,}:?$/.test(cell))) {
+    throw new Error("README known-gaps table has a malformed separator");
+  }
+  const rows: KnownGapRow[] = [];
+  for (const line of body.slice(start + 2)) {
+    if (line.trim() === "") {
+      break;
+    }
+    const parsed = cells(line);
+    if (parsed.length !== 3 || parsed.some((cell) => cell === "" || /^:?-+:?$/.test(cell))) {
+      throw new Error("README known-gaps row must have 3 non-empty cells");
+    }
+    rows.push({ what: parsed[0] ?? "", status: parsed[1] ?? "", issue: parsed[2] ?? "" });
+  }
+  if (rows.length === 0) {
+    throw new Error("README known-gaps table has no rows");
+  }
+  return rows;
+}
+
+/** Exact note lines from the network section's single, closed fenced block. */
+export function readmeNetworkNotes(source = readme()): string[] {
+  const body = section("## Network, proxies and certificates", source);
+  const notes: string[] = [];
+  let opened = false;
+  let closed = false;
+  for (const line of body) {
+    if (line.startsWith("```")) {
+      if (line !== "```" || closed) {
+        throw new Error("README network notes have an unexpected fence");
+      }
+      if (opened) {
+        closed = true;
+      } else {
+        opened = true;
+      }
+      continue;
+    }
+    if (opened && !closed) {
+      if (!line.startsWith("note: ") || line.trim() === "note:") {
+        throw new Error("README network note must be a non-empty note line");
+      }
+      notes.push(line);
+    }
+  }
+  if (!opened || !closed || notes.length === 0) {
+    throw new Error("README network notes need a non-empty, closed fenced block");
+  }
+  return notes;
 }
