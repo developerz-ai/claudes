@@ -288,6 +288,10 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
       fix: "re-run `claudes doctor`",
     };
   } finally {
+    // First: delete the key's only disk copy while the traps are still armed.
+    // Detaching them (or awaiting the stub's close) before this would leave a
+    // window in which a signal strands the copy on disk.
+    removeKeyCopy();
     for (const { signal, handler } of traps) {
       signals.off(signal, handler);
     }

@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer as httpCreateServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { configDir } from "../../config/paths";
@@ -205,10 +206,13 @@ describe("checkWiring", () => {
       expect(facts.fileMode).toBe(0o600);
       expect(facts.dirModes).toEqual([0o700, 0o700, 0o700]);
       // The copy goes first — the moment the child is gone — and the tree
-      // around it follows.
+      // around it follows. (The copy appears twice: the finally block's own
+      // removal, the one that covers a throw after the child exit, is a
+      // no-op once the copy is already gone.)
       expect(removed[0]).toBe(facts.path);
-      expect(removed.length).toBeGreaterThan(1);
-      expect(removed[1]).toBe(dirname(dirname(dirname(facts.path))));
+      expect(removed.length).toBeGreaterThan(2);
+      expect(removed[1]).toBe(facts.path);
+      expect(removed[2]).toBe(dirname(dirname(dirname(facts.path))));
       // Gone the moment the probe's child was gone.
       expect(existsSync(facts.path)).toBe(false);
     } finally {
@@ -354,6 +358,108 @@ describe("checkWiring", () => {
         expect(trap.fired.size).toBe(0);
         expect(existsSync(copy as string)).toBe(false);
       } finally {
+        cleanup(s);
+      }
+    });
+
+    test(`a ${signal} during cleanup still finds the key copy gone`, async () => {
+      const s = scratch();
+      const trap = trapSignals();
+      let copy: string | undefined;
+      // What the request sink recorded: the seam hands it to evaluate() as
+      // the stub's records, so the check still judges what arrived over HTTP.
+      const records: {
+        method: string;
+        pathname: string;
+        credentials: { header: "x-api-key"; hash: string }[];
+        model: string | undefined;
+      }[] = [];
+      const runProc: Parameters<typeof checkWiring>[0]["runProc"] = async (
+        _command,
+        argv,
+        procOptions,
+      ) => {
+        const env = procOptions.env ?? {};
+        copy = join(env.XDG_CONFIG_HOME as string, "claudes", "config.json");
+        const settingsAt = argv.indexOf("--settings");
+        const settingsPath = settingsAt === -1 ? undefined : argv[settingsAt + 1];
+        expect(settingsPath).toBeDefined();
+        const settings = JSON.parse(readFileSync(settingsPath as string, "utf8")) as {
+          readonly env: Record<string, string>;
+        };
+        // The probe's verdict needs the stub to have seen the key, but the
+        // seam's close() is stalled below, so this request cannot go to the
+        // real recording server — its closeAllConnections() would abort the
+        // fetch, and the probe would never reach the parked close() under
+        // test. A throwaway sink records the request instead and is closed
+        // before runProc returns.
+        const sink = httpCreateServer((req, res) => {
+          records.push({
+            method: req.method ?? "",
+            pathname: (req.url ?? "").split("?")[0] ?? "",
+            credentials: [{ header: "x-api-key", hash: credentialHash(KEY) }],
+            model: TIERS.sonnet,
+          });
+          res.end();
+        });
+        const port = await new Promise<number>((resolve) => {
+          sink.listen(0, "127.0.0.1", () => {
+            const address = sink.address();
+            resolve(typeof address === "object" && address !== null ? address.port : 0);
+          });
+        });
+        await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": KEY },
+          body: JSON.stringify({ model: settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL }),
+        });
+        sink.close();
+        return { ok: true, code: 0, signal: null, timedOut: false, stdout: "" };
+      };
+      // A close() that stalls in a semaphore: the probe's cleanup cannot pass
+      // it until the test releases it — the finding's window, where a signal
+      // used to strand the copy.
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let closing = false;
+      try {
+        const pending = checkWiring(
+          deps(s, runProc, {
+            signals: trap.wiring,
+            createStub: async () => ({
+              baseUrl: "http://127.0.0.1:1",
+              requests: () => records,
+              close: async () => {
+                closing = true;
+                await gate;
+              },
+            }),
+          }),
+          sampleConfig(),
+        );
+        // Wait until the probe is parked inside its stalled close(). The
+        // yield is a macrotask: a microtask spin would starve the loop and
+        // the parked probe would never get to set the flag.
+        while (!closing) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 1);
+          });
+        }
+        expect(copy).toBeDefined();
+        // The copy is deleted before the traps come off and before the close
+        // is awaited, so the interrupt arriving here finds nothing to strand.
+        expect(existsSync(copy as string)).toBe(false);
+        // The traps are already unwired when the probe is parked in close(),
+        // so a late signal finds no handler and is not swallowed by one.
+        expect(trap.fired.size).toBe(0);
+        expect(trap.raised).toEqual([]);
+        release?.();
+        const result = await pending;
+        expect(result.status).toBe("PASS");
+      } finally {
+        release?.();
         cleanup(s);
       }
     });

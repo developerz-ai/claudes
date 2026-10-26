@@ -189,7 +189,9 @@ That copy lives inside the config directory
 documented uninstall reaches it, and the next doctor run sweeps a probe
 directory whose pid is dead. The probe deletes the copy when its child
 exits — on the PASS path and on the FAIL path — and a run interrupted with
-Ctrl-C or `SIGTERM` deletes it before the process dies.
+Ctrl-C or `SIGTERM` deletes it before the process dies. Cleanup deletes the
+copy first, before the signal traps come off and before the stub's socket is
+closed, so an interrupt during teardown finds nothing to strand.
 
 Pid liveness is judged in the prober's pid namespace, the same rule the
 per-launch settings sweep uses (see "Network, proxies and certificates"), so
