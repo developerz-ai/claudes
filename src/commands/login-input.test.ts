@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { KEY } from "../test-support/fixtures";
+import { assertNoKeyFragment } from "../test-support/redact";
 import {
   InputTooLongError,
   type ReadableLike,
@@ -12,8 +14,13 @@ import {
 class FakeTty extends EventEmitter {
   readonly rawModes: boolean[] = [];
 
+  constructor(public isRaw = false) {
+    super();
+  }
+
   setRawMode(mode: boolean): void {
     this.rawModes.push(mode);
+    this.isRaw = mode;
   }
 }
 
@@ -244,6 +251,135 @@ describe("readSecret (real hidden reader)", () => {
     tty.emit("data", Buffer.from("\r"));
     await expect(secret).resolves.toBe(line);
   });
+});
+
+// These inject synchronous writer exceptions, not real stderr failures. Production
+// uses process.stderr.write; asynchronous error events and backpressure are not probed.
+describe("readSecret injected synchronous writer failures", () => {
+  const exits = [
+    "prompt",
+    "CR",
+    "LF",
+    "Ctrl-C",
+    "empty Ctrl-D",
+    "typed Ctrl-D",
+    "overflow",
+    "end",
+    "error",
+    "SIGHUP",
+  ] as const;
+
+  for (const priorRaw of [false, true]) {
+    for (const exit of exits) {
+      test(`${exit} rejects and restores prior raw=${priorRaw}`, async () => {
+        const tty = new FakeTty(priorRaw);
+        const writes: string[] = [];
+        const failure = new Error("injected synchronous writer failure");
+        const unrelated = () => {};
+        for (const event of ["data", "end", "error"]) {
+          tty.on(event, unrelated);
+        }
+        process.on("SIGHUP", unrelated);
+        const hangupsBefore = process.listeners("SIGHUP");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const secret = readSecret(
+            tty,
+            (text) => {
+              writes.push(text);
+              expect(tty.isRaw).toBe(true);
+              if (exit === "prompt" || text === "\n") {
+                throw failure;
+              }
+            },
+            "Router key: ",
+          );
+          // Attach rejection handling before emitting; a broken callback must not
+          // leave an unhandled rejection or an indefinitely pending test.
+          const outcome = secret.then(
+            () => "unexpected resolution",
+            (error: unknown) => error,
+          );
+          if (exit !== "prompt") {
+            if (exit !== "empty Ctrl-D") {
+              tty.emit("data", Buffer.from(KEY));
+            }
+            expect(() => {
+              switch (exit) {
+                case "CR":
+                  tty.emit("data", "\r");
+                  break;
+                case "LF":
+                  tty.emit("data", "\n");
+                  break;
+                case "Ctrl-C":
+                  tty.emit("data", "\x03");
+                  break;
+                case "empty Ctrl-D":
+                case "typed Ctrl-D":
+                  tty.emit("data", "\x04");
+                  break;
+                case "overflow":
+                  tty.emit("data", "x".repeat(4097));
+                  break;
+                case "end":
+                  tty.emit("end");
+                  break;
+                case "error":
+                  tty.emit("error", new Error("injected input error"));
+                  break;
+                case "SIGHUP":
+                  process.emit("SIGHUP");
+                  break;
+              }
+            }).not.toThrow();
+          }
+          const timeout = new Promise<string>((resolve) => {
+            timer = setTimeout(() => resolve("reader did not settle"), 250);
+          });
+          expect(await Promise.race([outcome, timeout])).toBe(failure);
+          expect(tty.rawModes).toEqual([true, priorRaw]);
+          expect(tty.isRaw).toBe(priorRaw);
+          for (const event of ["data", "end", "error"]) {
+            expect(tty.listeners(event)).toEqual([unrelated]);
+          }
+          expect(process.listeners("SIGHUP")).toEqual(hangupsBefore);
+          expect(writes).toEqual(exit === "prompt" ? ["Router key: "] : ["Router key: ", "\n"]);
+          assertNoKeyFragment(writes.join(""), KEY);
+          assertNoKeyFragment(failure.message, KEY);
+        } finally {
+          clearTimeout(timer);
+          // Remove only listeners added by this test, even when a regression leaks
+          // the reader's hangup callback; never disturb another test's listeners.
+          for (const listener of process.listeners("SIGHUP")) {
+            if (!hangupsBefore.includes(listener)) {
+              process.removeListener("SIGHUP", listener);
+            }
+          }
+          process.removeListener("SIGHUP", unrelated);
+          tty.removeAllListeners();
+          tty.setRawMode(priorRaw);
+        }
+      });
+    }
+  }
+
+  for (const cancel of [false, true]) {
+    test(`normal ${cancel ? "cancellation" : "submit"} preserves an already raw terminal`, async () => {
+      const tty = new FakeTty(true);
+      const writes: string[] = [];
+      try {
+        const secret = readSecret(tty, (text) => writes.push(text), "Router key: ");
+        tty.emit("data", `${KEY}${cancel ? "\x03" : "\r"}`);
+        await expect(secret).resolves.toBe(cancel ? undefined : KEY);
+        expect(tty.rawModes).toEqual([true, true]);
+        assertNoKeyFragment(writes.join(""), KEY);
+      } finally {
+        tty.emit("end");
+        tty.removeAllListeners();
+      }
+    });
+  }
 });
 
 class FakeReadable extends EventEmitter {}

@@ -37,6 +37,7 @@ export interface ReadableLike {
 
 /** A readable stream that can be switched into (and out of) raw mode. */
 export interface TtyStdin extends ReadableLike {
+  readonly isRaw?: boolean;
   setRawMode(mode: boolean): void;
 }
 
@@ -54,6 +55,9 @@ export type StdinLike = ReadableLike & { readonly isTTY?: boolean };
  * stream 'end'/'error' — or SIGHUP — restores the terminal and rejects with
  * StdinClosedError, which the caller maps to exit 1; more than
  * MAX_INPUT_BYTES rejects with InputTooLongError (exit 64).
+ * Synchronous writer throws reject after cleanup. Production wires `write` to
+ * process.stderr.write; injected throws test this API path, not actual stderr
+ * failures, asynchronous stream error events, or backpressure.
  */
 export function readSecret(
   input: TtyStdin,
@@ -66,17 +70,29 @@ export function readSecret(
     let lineBytes = 0;
     /** Terminal-escape state: nothing pending, ESC seen, inside CSI, or inside SS3 (ESC O). */
     let escapeState: "none" | "esc" | "csi" | "ss3" = "none";
+    const priorRaw = input.isRaw ?? false;
     let settled = false;
-    const finish = (settle: () => void) => {
+    const finish = (settle: () => void, newline = true) => {
       if (settled) {
         return;
       }
       settled = true;
-      input.removeListener("data", onData);
-      input.removeListener("end", onClose);
-      input.removeListener("error", onClose);
-      process.removeListener("SIGHUP", onClose);
-      input.setRawMode(false);
+      try {
+        try {
+          if (newline) {
+            write("\n");
+          }
+        } finally {
+          input.removeListener("data", onData);
+          input.removeListener("end", onClose);
+          input.removeListener("error", onClose);
+          process.removeListener("SIGHUP", onClose);
+          input.setRawMode(priorRaw);
+        }
+      } catch (error) {
+        reject(error);
+        return;
+      }
       settle();
     };
     const onData = (chunk: Buffer | string) => {
@@ -124,24 +140,20 @@ export function readSecret(
         }
         if (code === 0x03) {
           // Ctrl-C
-          write("\n");
           finish(() => resolve(undefined));
           return;
         }
         if (code === 0x04) {
           // Ctrl-D: EOF on an empty line, submit on a typed one.
           if (line === "") {
-            write("\n");
             finish(() => reject(new StdinClosedError()));
             return;
           }
-          write("\n");
           finish(() => resolve(line));
           return;
         }
         if (code === 0x0d || code === 0x0a) {
           // Enter
-          write("\n");
           finish(() => resolve(line));
           return;
         }
@@ -165,7 +177,6 @@ export function readSecret(
         }
         const size = Buffer.byteLength(char, "utf8");
         if (lineBytes + size > MAX_INPUT_BYTES) {
-          write("\n");
           finish(() => reject(new InputTooLongError()));
           return;
         }
@@ -174,17 +185,19 @@ export function readSecret(
       }
     };
     const onClose = () => {
-      write("\n");
       finish(() => reject(new StdinClosedError()));
     };
-    input.setRawMode(true);
-    write(prompt);
-    input.on("data", onData);
-    input.on("end", onClose);
-    input.on("error", onClose);
-    // A hangup kills the process before any cleanup callback could run, so the
-    // terminal is restored from the signal itself.
-    process.once("SIGHUP", onClose);
+    try {
+      input.setRawMode(true);
+      write(prompt);
+      input.on("data", onData);
+      input.on("end", onClose);
+      input.on("error", onClose);
+      // This callback, not the signal itself, restores the terminal on hangup.
+      process.once("SIGHUP", onClose);
+    } catch (error) {
+      finish(() => reject(error), false);
+    }
   });
 }
 
