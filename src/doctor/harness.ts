@@ -3,7 +3,12 @@ import type { Config } from "../config/schema";
 import { KEY, ROUTER } from "../test-support/fixtures";
 import type { RunProc } from "./run-proc";
 
-/** Shared fixtures for the doctor test files; nothing here touches a network. */
+/**
+ * Shared fixtures for the doctor test files. The wiring test setup avoids off-host
+ * services by supplying settings that point fakeClaudeProc's POST /v1/messages at
+ * the real recording stub on 127.0.0.1. The fake follows the caller-supplied settings;
+ * it does not validate destinations or enforce a network sandbox.
+ */
 export { KEY, ROUTER };
 /** A second, wrong credential: what a competing source would hand to claude. */
 export const FOREIGN_CREDENTIAL = "sk-ant-api03-someone-elses";
