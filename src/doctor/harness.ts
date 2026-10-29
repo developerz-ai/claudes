@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import type { Config } from "../config/schema";
 import { KEY, ROUTER } from "../test-support/fixtures";
 import type { RunProc } from "./run-proc";
@@ -140,13 +140,4 @@ export function fakeClaudeProc(options: FakeClaudeOptions = {}): {
     return { ok: true, code, signal: null, timedOut: false, stdout: "" };
   };
   return { runProc, calls };
-}
-
-/** The mode and existence of a path, for asserting the probe's file hygiene. */
-export function fileFacts(path: string): { exists: boolean; mode: number } {
-  try {
-    return { exists: true, mode: statSync(path).mode & 0o777 };
-  } catch {
-    return { exists: false, mode: 0 };
-  }
 }
