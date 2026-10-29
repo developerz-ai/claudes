@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { pidIsAlive } from "../../config/liveness";
 import { configDir, type Env } from "../../config/paths";
 import { writePrivateFile } from "../../config/private-file";
 import type { Config } from "../../config/schema";
@@ -380,9 +381,10 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
  * createProbeDir refuses one, so the probe never writes a tree into its
  * target.
  *
- * Liveness is judged in this process's pid namespace, the same rule the
- * per-launch settings sweep uses, so a config directory shared across
- * containers can see another namespace's live doctor run as dead.
+ * Liveness is judged in this process's pid namespace by the shared
+ * pidIsAlive contract (config/liveness.ts) — only ESRCH is dead, so EPERM
+ * counts as alive — meaning a config directory shared across containers can
+ * see another namespace's live doctor run as dead.
  */
 function sweepStaleProbeDirs(base: string, rm: (path: string) => void): void {
   let names: readonly string[];
@@ -403,16 +405,6 @@ function sweepStaleProbeDirs(base: string, rm: (path: string) => void): void {
         // a later doctor run's sweep covers it
       }
     }
-  }
-}
-
-/** True when `pid` names a process this one can probe (EPERM still means alive). */
-function pidIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return errCodeOf(err) !== "ESRCH";
   }
 }
 
