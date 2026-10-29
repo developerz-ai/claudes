@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { ConfigError } from "../config/errors";
+import { pidIsAlive } from "../config/liveness";
 import { settingsFile } from "../config/paths";
 import { errorName } from "../router/errors";
 
@@ -37,7 +38,7 @@ export function launchSettingsPath(dir: string): string {
  * settings.<pid>.json — and its stranded settings.<pid>.json.tmp-* sibling —
  * whose pid is dead, and the fixed settings.json an older build left behind.
  * A file whose pid is alive is never touched — including a pid this process
- * may not signal (the liveness probe answers EPERM), which is treated as
+ * may not signal (the shared pidIsAlive answers EPERM), which is treated as
  * alive. Anything else in the dir (config.json, another user's files) is not
  * the launcher's to remove. A symlinked config dir is not swept at all: the
  * settings writer refuses one, so nothing in its target is this launcher's.
@@ -99,25 +100,4 @@ function remove(path: string): void {
   } catch {
     // already gone, or unremovable now: a later launch's sweep covers it
   }
-}
-
-/** True when `pid` names a process this one can probe (EPERM still means alive). */
-function pidIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return errCodeOf(err) !== "ESRCH";
-  }
-}
-
-/** The errno-shaped `err.code`, when the thrown value carries a string one. */
-function errCodeOf(err: unknown): string | undefined {
-  if (typeof err === "object" && err !== null) {
-    const code = (err as { readonly code?: unknown }).code;
-    if (typeof code === "string") {
-      return code;
-    }
-  }
-  return undefined;
 }
