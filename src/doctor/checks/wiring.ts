@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { pidIsAlive } from "../../config/liveness";
 import { configDir, type Env } from "../../config/paths";
 import { writePrivateFile } from "../../config/private-file";
 import type { Config } from "../../config/schema";
@@ -403,16 +404,6 @@ function sweepStaleProbeDirs(base: string, rm: (path: string) => void): void {
         // a later doctor run's sweep covers it
       }
     }
-  }
-}
-
-/** True when `pid` names a process this one can probe (EPERM still means alive). */
-function pidIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return errCodeOf(err) !== "ESRCH";
   }
 }
 

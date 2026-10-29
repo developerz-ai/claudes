@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { ConfigError } from "../config/errors";
+import { pidIsAlive } from "../config/liveness";
 import { settingsFile } from "../config/paths";
 import { errorName } from "../router/errors";
 
@@ -99,25 +100,4 @@ function remove(path: string): void {
   } catch {
     // already gone, or unremovable now: a later launch's sweep covers it
   }
-}
-
-/** True when `pid` names a process this one can probe (EPERM still means alive). */
-function pidIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return errCodeOf(err) !== "ESRCH";
-  }
-}
-
-/** The errno-shaped `err.code`, when the thrown value carries a string one. */
-function errCodeOf(err: unknown): string | undefined {
-  if (typeof err === "object" && err !== null) {
-    const code = (err as { readonly code?: unknown }).code;
-    if (typeof code === "string") {
-      return code;
-    }
-  }
-  return undefined;
 }
