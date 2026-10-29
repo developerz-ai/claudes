@@ -1,19 +1,53 @@
+import { ROUTER_KEY_PREFIX } from "../config/schema";
+
 /**
  * The router-facing error vocabulary shared by the client and the login flow:
  * the error type with its trap-safe type test, key scrubbing and the one
  * error-naming rule. Underlying fetch failures can quote the offending header
- * value verbatim ("…Bearer mar_live_… is an invalid header value"), so no
+ * value verbatim (a "Bearer <key>" rejected as an invalid header value), so no
  * `err.message` is ever interpolated into anything user-facing; errors are
  * named by shape, and everything else passes through `scrub` as a second line
  * of defence.
  */
 
-/** Reduces anything that looks like a router key to its bare prefix. */
-export function scrub(text: string): string {
+/** Escapes the regex metacharacters of a literal, so the prefix matches as text. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The key-shaped run for a prefix: the prefix as literal text, then everything
+ * up to whitespace or a closing parenthesis.
+ */
+function keyShaped(prefix: string): RegExp {
+  return new RegExp(`${escapeRegExp(prefix)}[^\\s)]*`, "g");
+}
+
+/**
+ * Reduces anything that looks like a router key to its bare prefix, for a
+ * given prefix.
+ *
+ * The seam the prefix guards are pinned through: the canonical prefix carries
+ * no regex metacharacter and no "$", so the literal matching and the literal
+ * replacement it relies on are only observable with a prefix that does.
+ */
+export function scrubWithPrefix(prefix: string, text: string): string {
   // The run also stops at ")": a key embedded in a longer token (a hostile
-  // class-shaped err.name like `Xmar_live_…`) must not eat the closing
+  // class-shaped err.name like `X<key>…`) must not eat the closing
   // parenthesis of the parenthetical it was printed in.
-  return text.replace(/mar_live_[^\s)]*/g, "mar_live_…");
+  //
+  // The replacement is a function, not a string: a "$" inside the prefix
+  // would otherwise be read as a replacement pattern.
+  return text.replace(keyShaped(prefix), () => `${prefix}…`);
+}
+
+/**
+ * Reduces anything that looks like a router key to its bare prefix. Built
+ * from the prefix the config accepts, so the shape that is redacted can never
+ * drift from the shape that is issued.
+ */
+export function scrub(text: string): string {
+  return scrubWithPrefix(ROUTER_KEY_PREFIX, text);
 }
 
 export class RouterError extends Error {
