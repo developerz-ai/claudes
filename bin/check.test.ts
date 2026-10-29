@@ -3,10 +3,12 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -93,15 +95,38 @@ afterEach(() => {
  * A fake repo root: the shipped bin/check and bin/check-bun-versions copied in
  * and chmod 755, the REAL .bun-version, ci.yml and release.yml so the pin guard
  * passes and the tool-presence loop is what decides the outcome, and a no-op
- * executable stub for every tool the loop iterates. Nothing of the checkout's
- * own is written — a sibling run in the same tree would collide — and no host
- * bun, biome or tsc decides anything: precondition scenarios stop at or before
- * the loop; artifact scenarios add local stubs to reach the shipped smoke checks.
+ * executable stub for every tool the loop iterates. PATH contains only this
+ * fixture's bin: shell/pin-guard and smoke utilities plus node are linked from
+ * the host, while bun is stubbed to avoid recursive tests or real builds.
+ * Nothing of the checkout's own is written.
  */
 function makeFixture(overrides: { releaseYaml?: string } = {}): Fixture {
   const id = fixtures++;
   const root = join(scratch, `repo-${id}`);
   mkdirSync(join(root, "bin"), { recursive: true });
+  for (const utility of [
+    "bash",
+    "dirname",
+    "sed",
+    "head",
+    "env",
+    "node",
+    "tail",
+    "od",
+    "tr",
+    "mktemp",
+    "rm",
+    "mkdir",
+    "chmod",
+    "cat",
+    "grep",
+  ]) {
+    const executable = Bun.which(utility);
+    if (executable === null) throw new Error(`fixture requires ${utility}`);
+    symlinkSync(executable, join(root, "bin", utility));
+  }
+  writeFileSync(join(root, "bin", "bun"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(root, "bin", "bun"), 0o755);
   mkdirSync(join(root, ".github", "workflows"), { recursive: true });
   const check = join(root, "bin", "check");
   copyFileSync(SHIPPED_CHECK, check);
@@ -121,7 +146,7 @@ function makeFixture(overrides: { releaseYaml?: string } = {}): Fixture {
   mkdirSync(binDir, { recursive: true });
   for (const tool of CHECK_TOOLS) {
     const stub = join(binDir, tool);
-    writeFileSync(stub, "#!/bin/sh\nexit 0\n", "utf8");
+    writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' '${tool}' >> checks-ran\nexit 0\n`, "utf8");
     chmodSync(stub, 0o755);
   }
   // A cwd that is not the root, so the `cd` the script does is exercised.
@@ -132,14 +157,14 @@ function makeFixture(overrides: { releaseYaml?: string } = {}): Fixture {
 
 /**
  * Run the fixture's copy of bin/check under a closed env — never process.env
- * wholesale, so an ambient variable cannot change the outcome. The real PATH
- * stays on so `sh`, `bash`, `sed` and `head` resolve.
+ * wholesale, so an ambient variable cannot change the outcome. No ambient PATH
+ * fallback: removing a fixture runtime makes it genuinely unavailable.
  */
 function runCheck(fixture: Fixture) {
   return spawnSync(fixture.check, [], {
     cwd: fixture.cwd,
     env: {
-      PATH: `${join(fixture.root, "bin")}:${process.env.PATH ?? ""}`,
+      PATH: join(fixture.root, "bin"),
       HOME: fixture.cwd,
       TERM: "dumb",
     },
@@ -251,6 +276,55 @@ describe("bin/check keyed doctor artifact assertion", () => {
 });
 
 describe("bin/check precondition classification", () => {
+  for (const runtime of ["node", "bun"]) {
+    test(
+      `missing ${runtime}: exit 75 before any checks or dev-tool preconditions`,
+      () => {
+        for (const missingDevTools of [false, true]) {
+          const fixture = makeFixture();
+          rmSync(join(fixture.root, "bin", runtime));
+          // Also prove runtime presence precedes the devDependency preconditions.
+          if (missingDevTools) {
+            rmSync(join(fixture.root, "node_modules"), { recursive: true });
+          }
+          const res = runCheck(fixture);
+          expect(res.error).toBeUndefined();
+          expect(res.stdout).toContain("agree");
+          expect(res.status).toBe(GATE_REFUSED_TO_GRADE);
+          expect(res.stderr).toBe(`bin/check: ${runtime} not found on PATH\n`);
+          expect(existsSync(join(fixture.root, "checks-ran"))).toBe(false);
+        }
+      },
+      SPAWN_TEST_TIMEOUT_MS,
+    );
+  }
+
+  for (const tool of [...CHECK_TOOLS, "bun", "node"]) {
+    for (const status of [1, 127]) {
+      test(
+        `present ${tool} failing with ${status}: preserves the check failure status`,
+        () => {
+          const fixture = tool === "node" ? makeArtifactFixture("", "") : makeFixture();
+          const executable = join(
+            fixture.root,
+            CHECK_TOOLS.includes(tool) ? "node_modules/.bin" : "bin",
+            tool,
+          );
+          // Unlink first: node is a symlink, never overwrite the host executable.
+          rmSync(executable);
+          writeFileSync(executable, `#!/bin/sh\necho '${tool} failed' >&2\nexit ${status}\n`);
+          chmodSync(executable, 0o755);
+          const res = runCheck(fixture);
+          expect(res.error).toBeUndefined();
+          expect(res.stdout).toContain("agree");
+          expect(res.status).toBe(status);
+          expect(res.stderr).toBe(`${tool} failed\n`);
+        },
+        SPAWN_TEST_TIMEOUT_MS,
+      );
+    }
+  }
+
   test(
     "a missing node_modules/.bin tool: exit 75 — the gate refused to grade, not a red change",
     () => {
@@ -279,6 +353,8 @@ describe("bin/check precondition classification", () => {
       const fixture = makeFixture({
         releaseYaml: withWorkflowBunVersion(readFileSync(RELEASE_WORKFLOW, "utf8"), "9.9.9-drift"),
       });
+      rmSync(join(fixture.root, "bin", "node"));
+      rmSync(join(fixture.root, "bin", "bun"));
       const res = runCheck(fixture);
       expect(res.error).toBeUndefined();
       expect(res.status).toBe(1);
