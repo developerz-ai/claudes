@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ROUTER_KEY_PATTERN, ROUTER_KEY_PREFIX } from "../config/schema";
-import { KEY, ROUTER } from "../test-support/fixtures";
+import { KEY, ROUTER, type RouterResponseOptions, routerResponse } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { errorName, type FetchLike, health, models, RouterError, scrub } from "./client";
 
@@ -14,15 +14,7 @@ interface Call {
   signal: AbortSignal | undefined;
 }
 
-interface StubOptions {
-  healthStatus?: number;
-  healthBody?: string;
-  modelsStatus?: number;
-  modelsBody?: string;
-  failWith?: Error;
-  healthResponse?: Response;
-  modelsResponse?: Response;
-}
+type StubOptions = RouterResponseOptions & { failWith?: Error };
 
 function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; calls: Call[] } {
   const calls: Call[] = [];
@@ -31,28 +23,7 @@ function stubFetch(options: StubOptions = {}): { fetchImpl: FetchLike; calls: Ca
     if (options.failWith !== undefined) {
       throw options.failWith;
     }
-    if (url.endsWith("/healthz")) {
-      return (
-        options.healthResponse ??
-        new Response(options.healthBody ?? JSON.stringify({ version: "1.4.2" }), {
-          status: options.healthStatus ?? 200,
-        })
-      );
-    }
-    if (options.modelsResponse !== undefined) {
-      return options.modelsResponse;
-    }
-    return new Response(
-      options.modelsBody ??
-        JSON.stringify({
-          data: [
-            { id: "claude-opus-4-1" },
-            { id: "claude-sonnet-4-5" },
-            { id: "claude-haiku-4-5" },
-          ],
-        }),
-      { status: options.modelsStatus ?? 200 },
-    );
+    return routerResponse(url, options);
   };
   return { fetchImpl, calls };
 }

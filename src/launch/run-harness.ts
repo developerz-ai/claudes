@@ -6,7 +6,7 @@ import { configDir, configFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
-import { KEY, ROUTER } from "../test-support/fixtures";
+import { KEY, ROUTER, routerResponse } from "../test-support/fixtures";
 import { type Child, run, type SignalWiring, type SpawnFn } from "./run";
 
 /** Shared fixtures for the run test files; the spawn seam is always a stub. */
@@ -34,8 +34,7 @@ export function sampleConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-export const healthyFetch: FetchLike = async () =>
-  new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });
+const healthyFetch: FetchLike = async () => routerResponse(`${ROUTER}/healthz`);
 
 export const deadFetch: FetchLike = async () => {
   throw new TypeError("fetch failed");
