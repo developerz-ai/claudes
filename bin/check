@@ -11,6 +11,15 @@ cd "$(dirname "$0")/.."
 # it needs nothing installed, and a refusal here beats a toolchain error later.
 bin/check-bun-versions
 
+# Missing runtimes are unavailable gate resources, just like missing dev tools.
+# Only test presence: a present executable's failure must keep its own status.
+for runtime in node bun; do
+  if ! command -v "$runtime" >/dev/null 2>&1; then
+    echo "bin/check: $runtime not found on PATH" >&2
+    exit 75
+  fi
+done
+
 # Never use bunx here: it silently auto-installs the unrelated npm packages
 # "biome" and "tsc". Require the pinned devDependencies instead. A missing
 # tool is a gate resource being unreachable, not the change being red: the
