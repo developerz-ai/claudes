@@ -139,8 +139,8 @@ use.
 | 127 | `claude` is not on `PATH` | `claude not found on PATH` |
 | 1 | `claudes doctor` had at least one FAIL | (the FAIL lines themselves) |
 
-Known provider switches (`CLAUDE_CODE_USE_BEDROCK` and friends) are not a
-launch refusal: they are stripped from the child environment and pinned off
+The seven known provider switches (`CLAUDE_CODE_USE_BEDROCK` and friends) are
+not a launch refusal: they are stripped from the child environment and pinned off
 in the generated settings. Unknown `CLAUDE_CODE_USE_*` names are refused,
 because `claudes` cannot know that they do not reroute the session; three
 known-benign tool toggles are allowlisted.
