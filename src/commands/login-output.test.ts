@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configDir } from "../config/paths";
+import { ROUTER_KEY_PREFIX } from "../config/schema";
 import { readConfig } from "../config/store";
 import { scrub } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
@@ -254,6 +255,11 @@ describe("REDACTED_KEY", () => {
     expect(REDACTED_KEY).toBe("mar_live_…");
   });
 
+  test("is derived from the shared prefix constant, not from a copied literal", () => {
+    expect(REDACTED_KEY).toBe(`${ROUTER_KEY_PREFIX}…`);
+    expect(scrub(KEY)).toBe(REDACTED_KEY);
+  });
+
   test("agrees with scrub(): the printed form is a fixed point", () => {
     for (const key of [
       KEY,
@@ -263,5 +269,35 @@ describe("REDACTED_KEY", () => {
     ]) {
       expect(scrub(key)).toBe(REDACTED_KEY);
     }
+  });
+});
+
+describe("the shared router-key prefix", () => {
+  test("the invalid-key refusal names the shared prefix and leaks nothing", async () => {
+    // Key-shaped but invalid: the refusal must still be the fixed sentence.
+    const malformed = `mar_live_${"A".repeat(31)}\0`;
+    const h = harness(home, { stdin: malformed });
+    const result = await login(["--url", ROUTER], h.deps);
+    expect(result).toMatchObject({ ok: false, exitCode: 64 });
+    // The refusal never reaches the network.
+    expect(h.fetchCalls).toEqual([]);
+
+    const message = result.ok === false ? (result.message ?? "") : "";
+    // The prefix the refusal names is the one the schema defines, so the
+    // message and the printed key can never disagree.
+    expect(message).toContain(`${ROUTER_KEY_PREFIX}…`);
+    // The deliberate drift detector: byte-identical to the sentence pinned in
+    // login.test.ts and run-login.test.ts.
+    expect(message).toBe(
+      "claudes login: that is not a valid router key (expected the mar_live_… prefix followed by 32 characters)",
+    );
+
+    const everything = `${message}\n${h.stdout.join("\n")}`;
+    expect(everything).not.toContain(KEY);
+    expect(everything).not.toContain(malformed);
+    assertNoKeyFragment(everything, KEY);
+    // The malformed key shares no window with the fixture key, so it needs
+    // its own window check: a leak of THIS input would pass the KEY one.
+    assertNoKeyFragment(everything, malformed);
   });
 });

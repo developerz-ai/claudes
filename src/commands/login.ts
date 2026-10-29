@@ -21,9 +21,9 @@ import {
 } from "./login-input";
 
 /**
- * Every key redacts to exactly `mar_live_…` — no length hint. scrub() strips
- * anything after the prefix anyway, so a hint could never survive the output
- * path; this way the two can never disagree.
+ * Every key redacts to exactly the prefix plus an ellipsis — no length hint.
+ * scrub() strips anything after the prefix anyway, so a hint could never
+ * survive the output path; this way the two can never disagree.
  */
 export const REDACTED_KEY = `${ROUTER_KEY_PREFIX}…`;
 
@@ -110,12 +110,12 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
   }
   // Validated against the exact router shape before any network call: Node's
   // fetch rejects malformed header values by quoting them in the error. The
-  // worded message survives scrub() as
-  // "(expected the mar_live_… prefix followed by 32 characters)".
+  // worded message survives scrub() with the prefix rendered as the ellipsis
+  // form: the source carries the bare prefix and scrub() adds the "…".
   if (!ROUTER_KEY_PATTERN.test(key)) {
     return failure(
       64,
-      "claudes login: that is not a valid router key (expected the mar_live_ prefix followed by 32 characters)",
+      `claudes login: that is not a valid router key (expected the ${ROUTER_KEY_PREFIX} prefix followed by 32 characters)`,
     );
   }
 

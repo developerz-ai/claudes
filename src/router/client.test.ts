@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ROUTER_KEY_PATTERN, ROUTER_KEY_PREFIX } from "../config/schema";
 import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { errorName, type FetchLike, health, models, RouterError, scrub } from "./client";
@@ -681,6 +682,24 @@ describe("scrub", () => {
     const err = new RouterError(`GET x failed with ${KEY} inside`);
     expect(err.message).not.toContain(KEY);
     expect(err.message).toContain("mar_live_…");
+  });
+
+  test("redacts to the canonical prefix, which the config's own key pattern agrees with", () => {
+    // The redaction is derived from the one prefix constant, never a literal:
+    // the shape that is issued and the shape that is redacted cannot drift.
+    expect(scrub(KEY)).toBe(`${ROUTER_KEY_PREFIX}…`);
+    // The config's key pattern accepts that same prefix, so a key it accepts
+    // is a key scrub() redacts.
+    expect(ROUTER_KEY_PATTERN.test(KEY)).toBe(true);
+    const key = `${ROUTER_KEY_PREFIX}${"a".repeat(32)}`;
+    expect(ROUTER_KEY_PATTERN.test(key)).toBe(true);
+    expect(scrub(key)).toBe(`${ROUTER_KEY_PREFIX}…`);
+    // The literal prefix is pinned deliberately: changing it is a deliberate
+    // change, and the pins above then fail with it.
+    expect(scrub(KEY)).toBe("mar_live_…");
+    // And the redacted output carries no window of the key body.
+    assertNoKeyFragment(scrub(KEY), KEY);
+    assertNoKeyFragment(scrub(key), key);
   });
 });
 
