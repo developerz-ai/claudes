@@ -36,7 +36,7 @@ concurrency:
   group: release-${{ github.event_name }}
   cancel-in-progress: false
 
-# The npm that publishes (and that the dry run rehearses): one definition.
+# The npm that packs and publishes (and that the dry run rehearses): one definition.
 env:
   NPM_VERSION: 12.2.0
   NPM_SHA512: ZsJjKpTnlmSXOLLXiU1xDCzC4Wlok4IwZmh/aw2KUuXytU7q6qMv/cUT7MoeSf95Slwuw/lRXYefGzGCspHPNQ==
@@ -104,6 +104,24 @@ jobs:
           # No registry-url: nothing in this job authenticates to npm.
       - run: bun install --frozen-lockfile
       - run: bin/check
+      # The npm that creates the release tarball is part of the release
+      # toolchain: pack with the same digest-verified npm the publish job
+      # installs; see that job for why npm 12.2.0 specifically (npm/cli#9722,
+      # npm/cli#9740).
+      - name: Install pinned npm ${{ env.NPM_VERSION }} from a verified tarball
+        run: |
+          curl -fsSLo npm.tgz "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
+          expected="$NPM_SHA512"
+          actual="$(openssl dgst -sha512 -binary npm.tgz | openssl base64 -A)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error title=npm tarball digest mismatch::expected sha512 (base64) $expected but got $actual. Refusing to install an unverified npm." >&2
+            exit 1
+          fi
+          npm install -g ./npm.tgz
+          if [ "$(npm --version)" != "$NPM_VERSION" ]; then
+            echo "::error title=npm version mismatch::installed npm $(npm --version), expected $NPM_VERSION." >&2
+            exit 1
+          fi
       - name: Pack and verify tarball
         id: pack
         run: |
