@@ -7,6 +7,7 @@ import {
   firstUnknownReroutingUseToggle,
   HOST_MANAGED_ENV,
   isTruthyToggle,
+  PROVIDER_SWITCHES,
 } from "./provider-switches";
 
 describe("firstHostManagedEnv", () => {
@@ -171,5 +172,54 @@ describe("firstReroutingUseToggle", () => {
         CLAUDE_CODE_USE_FOO: "1",
       }),
     ).toBe("CLAUDE_CODE_USE_VERTEX");
+  });
+});
+
+/**
+ * The guard the provider-switch set must satisfy: the constant holds exactly
+ * these seven names, in this order. The order is the stable preference order
+ * `firstSetProviderSwitch` resolves in, so the comparison is order-sensitive:
+ * an added, a removed or a replaced switch all fail it. The list under test
+ * is a parameter, so a test can mutate the code side too.
+ */
+function assertProviderSwitches(switches: readonly string[]): void {
+  expect([...switches]).toEqual([
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_GATEWAY",
+  ]);
+}
+
+describe("PROVIDER_SWITCHES", () => {
+  test("the constant holds exactly the seven provider switches, in order", () => {
+    assertProviderSwitches(PROVIDER_SWITCHES);
+  });
+
+  test("an added switch fails the guard", () => {
+    expect(() =>
+      assertProviderSwitches([...PROVIDER_SWITCHES, "CLAUDE_CODE_USE_NEW_PROVIDER"]),
+    ).toThrow();
+  });
+
+  test("a removed switch fails the guard", () => {
+    expect(() =>
+      assertProviderSwitches(
+        PROVIDER_SWITCHES.filter((name) => name !== "CLAUDE_CODE_USE_GATEWAY"),
+      ),
+    ).toThrow();
+  });
+
+  test("a replaced switch fails the guard", () => {
+    expect(() =>
+      assertProviderSwitches(
+        PROVIDER_SWITCHES.map((name) =>
+          name === "CLAUDE_CODE_USE_BEDROCK" ? "CLAUDE_CODE_USE_BEDROCK_V2" : name,
+        ),
+      ),
+    ).toThrow();
   });
 });
