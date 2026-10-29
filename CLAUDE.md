@@ -72,8 +72,9 @@ Dependency direction (the live import graph under `src/`, checkable with `grep -
 ## Test layout
 
 - Use `bun:test` (`describe` / `test` / `expect`); never install Jest or Vitest.
-- Tests are colocated: `src/foo.ts` ships `src/foo.test.ts` next to it; the `src/test-support/` directory holds framework-free helpers (`assertNoKeyFragment` throws — it does not call `expect`).
-- Subcommand flows get one test file per concern: `login-args.test.ts`, `login-input.test.ts`, `login-output.test.ts`, `login.test.ts`, `run-login.test.ts`.
+- Tests are colocated: `src/foo.ts` ships `src/foo.test.ts` next to it; a module or flow too large for one test file splits into one test file per concern, every split still colocated next to the source it exercises; the `src/test-support/` directory holds framework-free helpers (`assertNoKeyFragment` throws — it does not call `expect`).
+- Per-concern splits: `login-args.test.ts`, `login-input.test.ts`, `login-output.test.ts`, `run-login.test.ts` (login command); `key.spawn.test.ts` (key command); `run-exec.test.ts`, `run-preflight.test.ts`, `run-success.test.ts`, `run.e2e.test.ts` (launch module). This list holds only the splits: each module keeps its own `foo.test.ts` pair — `login.test.ts`, `key.test.ts`, `run.test.ts` — which the pairing clause above already covers.
+- Every test file ends in `.test.ts` — the infix may use dots (`key.spawn`, `run.e2e`) or hyphens (`run-exec`, `login-args`), and the suffix is what `tsconfig.build.json`'s `**/*.test.ts` exclusion keeps out of the bundle.
 - Any output path that might touch a key MUST be checked by `assertNoKeyFragment`; coverage of `REDACTED_KEY` and `scrub()` is the spec.
 
 ## CLI behaviour
