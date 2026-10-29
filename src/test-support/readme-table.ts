@@ -482,3 +482,138 @@ export function readmeStrippedCredentialNames(source = readme()): string[] {
   const names = codeSpans(bullet).filter(isEnvName);
   return envNames(names, ENV_NAME_OR_FAMILY, "stripped credential");
 }
+
+/** The heading the environment-variables table lives under. */
+const ENV_HEADING = "## Environment variables";
+
+/** The columns of the environment-variables table, in order. */
+const ENV_TABLE_COLUMNS = ["Variable", "Purpose", "Default or refusal"];
+
+/**
+ * The shape of a variable name: letters, digits and underscores, optionally
+ * ending in a star for a family of names (`CLAUDE_CODE_USE_*`). A family
+ * name stands for every variable under that prefix.
+ */
+const ENV_VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*\*?$/;
+
+/**
+ * One row of the README's "Environment variables" table.
+ *
+ * `names` holds the variables the row documents — one code span each, so a
+ * proxy pair can share a row. `purpose` is what claudes does with them and
+ * `defaultOrRefusal` their default or the condition that refuses the
+ * session.
+ */
+export interface EnvVariableRow {
+  readonly names: readonly string[];
+  readonly purpose: string;
+  readonly defaultOrRefusal: string;
+}
+
+/**
+ * The rows of the README's "Environment variables" table.
+ *
+ * The README's text is passed in and never read from disk here: a fixture
+ * drives this reader, and the live guard reads the file itself. A row whose
+ * first cell names something that is not a variable is rejected, so a
+ * misspelled name fails the guard instead of documenting nothing.
+ */
+export function readmeEnvironmentRows(source: string): EnvVariableRow[] {
+  const body = section(ENV_HEADING, source);
+  const start = body.findIndex((line) => line.trim().startsWith("|"));
+  if (start === -1) {
+    throw new Error(`README has no environment-variables table under "${ENV_HEADING}"`);
+  }
+  const header = cells(body[start] ?? "");
+  if (header.join("|") !== ENV_TABLE_COLUMNS.join("|")) {
+    throw new Error("README environment-variables table has unexpected columns");
+  }
+  const separator = cells(body[start + 1] ?? "");
+  if (separator.length !== 3 || !separator.every((cell) => /^-{3,}$/.test(cell))) {
+    throw new Error("README environment-variables table has a malformed separator");
+  }
+  const rows: EnvVariableRow[] = [];
+  for (const line of body.slice(start + 2)) {
+    if (line.trim() === "") {
+      break;
+    }
+    const parsed = cells(line);
+    if (parsed.length !== 3) {
+      throw new Error(
+        `README environment-variables row does not have 3 cells: ${JSON.stringify(line)}`,
+      );
+    }
+    const nameCell = parsed[0] ?? "";
+    const purpose = parsed[1] ?? "";
+    const defaultOrRefusal = parsed[2] ?? "";
+    if (nameCell === "" || purpose === "" || defaultOrRefusal === "") {
+      throw new Error("README environment-variables row must have 3 non-empty cells");
+    }
+    const names = codeSpans(nameCell);
+    if (names.length === 0) {
+      throw new Error("README environment-variables row names no variable");
+    }
+    for (const name of names) {
+      if (!ENV_VARIABLE_NAME.test(name)) {
+        throw new Error(
+          `README environment-variables row names a variable that is not one: ${JSON.stringify(name)}`,
+        );
+      }
+    }
+    rows.push({ names, purpose, defaultOrRefusal });
+  }
+  if (rows.length === 0) {
+    throw new Error("README environment-variables table has no rows");
+  }
+  return rows;
+}
+
+/** An assignment in the .env.example template: a name, `=`, and what follows. */
+const ENV_ASSIGNMENT = /^([^=]+)=(.*)$/;
+
+/**
+ * The variables the .env.example template lists, in file order.
+ *
+ * The template's text is passed in and never read from disk here. A
+ * variable line is an assignment (`NAME=` for a name, `NAME_*=` for a
+ * family) with an empty value and a trailing comment: the file is a
+ * reference list, so a value would be a credential. A commented-out
+ * assignment (`# HOME=`) still lists its variable — that is how the
+ * template keeps the shell's own variables in the list — while any other
+ * comment line is prose and is skipped.
+ */
+export function envExampleNames(source: string): string[] {
+  const names: string[] = [];
+  for (const line of source.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    const body = trimmed.startsWith("#") ? trimmed.replace(/^#\s*/, "").trim() : trimmed;
+    const match = body.match(ENV_ASSIGNMENT);
+    if (match === null) {
+      if (trimmed.startsWith("#")) {
+        continue;
+      }
+      throw new Error(
+        `env example line is neither a comment nor an assignment: ${JSON.stringify(line)}`,
+      );
+    }
+    const name = (match[1] ?? "").trim();
+    if (!ENV_VARIABLE_NAME.test(name)) {
+      throw new Error(`env example line names a variable that is not one: ${JSON.stringify(name)}`);
+    }
+    const comment = (match[2] ?? "").trim().match(/^#\s*(.+)$/);
+    if (comment === null) {
+      throw new Error(`env example line carries a value or no comment: ${JSON.stringify(line)}`);
+    }
+    if (names.includes(name)) {
+      throw new Error(`env example lists ${name} twice`);
+    }
+    names.push(name);
+  }
+  if (names.length === 0) {
+    throw new Error("env example lists no variables");
+  }
+  return names;
+}

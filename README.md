@@ -219,9 +219,10 @@ file to your shell's own values — or to an empty string when your shell has
 none: `HTTP_PROXY`/`http_proxy`, `HTTPS_PROXY`/`https_proxy`,
 `ALL_PROXY`/`all_proxy`, `NO_PROXY`/`no_proxy`, `NODE_TLS_REJECT_UNAUTHORIZED`,
 `NODE_EXTRA_CA_CERTS`, `NODE_USE_ENV_PROXY`, `NODE_OPTIONS`,
-`CLAUDE_CODE_CERT_STORE` and `BUN_CONFIG_VERBOSE_FETCH`. Both spellings of a
-proxy pair get the same value; the two `NO_PROXY` spellings get one merged
-list. `SSL_CERT_FILE` and `SSL_CERT_DIR` are carried over only when your
+`CLAUDE_CODE_CERT_STORE` and `BUN_CONFIG_VERBOSE_FETCH`. A proxy pair is
+pinned as a pair: set one spelling and both get it, set both and each keeps
+its own value; the two `NO_PROXY` spellings get one merged list.
+`SSL_CERT_FILE` and `SSL_CERT_DIR` are carried over only when your
 shell sets them (for those, empty is not the same as unset).
 
 Consequence: a proxy or CA configured only in `~/.claude/settings.json` — and
@@ -265,6 +266,51 @@ note: the router check timed out; set CLAUDES_PREFLIGHT_TIMEOUT_MS (milliseconds
 
 The hints name variables to set in your shell; `claudes` does not strip them,
 so they reach the session too.
+
+## Environment variables
+
+`claudes` reads the variables below from your shell's environment, and from
+nothing else. It never reads a `.env` file: `.env.example` in this repository
+is a reference list of the same names, not a config file claudes loads. The
+router key is never an environment variable — `claudes login` reads it from
+the prompt or from the first line of stdin and stores it in the config file,
+and it is never taken from the environment or from the command line.
+
+| Variable | Purpose | Default or refusal |
+| --- | --- | --- |
+| `XDG_CONFIG_HOME` | The base directory the config lives under: `$XDG_CONFIG_HOME/claudes/config.json`. | Defaults to `$HOME/.config`. A relative value is ignored, and with no absolute `HOME` either the commands that need the config directory refuse with exit 78; `claudes doctor` reports the config as a FAIL and exits 1, and `--version` exits 0. |
+| `HOME` | The fallback base for the config directory: `$HOME/.config/claudes`. | No default: a relative `HOME` is ignored, and without an absolute `XDG_CONFIG_HOME` or `HOME` the commands that need the config directory refuse with exit 78; `claudes doctor` reports the config as a FAIL and exits 1, and `--version` exits 0. |
+| `PATH` | Where `claudes` looks for the `claude` executable it launches. | No default: without `claude` on `PATH` the session does not start (exit 127). |
+| `CLAUDES_PREFLIGHT_TIMEOUT_MS` | How long the router's pre-launch check waits, in milliseconds. | 1500. Any value that is not an integer from 1 to 2147483647 is ignored. |
+| `BUN_CONFIG_VERBOSE_FETCH` | Bun's verbose request logging, which prints every request header; the generated settings pin it to `""`. | Unset. A truthy value in your shell refuses the session (exit 64): the router key would be printed. |
+| `ANTHROPIC_BASE_URL` | The endpoint the session talks to; the generated settings pin it to the configured router. | Unset. A value that is not the configured router's origin makes `claudes key` refuse (exit 64): the key would be served to another endpoint. |
+| `HTTP_PROXY`, `http_proxy` | The proxy for HTTP requests; pinned to your shell's own value in the generated settings. | Unset, then pinned to an empty string. The pair is pinned as a pair: set one spelling and both get it, set both and each keeps its own value. |
+| `HTTPS_PROXY`, `https_proxy` | The proxy for HTTPS requests; pinned to your shell's own value in the generated settings. | Unset, then pinned to an empty string. The pair is pinned as a pair: set one spelling and both get it, set both and each keeps its own value. |
+| `ALL_PROXY`, `all_proxy` | The catch-all proxy; pinned to your shell's own value in the generated settings. | Unset, then pinned to an empty string. The pair is pinned as a pair: set one spelling and both get it, set both and each keeps its own value. |
+| `NO_PROXY`, `no_proxy` | The hosts that bypass the proxy; the two spellings get one merged list, with the router's own host and the loopback hosts prepended when the router runs on this machine. | Unset, then pinned to an empty string. |
+| `NODE_TLS_REJECT_UNAUTHORIZED` | Whether Node accepts a certificate it cannot verify; pinned to your shell's own value. | Unset, then pinned to an empty string. |
+| `NODE_EXTRA_CA_CERTS` | The CA bundle Node trusts; pinned to your shell's own value. | Unset, then pinned to an empty string. |
+| `NODE_USE_ENV_PROXY` | Whether Node's own fetch goes through the proxy variables; pinned to your shell's own value. | Unset, then pinned to an empty string. The router check ignores `HTTP_PROXY` and `HTTPS_PROXY` unless this is set. |
+| `NODE_OPTIONS` | Node's own options; pinned to your shell's own value and merged into the key helper's environment. | Unset, then pinned to an empty string. |
+| `CLAUDE_CODE_CERT_STORE` | The certificate store Claude Code trusts; pinned to your shell's own value. | Unset, then pinned to an empty string. |
+| `SSL_CERT_FILE` | The CA file the OpenSSL clients in the session use; carried over only when your shell sets it. | Unset, then left out of the generated settings: never pinned to an empty string, because an empty CA store breaks every HTTPS request those clients make. |
+| `SSL_CERT_DIR` | The CA directory the OpenSSL clients in the session use; carried over only when your shell sets it. | Unset, then left out of the generated settings: never pinned to an empty string, because an empty CA store breaks every HTTPS request those clients make. |
+| `CLAUDE_CODE_USE_BEDROCK` | A switch that points Claude Code at another provider; stripped from the session environment and pinned to `""` in the generated settings. | Off, so the session goes to the router. `claudes key` refuses (exit 64) when the switch is truthy in its own environment. |
+| `CLAUDE_CODE_USE_VERTEX` | A switch that points Claude Code at another provider; stripped from the session environment and pinned to `""` in the generated settings. | Off, so the session goes to the router. `claudes key` refuses (exit 64) when the switch is truthy in its own environment. |
+| `CLAUDE_CODE_USE_FOUNDRY` | A switch that points Claude Code at another provider; stripped from the session environment and pinned to `""` in the generated settings. | Off, so the session goes to the router. `claudes key` refuses (exit 64) when the switch is truthy in its own environment. |
+| `CLAUDE_CODE_USE_MANTLE` | A switch that points Claude Code at another provider; stripped from the session environment and pinned to `""` in the generated settings. | Off, so the session goes to the router. `claudes key` refuses (exit 64) when the switch is truthy in its own environment. |
+| `CLAUDE_CODE_USE_ANTHROPIC_AWS` | A switch that points Claude Code at another provider; stripped from the session environment and pinned to `""` in the generated settings. | Off, so the session goes to the router. `claudes key` refuses (exit 64) when the switch is truthy in its own environment. |
+| `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD` | A switch that points Claude Code at another provider; stripped from the session environment and pinned to `""` in the generated settings. | Off, so the session goes to the router. `claudes key` refuses (exit 64) when the switch is truthy in its own environment. |
+| `CLAUDE_CODE_USE_GATEWAY` | A switch that points Claude Code at another provider; stripped from the session environment and pinned to `""` in the generated settings. | Off, so the session goes to the router. `claudes key` refuses (exit 64) when the switch is truthy in its own environment. |
+| `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` | A host process that manages Claude Code's provider and auth environment; Claude Code then ignores the generated settings file outright. | Unset. A truthy value refuses the session (exit 64): the session would silently skip the router. |
+| `CLAUDE_CODE_HOST_AUTH_ENV_VAR` | The name of the env var holding the host's own credential. | Unset. Any non-empty value refuses the session (exit 64), `0` and `false` included: the variable is read as a name, not as a flag. |
+| `CLAUDE_CODE_USE_POWERSHELL_TOOL` | A known-benign `CLAUDE_CODE_USE_` toggle: it picks a local tool implementation, not another provider. | Passed through to the session unchanged; never refused. |
+| `CLAUDE_CODE_USE_NATIVE_FILE_SEARCH` | A known-benign `CLAUDE_CODE_USE_` toggle: it picks a local tool implementation, not another provider. | Passed through to the session unchanged; never refused. |
+| `CLAUDE_CODE_USE_COWORK_PLUGINS` | A known-benign `CLAUDE_CODE_USE_` toggle: it picks a local tool implementation, not another provider. | Passed through to the session unchanged; never refused. |
+| `CLAUDE_CODE_USE_*` | Every other variable under this prefix — a name that is neither one of the seven provider switches above nor one of the three known-benign toggles. `claudes` cannot know what such a name does, so it cannot rule out that it reroutes the session. | Refused (exit 64) when truthy: the launcher refuses it before the session starts, and `claudes key` refuses it too. A known provider switch is not refused at launch — it is stripped from the session and pinned off instead — though `claudes key` refuses a truthy one (exit 64). |
+| `ANTHROPIC_*` | Anthropic's own credentials and endpoint settings; the session's copy is stripped, so a leftover personal key cannot win over the router. | Stripped from the session environment. The generated settings set the names Claude Code needs: the credential names to `""`, the base URL to the configured router. |
+| `CLAUDE_CODE_OAUTH_*` | A claude.ai OAuth credential; stripped from the session environment so it cannot authenticate the session anywhere but the router. | Stripped from the session environment. |
+| `AWS_BEARER_TOKEN_BEDROCK` | The Bedrock bearer credential, the one credential outside the namespaces above; stripped from the session environment. | Stripped from the session environment. |
 
 ## Uninstall
 
