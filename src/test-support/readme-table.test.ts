@@ -25,6 +25,9 @@ import {
  * assert the behaviour the table promises; this file asserts that the table
  * is read the way they assume — twelve rows, code spans unquoted, the
  * "(message above)" cell resolved and the prose cell left without a message.
+ * It also guards the refusal prose's switch counts — the seven provider
+ * switches and the known-benign tool toggles — against PROVIDER_SWITCHES and
+ * BENIGN_USE_TOGGLES, since those guards live here too.
  */
 
 const rows = readmeRefusalRows();
@@ -213,6 +216,92 @@ function assertStrippedCredentialNames(source: string): void {
   const switches = PROVIDER_SWITCHES as readonly string[];
   expect(documented.filter((name) => switches.includes(name)).length).toBeGreaterThan(0);
 }
+
+/** Read counts from the refusal prose; never infer missing counts from the code. */
+function readmeSwitchCounts(source: string): { provider: number; benign: number } {
+  const section = /^## Refusals and exit codes\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(source)?.[1];
+  if (section === undefined) throw new Error("README refusal section missing");
+  const prose = section.replace(/\s+/g, " ");
+  function count(pattern: RegExp, label: string): number {
+    const token = pattern.exec(prose)?.[1]?.toLowerCase();
+    if (token === "three") return 3;
+    if (token === "seven") return 7;
+    if (token !== undefined && /^\d+$/.test(token)) {
+      const value = Number(token);
+      if (Number.isSafeInteger(value)) return value;
+    }
+    throw new Error(`README ${label} count missing or unsupported`);
+  }
+  return {
+    provider: count(/\b(\S+) known provider switches\b/i, "provider-switch"),
+    benign: count(/\b(\S+) known-benign tool toggles are allowlisted\b/i, "benign-toggle"),
+  };
+}
+
+function assertSwitchCounts(
+  source: string,
+  providers: readonly string[] = PROVIDER_SWITCHES,
+  benign: readonly string[] = BENIGN_USE_TOGGLES,
+): void {
+  const documented = readmeSwitchCounts(source);
+  expect(documented.provider).toBe(providers.length);
+  expect(documented.benign).toBe(benign.length);
+}
+
+describe("README refusal switch counts", () => {
+  test("both documented counts match the live lists", () => {
+    assertSwitchCounts(readmeSource);
+  });
+
+  test("numeric counts are read from the prose too", () => {
+    const source = readmeSource
+      .replace("seven known provider switches", "7 known provider switches")
+      .replace("three\nknown-benign", "3\nknown-benign");
+    expect(source).not.toBe(readmeSource);
+    assertSwitchCounts(source);
+  });
+
+  for (const [label, source] of Object.entries({
+    "changed provider count": readmeSource.replace("seven known provider", "8 known provider"),
+    "changed benign count": readmeSource.replace("three\nknown-benign", "4\nknown-benign"),
+    "missing provider count": readmeSource.replace("seven known provider", "known provider"),
+    "missing benign count": readmeSource.replace("three\nknown-benign", "known-benign"),
+    "unsupported provider count": readmeSource.replace(
+      "seven known provider",
+      "many known provider",
+    ),
+    "unsupported benign count": readmeSource.replace("three\nknown-benign", "many\nknown-benign"),
+    "missing provider anchor": readmeSource.replace("known provider switches", "provider flags"),
+    "missing benign anchor": readmeSource.replace("known-benign tool toggles", "benign flags"),
+    "missing provider claim": readmeSource.replace(
+      /The seven known provider switches[\s\S]*?in the generated settings\./,
+      "",
+    ),
+    "missing benign claim": readmeSource.replace(
+      /three\s+known-benign tool toggles are allowlisted\./,
+      "",
+    ),
+    "missing section heading": readmeSource.replace("## Refusals and exit codes", "## Other"),
+    "missing section": readmeSource.replace(/## Refusals and exit codes\n[\s\S]*?(?=\n## )/, ""),
+  })) {
+    test(`rejects ${label}`, () => {
+      expect(source).not.toBe(readmeSource);
+      expect(() => assertSwitchCounts(source)).toThrow();
+    });
+  }
+
+  for (const [label, providers, benign] of [
+    ["provider added", [...PROVIDER_SWITCHES, "CLAUDE_CODE_USE_FUTURE"], BENIGN_USE_TOGGLES],
+    ["provider removed", PROVIDER_SWITCHES.slice(1), BENIGN_USE_TOGGLES],
+    ["benign toggle added", PROVIDER_SWITCHES, [...BENIGN_USE_TOGGLES, "CLAUDE_CODE_USE_TOOL"]],
+    ["benign toggle removed", PROVIDER_SWITCHES, BENIGN_USE_TOGGLES.slice(1)],
+  ] as const) {
+    test(`rejects code-side ${label}`, () => {
+      expect([providers, benign]).not.toEqual([PROVIDER_SWITCHES, BENIGN_USE_TOGGLES]);
+      expect(() => assertSwitchCounts(readmeSource, providers, benign)).toThrow();
+    });
+  }
+});
 
 describe("README pinned-transport parser", () => {
   test("the documented names are exactly the launcher's pinned constants", () => {
