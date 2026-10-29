@@ -45,7 +45,25 @@ function section(heading: string, source = readme()): string[] {
   if (start === -1) {
     throw new Error(`README has no "${heading}" section`);
   }
-  const level = heading.match(/^#+/)?.[0].length ?? 0;
+  return sectionLines(lines, start);
+}
+
+/**
+ * The lines of the section whose heading matches `pattern`, up to the next
+ * heading of the same level. Throws when no heading matches.
+ */
+function sectionMatching(pattern: RegExp, source: string): string[] {
+  const lines = source.split("\n");
+  const start = lines.findIndex((line) => pattern.test(line.trimEnd()));
+  if (start === -1) {
+    throw new Error(`README has no section matching ${String(pattern)}`);
+  }
+  return sectionLines(lines, start);
+}
+
+/** The lines below the heading at `start`, up to the next heading of the same level. */
+function sectionLines(lines: string[], start: number): string[] {
+  const level = (lines[start] ?? "").match(/^#+/)?.[0].length ?? 0;
   const body: string[] = [];
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i] ?? "";
@@ -249,4 +267,218 @@ export function readmeNetworkNotes(source = readme()): string[] {
     throw new Error("README network notes need a non-empty, closed fenced block");
   }
   return notes;
+}
+
+/** The heading the network section lives under. */
+const NETWORK_HEADING = "## Network, proxies and certificates";
+
+/**
+ * The heading of the success-path behaviour list. The apostrophe is matched
+ * loosely: a typographic quote in the README must not break the parse.
+ */
+const BEHAVIOUR_HEADING = /^## What it does and doesn.t do$/;
+
+/** The phrase the network section introduces its pinned transport names with. */
+const PINNED_ANCHOR = "pins the network-related variables";
+
+/** The phrase the network section introduces its parent-only names with. */
+const PARENT_ONLY_ANCHOR = "carried over only when your shell sets them";
+
+/** The phrase the success-path bullet lists the stripped credentials after. */
+const STRIPPED_ANCHOR = "the child environment is stripped of";
+
+/** The shape of an env name: letters, digits and underscores. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The shape of an env name, or of a family of them written as a glob. */
+const ENV_NAME_OR_FAMILY = /^[A-Za-z_][A-Za-z0-9_*]*$/;
+
+/** A section's lines as one whitespace-normalised paragraph. */
+function prose(body: string[]): string {
+  return body.join(" ").replace(/\s+/g, " ").trim();
+}
+
+/** One sentence of a prose block, with its offsets in that block. */
+interface Sentence {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * The sentences of a prose block: a "." outside a code span, followed by
+ * whitespace or the end of the block, ends one.
+ */
+function sentences(text: string): Sentence[] {
+  const out: Sentence[] = [];
+  let start = 0;
+  let inSpan = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i] ?? "";
+    if (char === "`") {
+      inSpan = !inSpan;
+      continue;
+    }
+    if (char !== "." || inSpan) {
+      continue;
+    }
+    const next = text[i + 1];
+    if (next !== undefined && !/\s/.test(next)) {
+      continue;
+    }
+    out.push({ text: text.slice(start, i + 1), start, end: i + 1 });
+    start = i + 1;
+  }
+  const rest = text.slice(start);
+  if (rest.trim() !== "") {
+    out.push({ text: rest, start, end: text.length });
+  }
+  return out;
+}
+
+/**
+ * The sentence holding `anchor`, and where the anchor starts inside it.
+ * Throws when the phrase is gone: a reworded README fails loudly here
+ * instead of silently yielding a shorter list.
+ */
+function sentenceAt(text: string, anchor: string): { sentence: string; anchorAt: number } {
+  const index = text.indexOf(anchor);
+  if (index === -1) {
+    throw new Error(`README has no "${anchor}" phrase`);
+  }
+  const found = sentences(text).find((one) => index >= one.start && index < one.end);
+  if (found === undefined) {
+    throw new Error(`README's "${anchor}" phrase is not inside a sentence`);
+  }
+  return { sentence: found.text, anchorAt: index - found.start };
+}
+
+/** The code spans of a text, in order; an unterminated span ends the scan. */
+function codeSpans(text: string, from = 0): string[] {
+  const out: string[] = [];
+  let i = from;
+  while (i < text.length) {
+    if (text[i] !== "`") {
+      i += 1;
+      continue;
+    }
+    const close = text.indexOf("`", i + 1);
+    if (close === -1) {
+      break;
+    }
+    out.push(text.slice(i + 1, close));
+    i = close + 1;
+  }
+  return out;
+}
+
+/** The code spans of the sentence holding `anchor`, after the anchor itself. */
+function namesAfterAnchor(text: string, anchor: string): string[] {
+  const found = sentenceAt(text, anchor);
+  return codeSpans(found.sentence, found.anchorAt + anchor.length);
+}
+
+/** The code spans of the whole sentence holding `anchor`. */
+function namesOfAnchorSentence(text: string, anchor: string): string[] {
+  return codeSpans(sentenceAt(text, anchor).sentence);
+}
+
+/** The names of a documented list, each checked for the shape an env name has. */
+function envNames(names: string[], shape: RegExp, what: string): string[] {
+  if (names.length === 0) {
+    throw new Error(`README documents no ${what} env names`);
+  }
+  for (const name of names) {
+    if (!shape.test(name)) {
+      throw new Error(
+        `README documents a ${what} env name that is not one: ${JSON.stringify(name)}`,
+      );
+    }
+  }
+  return names;
+}
+
+/**
+ * The list items of a section body, each flattened to one paragraph: a
+ * line that starts an item opens one, the lines under it belong to it, and
+ * a blank line ends it.
+ */
+function listItems(body: string[]): string[] {
+  const items: string[] = [];
+  let current: string[] = [];
+  for (const line of body) {
+    if (/^\s*[-*]\s/.test(line)) {
+      if (current.length > 0) {
+        items.push(prose(current));
+      }
+      current = [line];
+      continue;
+    }
+    if (current.length === 0) {
+      continue;
+    }
+    if (line.trim() === "") {
+      items.push(prose(current));
+      current = [];
+      continue;
+    }
+    current.push(line);
+  }
+  if (current.length > 0) {
+    items.push(prose(current));
+  }
+  return items;
+}
+
+/** An env name the README may list: the env-name shape, and an underscore. */
+function isEnvName(name: string): boolean {
+  return ENV_NAME_OR_FAMILY.test(name) && name.includes("_");
+}
+
+/**
+ * The transport env names the README's "Network, proxies and certificates"
+ * section documents for the generated settings.
+ */
+export interface ReadmeTransportNames {
+  /** Pinned to the shell's own value, or to "": PINNED_TRANSPORT_ENV. */
+  readonly pinned: readonly string[];
+  /** Carried over only when the shell sets them: PARENT_ONLY_TRANSPORT_ENV. */
+  readonly parentOnly: readonly string[];
+}
+
+/**
+ * The transport env names the README's network section documents, read from
+ * its prose by anchor phrase: the names the launcher pins to the shell's own
+ * value, and the ones it carries over only when the shell sets them. A
+ * README that drops a name yields a shorter list; one that drops the anchor
+ * throws instead of quietly returning what is left.
+ */
+export function readmePinnedTransportNames(source = readme()): ReadmeTransportNames {
+  const body = prose(section(NETWORK_HEADING, source));
+  return {
+    pinned: envNames(namesAfterAnchor(body, PINNED_ANCHOR), ENV_NAME, "pinned transport"),
+    parentOnly: envNames(
+      namesOfAnchorSentence(body, PARENT_ONLY_ANCHOR),
+      ENV_NAME,
+      "parent-only transport",
+    ),
+  };
+}
+
+/**
+ * The credential names the README's success-path bullet says the child
+ * environment is stripped of: every env-shaped name the bullet mentions —
+ * the two vars the generated settings pins to "", the credential families,
+ * the bare Bedrock token and the provider switch it names. The bullet is
+ * located by the anchor phrase, so a reworded anchor throws instead of
+ * quietly yielding a shorter list.
+ */
+export function readmeStrippedCredentialNames(source = readme()): string[] {
+  const body = sectionMatching(BEHAVIOUR_HEADING, source);
+  const bullet = listItems(body).find((item) => item.includes(STRIPPED_ANCHOR));
+  if (bullet === undefined) {
+    throw new Error(`README has no "${STRIPPED_ANCHOR}" phrase`);
+  }
+  const names = codeSpans(bullet).filter(isEnvName);
+  return envNames(names, ENV_NAME_OR_FAMILY, "stripped credential");
 }
