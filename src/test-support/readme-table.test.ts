@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { ROUTER_KEY_PATTERN, ROUTER_KEY_PREFIX } from "../config/schema";
 import { isStripped } from "../launch/env";
-import { PROVIDER_SWITCHES } from "../launch/provider-switches";
+import {
+  BENIGN_USE_TOGGLES,
+  HOST_MANAGED_ENV,
+  PROVIDER_SWITCHES,
+} from "../launch/provider-switches";
 import { PARENT_ONLY_TRANSPORT_ENV, PINNED_TRANSPORT_ENV } from "../launch/settings";
 import {
+  envExampleNames,
+  readmeEnvironmentRows,
   readmeKnownGapRows,
   readmeNetworkNotes,
   readmePinnedTransportNames,
@@ -297,6 +304,271 @@ describe("README stripped-credential parser", () => {
   })) {
     test(`rejects ${label}`, () => {
       expect(() => assertStrippedCredentialNames(source)).toThrow();
+    });
+  }
+});
+
+const envHeading = "## Environment variables";
+const envHeader = "| Variable | Purpose | Default or refusal |";
+const envSeparator = "| --- | --- | --- |";
+const envRow = "| `HOME` | The fallback base | Unset |";
+const envTable = [envHeading, envHeader, envSeparator, envRow].join("\n");
+
+describe("README environment-variables parser", () => {
+  test("reads the names, the purpose and the default of a row", () => {
+    expect(readmeEnvironmentRows(envTable)).toEqual([
+      { names: ["HOME"], purpose: "The fallback base", defaultOrRefusal: "Unset" },
+    ]);
+  });
+
+  test("reads a row that documents a proxy pair in one cell", () => {
+    const pair = "| `HTTP_PROXY`, `http_proxy` | The proxy | Pinned to your shell's value |";
+    expect(readmeEnvironmentRows(envTable.replace(envRow, pair))[0]?.names).toEqual([
+      "HTTP_PROXY",
+      "http_proxy",
+    ]);
+  });
+
+  test("reads a family name", () => {
+    const family = "| `CLAUDE_CODE_USE_*` | Every other name | Refused when truthy |";
+    expect(readmeEnvironmentRows(envTable.replace(envRow, family))[0]?.names).toEqual([
+      "CLAUDE_CODE_USE_*",
+    ]);
+  });
+
+  for (const [label, source] of Object.entries({
+    "missing heading": envTable.replace(envHeading, "## Other"),
+    "missing table": envHeading,
+    "wrong header": envTable.replace("Purpose", "What"),
+    "extra header cell": envTable.replace(envHeader, `${envHeader} Extra |`),
+    "bad separator": envTable.replace(envSeparator, "| --- | nope | --- |"),
+    "missing separator": envTable.replace(`${envSeparator}\n`, ""),
+    "empty table": envTable.replace(envRow, ""),
+    "missing cell": envTable.replace(envRow, "| `HOME` | The fallback base |"),
+    "extra cell": envTable.replace(envRow, "| `HOME` | The fallback base | Unset | Extra |"),
+    "empty cell": envTable.replace(envRow, "| `HOME` |  | Unset |"),
+    "a name that is not env-shaped": envTable.replace(
+      envRow,
+      "| `not a name` | The fallback base | Unset |",
+    ),
+    "a row naming no variable": envTable.replace(envRow, "| HOME | The fallback base | Unset |"),
+  })) {
+    test(`rejects ${label}`, () => {
+      expect(() => readmeEnvironmentRows(source)).toThrow();
+    });
+  }
+});
+
+const envExample = [
+  "# a header comment",
+  "HOME=  # the fallback base",
+  "# PATH=  # where claude lives",
+].join("\n");
+
+describe(".env.example parser", () => {
+  test("reads the names, including a commented-out assignment", () => {
+    expect(envExampleNames(envExample)).toEqual(["HOME", "PATH"]);
+  });
+
+  test("reads a family name", () => {
+    expect(envExampleNames("CLAUDE_CODE_USE_*=  # every other name")).toEqual([
+      "CLAUDE_CODE_USE_*",
+    ]);
+  });
+
+  for (const [label, source] of Object.entries({
+    "a line that is not an assignment": "HOME",
+    "a line carrying a value": "HOME=secret  # the fallback base",
+    "a line without a comment": "HOME=",
+    "a name that is not env-shaped": "not a name=  # the fallback base",
+    "the same name twice": "HOME=  # one\nHOME=  # two",
+    "no variables at all": "# just a comment",
+  })) {
+    test(`rejects ${label}`, () => {
+      expect(() => envExampleNames(source)).toThrow();
+    });
+  }
+});
+
+const envExampleSource = readFileSync(new URL("../../.env.example", import.meta.url), "utf8");
+const gitignoreSource = readFileSync(new URL("../../.gitignore", import.meta.url), "utf8");
+
+/**
+ * The router-key shape without its anchors: a key anywhere in a text, not a
+ * whole line. Derived from the production pattern, so the two cannot drift.
+ */
+const KEY_ANYWHERE = new RegExp(ROUTER_KEY_PATTERN.source.replace(/^\^/, "").replace(/\$$/, ""));
+
+/**
+ * The names claudes reads that no production list constant enumerates: the
+ * literal reads — one per production line — and the families, a prefix plus
+ * a star. Each entry names the production file that owns it, and the guard
+ * below checks that file still reads it, so a rename in production fails
+ * here instead of passing as documentation.
+ */
+const ENV_NAMES_OUTSIDE_THE_LISTS: ReadonlyArray<{
+  readonly name: string;
+  readonly file: string;
+  readonly owned: RegExp;
+}> = [
+  { name: "HOME", file: "src/config/paths.ts", owned: /env\.HOME\b/ },
+  { name: "XDG_CONFIG_HOME", file: "src/config/paths.ts", owned: /env\.XDG_CONFIG_HOME\b/ },
+  { name: "PATH", file: "src/launch/run.ts", owned: /env\.PATH\b/ },
+  {
+    name: "CLAUDES_PREFLIGHT_TIMEOUT_MS",
+    file: "src/launch/preflight.ts",
+    owned: /env\.CLAUDES_PREFLIGHT_TIMEOUT_MS\b/,
+  },
+  {
+    name: "BUN_CONFIG_VERBOSE_FETCH",
+    file: "src/launch/run.ts",
+    owned: /env\.BUN_CONFIG_VERBOSE_FETCH\b/,
+  },
+  { name: "ANTHROPIC_BASE_URL", file: "src/commands/key.ts", owned: /env\.ANTHROPIC_BASE_URL\b/ },
+  { name: "ANTHROPIC_*", file: "src/launch/env.ts", owned: /"ANTHROPIC_"/ },
+  { name: "CLAUDE_CODE_OAUTH_*", file: "src/launch/env.ts", owned: /"CLAUDE_CODE_OAUTH_"/ },
+  {
+    name: "CLAUDE_CODE_USE_*",
+    file: "src/launch/provider-switches.ts",
+    owned: /"CLAUDE_CODE_USE_"/,
+  },
+  {
+    name: "AWS_BEARER_TOKEN_BEDROCK",
+    file: "src/launch/env.ts",
+    owned: /"AWS_BEARER_TOKEN_BEDROCK"/,
+  },
+];
+
+/** Every name claudes reads: the five production lists and the table above. */
+function productionEnvNames(): string[] {
+  return [
+    ...PINNED_TRANSPORT_ENV,
+    ...PARENT_ONLY_TRANSPORT_ENV,
+    ...PROVIDER_SWITCHES,
+    ...HOST_MANAGED_ENV,
+    ...BENIGN_USE_TOGGLES,
+    ...ENV_NAMES_OUTSIDE_THE_LISTS.map((entry) => entry.name),
+  ];
+}
+
+/** The names the README's environment-variables table documents, in row order. */
+function documentedEnvNames(): string[] {
+  return readmeEnvironmentRows(readmeSource).flatMap((row) => [...row.names]);
+}
+
+/**
+ * The contract, over a README text and an .env.example text: the table
+ * documents exactly the names claudes reads, the two sides list the same
+ * names, and the template holds no router-key-shaped token.
+ *
+ * The live test runs it over the files as they stand; the mutations below run
+ * it over drifted copies, so the guard is shown to be able to fail.
+ */
+function assertEnvContract(readme: string, example: string): void {
+  const documented = [
+    ...new Set(readmeEnvironmentRows(readme).flatMap((row) => [...row.names])),
+  ].sort();
+  expect(documented).toEqual([...new Set(productionEnvNames())].sort());
+  expect([...envExampleNames(example)].sort()).toEqual(documented);
+  expect(KEY_ANYWHERE.test(example)).toBe(false);
+}
+
+/** A key-shaped token, built from the production prefix: never a real key. */
+const SYNTHETIC_KEY = `${ROUTER_KEY_PREFIX}${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"}`;
+
+describe("the environment-variable contract", () => {
+  test("the table and the template carry exactly the names claudes reads", () => {
+    assertEnvContract(readmeSource, envExampleSource);
+  });
+
+  test("every name of the five production lists is documented", () => {
+    const documented = new Set(documentedEnvNames());
+    const missing = productionEnvNames().filter((name) => !documented.has(name));
+    expect(missing).toEqual([]);
+  });
+
+  test("every documented name is one claudes reads", () => {
+    const known = new Set(productionEnvNames());
+    for (const name of documentedEnvNames()) {
+      if (!name.endsWith("*")) {
+        expect(known.has(name)).toBe(true);
+        continue;
+      }
+      // A family is read by prefix: either the strip list covers the prefix,
+      // or every switch and benign toggle shares it.
+      const prefix = name.slice(0, -1);
+      const stripped = isStripped(prefix);
+      const switchFamily = [...PROVIDER_SWITCHES, ...BENIGN_USE_TOGGLES].every((one) =>
+        one.startsWith(prefix),
+      );
+      expect(stripped || switchFamily).toBe(true);
+    }
+  });
+
+  test("each name outside the production lists is still read by the file that owns it", () => {
+    for (const entry of ENV_NAMES_OUTSIDE_THE_LISTS) {
+      const source = readFileSync(new URL(`../../${entry.file}`, import.meta.url), "utf8");
+      expect(source).toMatch(entry.owned);
+    }
+  });
+
+  test("the README table and .env.example list the same names", () => {
+    expect([...envExampleNames(envExampleSource)].sort()).toEqual([...documentedEnvNames()].sort());
+  });
+
+  test("every row carries a purpose and a default or refusal", () => {
+    const rows = readmeEnvironmentRows(readmeSource);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.purpose.length).toBeGreaterThan(0);
+      expect(row.defaultOrRefusal.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("the section points at .env.example and keeps the key out of the environment", () => {
+    const body = readmeSource.slice(readmeSource.indexOf(envHeading));
+    expect(body).toContain("`.env.example`");
+    expect(body).toContain("router key is never an environment variable");
+  });
+
+  test(".gitignore still carries the !.env.example exception", () => {
+    expect(gitignoreSource.split("\n").map((line) => line.trim())).toContain("!.env.example");
+  });
+
+  test(".env.example holds no router-key-shaped token", () => {
+    expect(KEY_ANYWHERE.test(envExampleSource)).toBe(false);
+  });
+
+  test(".env.example says the key is never read from the environment or the command line", () => {
+    expect(envExampleSource).toContain("The router key is NOT an environment variable");
+    expect(envExampleSource).toContain("never taken from the environment or from the command line");
+  });
+
+  const mutations: Readonly<Record<string, readonly [string, string]>> = {
+    "a name dropped from the table": [
+      readmeSource.replace(/^\| `SSL_CERT_DIR`.*\n/m, ""),
+      envExampleSource,
+    ],
+    "a name renamed in the table": [
+      readmeSource.replace("| `SSL_CERT_DIR` |", "| `SSL_CERT_DIR_2` |"),
+      envExampleSource,
+    ],
+    "a name dropped from the template": [
+      readmeSource,
+      envExampleSource.replace(/^SSL_CERT_DIR=.*\n/m, ""),
+    ],
+    "a name renamed in the template": [
+      readmeSource,
+      envExampleSource.replace("SSL_CERT_DIR=", "SSL_CERT_DIR_2="),
+    ],
+    "a key-shaped token in the template": [
+      readmeSource,
+      `${envExampleSource}${SYNTHETIC_KEY}=  # a key\n`,
+    ],
+  };
+  for (const [label, [readme, example]] of Object.entries(mutations)) {
+    test(`rejects ${label}`, () => {
+      expect(() => assertEnvContract(readme, example)).toThrow();
     });
   }
 });
