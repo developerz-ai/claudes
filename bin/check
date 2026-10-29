@@ -30,6 +30,12 @@ node_modules/.bin/tsc --noEmit -p tsconfig.json
 node_modules/.bin/tsc --noEmit -p tsconfig.build.json
 
 bun test
+# bun's default test discovery skips hidden directories, so the `bun test` above
+# does NOT run the release-guard suite: .github/ is hidden. Without the explicit
+# path below the shipped release guards would be unpinned, and this gate — with
+# it ci.yml and release.yml — would stay green while a guard had been broken,
+# deleted or neutered. Name the file so the gate really runs it.
+bun test ./.github/workflows/release.test.ts
 
 bun scripts/build.ts
 
