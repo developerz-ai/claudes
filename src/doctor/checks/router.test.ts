@@ -38,6 +38,19 @@ function healthAnswer(version: string): () => Promise<Response> {
   return () => Promise.resolve(new Response(JSON.stringify({ version }), { status: 200 }));
 }
 
+/**
+ * An exotic rejection: every `instanceof` against it throws, so a bare type
+ * test in a failure path would escape the check raw (the client.test.ts
+ * precedent). Its trap message carries the key — nothing user-facing may.
+ */
+function trappingProxy(): unknown {
+  return new Proxy(new TypeError("fetch failed"), {
+    getPrototypeOf() {
+      throw new Error(`trap exploded ${KEY}`);
+    },
+  });
+}
+
 describe("checkRouter", () => {
   test("a healthy router passes health, key and tiers, and yields the model ids", async () => {
     const calls: StubCall[] = [];
@@ -127,6 +140,71 @@ describe("checkRouter", () => {
     expect(results[1]?.status).toBe("PASS");
     expect(results[1]?.title).toContain("4 models");
     expect(modelIds).toEqual(IDS);
+  });
+
+  test("a /healthz version carrying a full 8-char window of the key body is withheld", async () => {
+    // Both ends of the window scan, each slice derived from KEY_BODY: the
+    // first window (body offset 0) and the last (offset len-8). One run per
+    // window, so a hit at one offset cannot mask a miss at the other — and
+    // the router still PASSes, only the version is withheld.
+    for (const window of [KEY_BODY.slice(0, 8), KEY_BODY.slice(KEY_BODY.length - 8)]) {
+      const { results, modelIds } = await checkRouter({
+        config: sampleConfig(),
+        fetch: stubFetch({ health: healthAnswer(window) }),
+      });
+      expect(results[0]?.status).toBe("PASS");
+      expect(results[0]?.title).toContain("withheld");
+      for (const result of results) {
+        assertNoKeyFragment(result.title, KEY);
+      }
+      expect(results[1]?.status).toBe("PASS");
+      expect(results[1]?.title).toContain("4 models");
+      expect(modelIds).toEqual(IDS);
+    }
+  });
+
+  test("a /healthz version one character short of a window is shown verbatim", async () => {
+    // KEY_BODY.slice(0, 7) sits below the 8-char window rule, so the gate
+    // must NOT withhold it: the title carries the 7-char slice itself — and
+    // assertNoKeyFragment agrees, since no full window fits in it.
+    const short = KEY_BODY.slice(0, 7);
+    const { results } = await checkRouter({
+      config: sampleConfig(),
+      fetch: stubFetch({ health: healthAnswer(short) }),
+    });
+    expect(results[0]?.status).toBe("PASS");
+    expect(results[0]?.title).not.toContain("withheld");
+    expect(results[0]?.title).toContain(short);
+    for (const result of results) {
+      assertNoKeyFragment(result.title, KEY);
+    }
+  });
+
+  test("a prototype-trapping proxy from /healthz is classified, never thrown", async () => {
+    const { results } = await checkRouter({
+      config: sampleConfig(),
+      fetch: stubFetch({ health: () => Promise.reject(trappingProxy()) }),
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.status).toBe("FAIL");
+    expect(results[0]?.title).toContain("failed the health check");
+    expect(results[0]?.title).toContain("(Error)");
+    assertNoKeyFragment(results[0]?.title ?? "", KEY);
+  });
+
+  test("a prototype-trapping proxy from /v1/models is classified, never thrown", async () => {
+    const { results } = await checkRouter({
+      config: sampleConfig(),
+      fetch: stubFetch({ models: () => Promise.reject(trappingProxy()) }),
+    });
+    // /healthz answered normally; only the models verdict fails, classified.
+    expect(results[0]?.status).toBe("PASS");
+    expect(results[1]?.status).toBe("FAIL");
+    expect(results[1]?.title).toContain("could not list the router's models");
+    expect(results[1]?.title).toContain("(Error)");
+    for (const result of results) {
+      assertNoKeyFragment(result.title, KEY);
+    }
   });
 
   test("an error whose name carries the key body is withheld from the title", async () => {

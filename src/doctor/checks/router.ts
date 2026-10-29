@@ -1,5 +1,5 @@
-import { type Config, ROUTER_KEY_PREFIX } from "../../config/schema";
-import { errorName, type FetchLike, health, models, RouterError } from "../../router/client";
+import { type Config, keyFragmentOffset } from "../../config/schema";
+import { errorName, type FetchLike, health, isRouterError, models } from "../../router/client";
 import { TIER_FAMILIES, type TierName } from "../../tiers";
 import type { CheckResult } from "../results";
 
@@ -7,12 +7,6 @@ import type { CheckResult } from "../results";
 const ROUTER_TIMEOUT_MS = 10_000;
 
 const RELOGIN_FIX = "re-run `claudes login`";
-
-/**
- * The window the key's body is measured in: the 32 secret characters after
- * `mar_live_`, eight at a time — the same rule `assertNoKeyFragment` pins.
- */
-const KEY_BODY_WINDOW = 8;
 
 /** What a title prints instead of a version that carried key material. */
 const WITHHELD_VERSION = "withheld: the router echoed key material";
@@ -68,7 +62,7 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
   try {
     ids = await models(base, key, deps.fetch, timeoutMs);
   } catch (err) {
-    if (err instanceof RouterError && (err.status === 401 || err.status === 403)) {
+    if (isRouterError(err) && (err.status === 401 || err.status === 403)) {
       results.push({
         status: "FAIL",
         title: `the router rejected the key (HTTP ${err.status})`,
@@ -102,17 +96,14 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
 }
 
 /**
- * True when `text` carries an 8-character window of the key's body — the
- * window rule `assertNoKeyFragment` pins, over the same 32 characters.
+ * True when `text` carries an 8-character window of the key's body. The shared
+ * rule (`keyFragmentOffset`, the one implementation of the window rule) decides,
+ * and this gate stays window-ONLY: the extra bare-`mar_live_`-prefix rule is the
+ * request-id gate's alone (src/doctor/checks/live.ts), because scrubbed output
+ * legitimately keeps that prefix and withholding it would change verdicts here.
  */
 function carriesKeyMaterial(text: string, key: string): boolean {
-  const body = key.slice(ROUTER_KEY_PREFIX.length);
-  for (let i = 0; i + KEY_BODY_WINDOW <= body.length; i++) {
-    if (text.includes(body.slice(i, i + KEY_BODY_WINDOW))) {
-      return true;
-    }
-  }
-  return false;
+  return keyFragmentOffset(text, key) !== undefined;
 }
 
 /**
@@ -121,8 +112,7 @@ function carriesKeyMaterial(text: string, key: string): boolean {
  * withheld when it carries key material.
  */
 function describe(err: unknown, base: string, key: string): string {
-  const text =
-    err instanceof RouterError ? err.message : `could not reach ${base} (${errorName(err)})`;
+  const text = isRouterError(err) ? err.message : `could not reach ${base} (${errorName(err)})`;
   return carriesKeyMaterial(text, key) ? WITHHELD_DETAIL : text;
 }
 
