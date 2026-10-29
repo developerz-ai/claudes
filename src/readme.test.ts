@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { type DoctorDeps, runDoctor } from "./commands/doctor";
-import { parseLoginArgs } from "./commands/login-args";
+import { DOCTOR_FLAGS, type DoctorDeps, runDoctor } from "./commands/doctor";
+import { LOGIN_FLAGS, parseLoginArgs } from "./commands/login-args";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
-import { dispatch } from "./dispatch";
+import { dispatch, VERSION_FLAGS } from "./dispatch";
 import { buildArgv } from "./launch/argv";
 import * as preflight from "./launch/preflight";
 import { UNSUPPORTED_FEATURES, type UnsupportedFeature } from "./launch/unsupported";
@@ -24,6 +23,11 @@ import {
  */
 
 const LOGIN_URL = "https://router.invalid";
+const readmeSource = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const OWNED_FLAGS: readonly string[] = [...VERSION_FLAGS, ...LOGIN_FLAGS, ...DOCTOR_FLAGS];
+
+/** Undocumented owned spellings require a reason; remove exceptions once documented. */
+const UNDOCUMENTED_FLAGS: Readonly<Record<string, string>> = {};
 
 /**
  * Flags that are Claude Code's own, not claudes': claudes rewrites their
@@ -77,10 +81,15 @@ const SHELL_FLAGS: ReadonlySet<string> = new Set(["-g", "-rf"]);
  * a line start, so hyphenated prose ("known-benign", "claude-opus-5-5") and
  * the bare `--` terminator are not mistaken for flags.
  */
-function readmeFlags(): Set<string> {
-  const path = fileURLToPath(new URL("../README.md", import.meta.url));
-  const readme = readFileSync(path, "utf8");
-  return new Set(readme.match(/(?<=[\s`"([]|^)--?[A-Za-z][A-Za-z0-9-]*/gm) ?? []);
+function readmeFlags(source = readmeSource): Set<string> {
+  return new Set(source.match(/(?<=[\s`"([]|^)--?[A-Za-z][A-Za-z0-9-]*/gm) ?? []);
+}
+
+/** Refusal examples are not positive documentation of accepted options. */
+function positiveReadmeFlags(source: string): Set<string> {
+  return readmeFlags(
+    source.replace(/^## Refusals and exit codes\r?\n.*?(?=^## |$(?![\s\S]))/gms, ""),
+  );
 }
 
 /**
@@ -119,9 +128,8 @@ function noConfigDoctorDeps(): { deps: DoctorDeps; out: string[]; err: string[] 
 
 /**
  * The flags claudes owns, each mapped to the assertion that its own parser
- * accepts it. A README flag that is in none of CLAUDES_FLAG_CHECKS,
- * CLAUDE_FLAGS, REFUSED_FLAGS or SHELL_FLAGS fails the first test below, so
- * this table cannot silently fall behind the docs.
+ * accepts it. The inventories drive ownership; the completeness guard below
+ * requires both a parser assertion and positive documentation for every spelling.
  */
 const CLAUDES_FLAG_CHECKS: Readonly<Record<string, () => Promise<void>>> = {
   "--version": async () => {
@@ -155,7 +163,98 @@ const CLAUDES_FLAG_CHECKS: Readonly<Record<string, () => Promise<void>>> = {
   },
 };
 
+function assertOwnedFlagCoverage(
+  source: string,
+  owned: readonly string[] = OWNED_FLAGS,
+  checks: Readonly<Record<string, () => Promise<void>>> = CLAUDES_FLAG_CHECKS,
+  exceptions: Readonly<Record<string, string>> = UNDOCUMENTED_FLAGS,
+): void {
+  const documented = positiveReadmeFlags(source);
+  const problems: string[] = [];
+  for (const flag of owned) {
+    if (!Object.hasOwn(checks, flag)) problems.push(`${flag}: missing parser check`);
+    if (!documented.has(flag) && !Object.hasOwn(exceptions, flag)) {
+      problems.push(`${flag}: missing README documentation`);
+    }
+  }
+  for (const flag of Object.keys(checks)) {
+    if (!owned.includes(flag)) problems.push(`${flag}: parser check is not owned`);
+  }
+  for (const [flag, reason] of Object.entries(exceptions)) {
+    if (!owned.includes(flag) || documented.has(flag)) {
+      problems.push(`${flag}: stale undocumented exception`);
+    }
+    if (reason.trim() === "") problems.push(`${flag}: undocumented exception needs a reason`);
+  }
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
 describe("README flags", () => {
+  test("every parser-owned spelling has a parser check and positive documentation", () => {
+    assertOwnedFlagCoverage(readmeSource);
+  });
+
+  for (const flag of ["--opus", "-v"]) {
+    test(`rejects omitted documentation for ${flag}`, () => {
+      const source = readmeSource.replaceAll(flag, "omitted");
+      expect(() => assertOwnedFlagCoverage(source)).toThrow(
+        `${flag}: missing README documentation`,
+      );
+    });
+
+    test(`rejects missing parser check for ${flag}`, () => {
+      const checks = Object.fromEntries(
+        Object.entries(CLAUDES_FLAG_CHECKS).filter(([name]) => name !== flag),
+      );
+      expect(() => assertOwnedFlagCoverage(readmeSource, OWNED_FLAGS, checks)).toThrow(
+        `${flag}: missing parser check`,
+      );
+    });
+  }
+
+  test("rejects future inventory additions without checks or documentation", () => {
+    const owned = [...OWNED_FLAGS, "--future"];
+    expect(() => assertOwnedFlagCoverage(readmeSource, owned)).toThrow(
+      "--future: missing parser check",
+    );
+    expect(() => assertOwnedFlagCoverage(readmeSource, owned)).toThrow(
+      "--future: missing README documentation",
+    );
+  });
+
+  test("a refusal-only mention is not positive documentation", () => {
+    const source = readmeSource
+      .replaceAll("--opus", "omitted")
+      .replace("## Refusals and exit codes", "## Refusals and exit codes\n\n`--opus` is refused.");
+    expect(readmeFlags(source).has("--opus")).toBe(true);
+    expect(() => assertOwnedFlagCoverage(source)).toThrow("--opus: missing README documentation");
+  });
+
+  test("undocumented exceptions require reasons and reject stale entries", () => {
+    const source = readmeSource.replaceAll("--opus", "omitted");
+    const exceptions = { "--opus": "Temporarily internal." };
+    assertOwnedFlagCoverage(source, OWNED_FLAGS, CLAUDES_FLAG_CHECKS, exceptions);
+    expect(() =>
+      assertOwnedFlagCoverage(source, OWNED_FLAGS, CLAUDES_FLAG_CHECKS, { "--opus": " " }),
+    ).toThrow("needs a reason");
+    expect(() =>
+      assertOwnedFlagCoverage(readmeSource, OWNED_FLAGS, CLAUDES_FLAG_CHECKS, exceptions),
+    ).toThrow("stale undocumented exception");
+    expect(() =>
+      assertOwnedFlagCoverage(readmeSource, OWNED_FLAGS, CLAUDES_FLAG_CHECKS, {
+        "--not-owned": "Not an accepted flag.",
+      }),
+    ).toThrow("stale undocumented exception");
+  });
+
+  test("extraction excludes prose and bare terminators but retains short aliases", () => {
+    expect([...readmeFlags("known-benign claude-opus-5-5 -- `-v` [--live] --model -p")]).toEqual([
+      "-v",
+      "--live",
+      "--model",
+      "-p",
+    ]);
+  });
   test("every flag the README mentions is owned by claudes or by claude", () => {
     const flags = readmeFlags();
     expect(flags.size).toBeGreaterThan(0); // the extraction itself still works
@@ -163,7 +262,7 @@ describe("README flags", () => {
       .filter(
         (flag) =>
           !CLAUDE_FLAGS.has(flag) &&
-          !(flag in CLAUDES_FLAG_CHECKS) &&
+          !OWNED_FLAGS.includes(flag) &&
           !REFUSED_FLAGS.has(flag) &&
           !SHELL_FLAGS.has(flag),
       )
@@ -212,8 +311,6 @@ describe("README flags", () => {
     expect(err.join("")).toContain("unknown argument");
   });
 });
-
-const readmeSource = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 function assertDisabledGaps(source: string, features = UNSUPPORTED_FEATURES): void {
   const documented = readmeKnownGapRows(source)

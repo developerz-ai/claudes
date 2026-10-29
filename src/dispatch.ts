@@ -1,6 +1,8 @@
 /** Subcommands the launcher will own itself; everything else is passed through to `claude`. */
 const RESERVED_WORDS = ["login", "doctor", "key"] as const;
 
+export const VERSION_FLAGS = ["--version", "-v"] as const;
+
 type ReservedWord = (typeof RESERVED_WORDS)[number];
 
 export type DispatchResult =
@@ -15,7 +17,7 @@ function isReservedWord(word: string): word is ReservedWord {
 /** Pure routing of argv (everything after the program name) to a decision. */
 export function dispatch(argv: string[]): DispatchResult {
   const first = argv[0];
-  if (first === "--version" || first === "-v") {
+  if (first !== undefined && (VERSION_FLAGS as readonly string[]).includes(first)) {
     return { kind: "version" };
   }
   if (first !== undefined && isReservedWord(first)) {

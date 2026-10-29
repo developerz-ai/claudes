@@ -6,6 +6,8 @@ const USAGE = `usage: claudes login --url <router-url> [--opus <model-id>] [--so
 The router key is read from the "Router key: " prompt, or from the first line of
 stdin when it is piped; it is never accepted as a command-line argument.`;
 
+export const LOGIN_FLAGS = ["--url", "--opus", "--sonnet", "--haiku"] as const;
+
 export interface ParsedArgs {
   url: string;
   overrides: Partial<Record<TierName, string>>;
@@ -43,7 +45,7 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
     const equals = arg.indexOf("=");
     const name = arg.startsWith("--") && equals !== -1 ? arg.slice(0, equals) : arg;
     const inlineValue = name === arg ? undefined : arg.slice(equals + 1);
-    if (name === "--url" || name === "--opus" || name === "--sonnet" || name === "--haiku") {
+    if ((LOGIN_FLAGS as readonly string[]).includes(name)) {
       const value = inlineValue ?? argv[++i];
       // The value in the next position is argv too — scan it as well, so a key
       // slipped in as "--url VALUE" or "--opus VALUE" is refused the same way.

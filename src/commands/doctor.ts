@@ -19,6 +19,8 @@ import { VERSION } from "../version";
 
 const USAGE = "usage: claudes doctor [--live]";
 
+export const DOCTOR_FLAGS = ["--live"] as const;
+
 export interface DoctorDeps {
   readonly env: Env;
   readonly platform: string;
@@ -59,7 +61,7 @@ export interface DoctorDeps {
 export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Promise<number> {
   let live = false;
   for (const [index, arg] of argv.entries()) {
-    if (arg === "--live") {
+    if ((DOCTOR_FLAGS as readonly string[]).includes(arg)) {
       live = true;
       continue;
     }
