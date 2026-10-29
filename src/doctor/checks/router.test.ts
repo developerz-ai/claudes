@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ROUTER_KEY_PREFIX } from "../../config/schema";
 import type { FetchLike } from "../../router/client";
+import { routerResponse } from "../../test-support/fixtures";
 import { assertNoKeyFragment } from "../../test-support/redact";
 import { KEY, sampleConfig, TIERS } from "../harness";
 import { checkRouter } from "./router";
@@ -21,15 +22,16 @@ function stubFetch(
 ): FetchLike {
   return async (url, init) => {
     calls.push({ url, authorization: init.headers.Authorization });
-    if (url.endsWith("/healthz")) {
-      return options.health
-        ? await options.health()
-        : new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });
+    const path = new URL(url).pathname;
+    if (path === "/healthz" && options.health) {
+      return await options.health();
     }
-    if (options.models) {
+    if (path === "/v1/models" && options.models) {
       return await options.models();
     }
-    return new Response(JSON.stringify({ data: IDS.map((id) => ({ id })) }), { status: 200 });
+    return routerResponse(url, {
+      modelsBody: JSON.stringify({ data: IDS.map((id) => ({ id })) }),
+    });
   };
 }
 

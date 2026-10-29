@@ -18,7 +18,7 @@ import { configDir, configFile, settingsFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
-import { KEY, ROUTER } from "../test-support/fixtures";
+import { KEY, ROUTER, routerResponse } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { ROUTER_UNREACHABLE_MESSAGE } from "./preflight";
 import { type Child, CLAUDE_NOT_FOUND_MESSAGE, run, type SignalWiring, type SpawnFn } from "./run";
@@ -133,8 +133,7 @@ let err: string[];
 /** Every child this file spawned, so afterEach can kill any survivor by PID. */
 let children: ChildProcess[];
 
-const healthyFetch: FetchLike = async () =>
-  new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });
+const healthyFetch: FetchLike = async () => routerResponse(`${ROUTER}/healthz`);
 
 const deadFetch: FetchLike = async () => {
   throw new TypeError("fetch failed");
@@ -323,11 +322,15 @@ describe("run e2e: the happy path", () => {
       // seam stubbed (the router is synthetic).
       const launcherScript = join(home, "launcher.mjs");
       const runModule = pathToFileURL(join(import.meta.dir, "run.ts")).href;
+      const fixturesModule = pathToFileURL(
+        join(import.meta.dir, "../test-support/fixtures.ts"),
+      ).href;
       writeFileSync(
         launcherScript,
         [
           `import { run, realRunDeps } from ${JSON.stringify(runModule)};`,
-          'const healthy = async () => new Response(JSON.stringify({ version: "1.4.2" }), { status: 200 });',
+          `import { ROUTER, routerResponse } from ${JSON.stringify(fixturesModule)};`,
+          'const healthy = async () => routerResponse(ROUTER + "/healthz");',
           "process.exit(await run(process.argv.slice(2), { ...realRunDeps(), fetch: healthy }));",
         ].join("\n"),
         "utf8",

@@ -1,6 +1,6 @@
 import { configDir, configFile } from "../config/paths";
 import type { FetchLike } from "../router/client";
-import { KEY, ROUTER } from "../test-support/fixtures";
+import { KEY, ROUTER, routerResponse } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import type { LoginDeps } from "./login";
 
@@ -20,22 +20,7 @@ export function stubFetch(options: StubOptions = {}): FetchLike {
     if (options.failWith !== undefined) {
       throw options.failWith;
     }
-    if (url.endsWith("/healthz")) {
-      return new Response(options.healthBody ?? JSON.stringify({ version: "1.4.2" }), {
-        status: options.healthStatus ?? 200,
-      });
-    }
-    return new Response(
-      options.modelsBody ??
-        JSON.stringify({
-          data: [
-            { id: "claude-opus-4-1" },
-            { id: "claude-sonnet-4-5" },
-            { id: "claude-haiku-4-5" },
-          ],
-        }),
-      { status: options.modelsStatus ?? 200 },
-    );
+    return routerResponse(url, options);
   };
 }
 
