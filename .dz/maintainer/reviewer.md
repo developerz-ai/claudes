@@ -14,7 +14,7 @@ Bun + TypeScript. The gate is `bin/check` (`bin/check`): a change that does not 
 - Reject any change that lets a router key (the 32 characters after `mar_live_`) reach argv, an error message, or any stdout/stderr path — even a fragment, even indirectly via `err.cause.message`, header-value quoting, or a test fixture.
 - Reject any change to the argv parser that names a value instead of a flag in an error message (echoing input is the leak path); the `mar_live_` substring scan in `parseLoginArgs` must run on every token, including `--x=value` and the value after `--x VALUE`.
 - Reject any change to the config store that drops the chmod-0700 directory, chmod-0600 file mode, the atomic temp-then-rename write, the `O_NOFOLLOW` open, or the uid check on directory and file; every defence is independent — none is redundant.
-- Reject any change that weakens, drops, or skips an existing test in `src/commands/*.test.ts`; the redaction and exit-code tests are the spec.
+- Reject any change that weakens, drops, or skips an existing test in `src/**/*.test.ts` or `bin/*.test.ts`; the redaction and exit-code tests are the spec.
 - Reject any change to `bin/check` that swaps `node_modules/.bin/{biome,tsc}` for `bunx biome` / `bunx tsc` — `bunx` silently auto-installs the unrelated npm packages `biome` and `tsc`.
 
 ## Gates that matter
