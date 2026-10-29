@@ -38,7 +38,7 @@ Workflow commands live in `.claude/commands/`:
 | `src/commands/login-input.ts` | Echo-off secret reader (`MAX_INPUT_BYTES = 4096`, CSI/SS3 swallowed) and stdin first-line reader |
 | `src/commands/login-harness.ts` | Framework-free test fixtures: stubbed `fetch`, TTY/stdin simulators, key-leak checker |
 | `src/commands/doctor.ts` | `claudes doctor`: runs runtime → config → router → conflicts → wiring → (`--live`) → effective-model, printing each verdict as it lands; exits 1 on any FAIL |
-| `src/commands/key.ts` | `claudes key`: the `apiKeyHelper` output — the router key on stdout with no trailing newline; refuses with exit 64 when stdout is a TTY or a `CLAUDE_CODE_USE_*` switch is set |
+| `src/commands/key.ts` | `claudes key`: the `apiKeyHelper` output — the router key on stdout with no trailing newline; refuses with exit 64 when stdout is a TTY, when a known provider switch or any other non-benign `CLAUDE_CODE_USE_*` name is set to a truthy value (anything but unset, "", "0" or "false", case-insensitive — the 3 benign toggles in `BENIGN_USE_TOGGLES` are allowed), or when `ANTHROPIC_BASE_URL` is set non-empty and points at an origin other than the configured router |
 | `src/config/paths.ts` | `${XDG_CONFIG_HOME or $HOME/.config}/claudes/config.json`; rejects relative bases |
 | `src/config/schema.ts` | zod: `ROUTER_KEY_PREFIX`/`ROUTER_KEY_PATTERN`, `baseUrlSchema` (https-only, no creds, bare origin), `configSchema` |
 | `src/config/errors.ts` | `ConfigError` and its `InsecureConfigError` subclass — the vocabulary `config/store.ts` and `config/private-file.ts` raise for every refusal they own (`config/paths.ts` throws a plain `Error`, not one of these); re-exported by `config/store.ts` |
