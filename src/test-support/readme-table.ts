@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
  * One row of the README's "Refusals and exit codes" table.
  *
  * `message` is the quoted text the row promises claudes prints: the code
- * span's content with its outer backticks stripped and its escaped backticks
- * (`\``) turned back into single backticks. A prose cell — "(message above)"
+ * span's content with its outer backticks stripped, its escaped backticks
+ * (`\``) turned back into single backticks and its literal `\n` sequences
+ * decoded into real newlines. A prose cell — "(message above)"
  * resolved, or "(the FAIL lines themselves)" — carries no quoted message,
  * so `message` is undefined for it.
  */
@@ -108,9 +109,11 @@ function cells(line: string): string[] {
 
 /**
  * The message a cell quotes, or undefined when the cell is prose. A code
- * span's outer backticks are stripped and its escaped backticks become single
- * backticks; anything else — including a half-written span with an
- * unescaped inner backtick — is prose and has no quoted message.
+ * span's outer backticks are stripped, its escaped backticks become single
+ * backticks and a literal `\n` becomes a real newline (the table writes
+ * multi-line stderr on one row); anything else — including a half-written
+ * span with an unescaped inner backtick — is prose and has no quoted
+ * message.
  */
 function cellMessage(cell: string): string | undefined {
   if (!cell.startsWith("`") || !cell.endsWith("`") || cell.length < 2) {
@@ -122,7 +125,7 @@ function cellMessage(cell: string): string | undefined {
   if (/(?<!\\)`/.test(inner)) {
     return undefined;
   }
-  return inner.replace(/\\`/g, "`");
+  return inner.replace(/\\`/g, "`").replace(/\\n/g, "\n");
 }
 
 /**

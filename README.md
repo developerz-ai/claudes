@@ -138,6 +138,8 @@ use.
 | 78 | No config, or a config `claudes` refuses to trust | `no claudes config: run \`claudes login --url <router>\`` |
 | 127 | `claude` is not on `PATH` | `claude not found on PATH` |
 | 1 | `claudes doctor` had at least one FAIL | (the FAIL lines themselves) |
+| 64 | `claudes doctor` got an argument other than `--live` | `claudes doctor: unknown argument #1\nusage: claudes doctor [--live]` |
+| 64 | `claudes login` ran without `--url` | `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.` |
 
 The seven known provider switches (`CLAUDE_CODE_USE_BEDROCK` and friends) are
 not a launch refusal: they are stripped from the child environment and pinned off

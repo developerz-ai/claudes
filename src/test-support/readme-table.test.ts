@@ -23,7 +23,7 @@ import {
  * The parser's own contract, checked against the README as it stands. The
  * guards that use the parser (src/readme-refusals.test.ts, src/readme.test.ts)
  * assert the behaviour the table promises; this file asserts that the table
- * is read the way they assume — twelve rows, code spans unquoted, the
+ * is read the way they assume — fourteen rows, code spans unquoted, the
  * "(message above)" cell resolved and the prose cell left without a message.
  * It also guards the refusal prose's switch counts — the seven provider
  * switches and the known-benign tool toggles — against PROVIDER_SWITCHES and
@@ -33,9 +33,11 @@ import {
 const rows = readmeRefusalRows();
 
 describe("README refusals table", () => {
-  test("the table has the twelve documented rows", () => {
-    expect(rows.length).toBe(12);
-    expect(rows.map((row) => row.exit)).toEqual([64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1]);
+  test("the table has the fourteen documented rows", () => {
+    expect(rows.length).toBe(14);
+    expect(rows.map((row) => row.exit)).toEqual([
+      64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1, 64, 64,
+    ]);
   });
 
   test("the --key row unescapes its backticks", () => {
@@ -83,6 +85,28 @@ describe("README refusals table", () => {
     const row = rows.find((candidate) => candidate.exit === 1);
     expect(row).toBeDefined();
     expect(row?.message).toBeUndefined();
+  });
+
+  test("the doctor usage row parses its escaped newlines back into the two lines", () => {
+    const row = rows.find((candidate) =>
+      candidate.when.includes("`claudes doctor` got an argument"),
+    );
+    expect(row).toBeDefined();
+    expect(row?.exit).toBe(64);
+    expect(row?.message).toBe(
+      "claudes doctor: unknown argument #1\nusage: claudes doctor [--live]",
+    );
+  });
+
+  test("the login usage row parses its escaped newlines back into the four-line usage block", () => {
+    const row = rows.find((candidate) =>
+      candidate.when.includes("`claudes login` ran without `--url`"),
+    );
+    expect(row).toBeDefined();
+    expect(row?.exit).toBe(64);
+    expect(row?.message).toBe(
+      'usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.',
+    );
   });
 });
 

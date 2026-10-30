@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { rmSync } from "node:fs";
 import { type DoctorDeps, runDoctor } from "./commands/doctor";
 import { runKey } from "./commands/key";
+import { runLogin } from "./commands/login";
+import type { StdinLike } from "./commands/login-input";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { cleanup, deadFetch, type Harness, harness, KEY } from "./launch/run-harness";
 import type { FetchLike } from "./router/client";
@@ -51,6 +54,37 @@ interface Scenario {
  */
 const unusableVersionFetch: FetchLike = async () =>
   new Response(JSON.stringify({ version: `${KEY}\n` }), { status: 200 });
+
+/**
+ * A doctor that runs against no config at all: nothing reachable, every check
+ * that would touch the network or spawn a process refuses loudly. Both
+ * doctor scenarios drive it — one for the usage refusal (which exits before
+ * any check), one for the run that FAILs on the missing config.
+ */
+function noConfigDoctorDeps(out: string[], err: string[]): DoctorDeps {
+  return {
+    env: { HOME: "/nonexistent-home" },
+    platform: "linux",
+    nodeVersion: "22.0.0",
+    cwd: "/nonexistent-cwd",
+    nodePath: "/nonexistent-node",
+    scriptPath: "/nonexistent-claudes",
+    fetch: async () => {
+      throw new Error("readme test: doctor must not touch the network");
+    },
+    postFetch: async () => {
+      throw new Error("readme test: doctor must not touch the network");
+    },
+    runProc: async () => {
+      throw new Error("readme test: doctor must not spawn processes");
+    },
+    resolveExecutable: () => undefined,
+    load: () => ({ ok: false, exitCode: 78, message: MISSING_CONFIG_MESSAGE }),
+    readFile: () => undefined,
+    stdout: (text) => out.push(text),
+    stderr: (text) => err.push(text),
+  };
+}
 
 /**
  * The scenarios, in the README's row order. Each one names the row it
@@ -235,30 +269,35 @@ function scenarios(): Scenario[] {
       run: async () => {
         const out: string[] = [];
         const err: string[] = [];
-        const deps: DoctorDeps = {
-          env: { HOME: "/nonexistent-home" },
-          platform: "linux",
-          nodeVersion: "22.0.0",
-          cwd: "/nonexistent-cwd",
-          nodePath: "/nonexistent-node",
-          scriptPath: "/nonexistent-claudes",
-          fetch: async () => {
-            throw new Error("readme test: doctor must not touch the network");
-          },
-          postFetch: async () => {
-            throw new Error("readme test: doctor must not touch the network");
-          },
-          runProc: async () => {
-            throw new Error("readme test: doctor must not spawn processes");
-          },
-          resolveExecutable: () => undefined,
-          load: () => ({ ok: false, exitCode: 78, message: MISSING_CONFIG_MESSAGE }),
-          readFile: () => undefined,
-          stdout: (text) => out.push(text),
-          stderr: (text) => err.push(text),
-        };
-        const code = await runDoctor([], deps);
+        const code = await runDoctor([], noConfigDoctorDeps(out, err));
         return [{ code, text: out.join("") }];
+      },
+    },
+    {
+      // A usage refusal: the argument scan exits before any check runs, so
+      // the same no-config fixture serves — and the text is stderr, not the
+      // FAIL lines stdout carries.
+      when: "`claudes doctor` got an argument",
+      run: async () => {
+        const out: string[] = [];
+        const err: string[] = [];
+        const code = await runDoctor(["--nonsense"], noConfigDoctorDeps(out, err));
+        expect(out).toEqual([]);
+        return [{ code, text: err.join("") }];
+      },
+    },
+    {
+      // Missing `--url`: the parser refuses before stdin or fetch are
+      // touched, so an unreadable stdin and a dead fetch prove the order.
+      when: "`claudes login` ran without `--url`",
+      run: async () => {
+        const err: string[] = [];
+        const code = await runLogin([], {
+          err: (text) => err.push(text),
+          stdin: new EventEmitter() as unknown as StdinLike,
+          fetch: deadFetch,
+        });
+        return [{ code, text: err.join("") }];
       },
     },
   ];
@@ -455,7 +494,7 @@ describe("README refusals and exit codes table", () => {
     // The guard rejects the table and names the row no scenario ever
     // asserted against.
     await expect(assertRowsMatchScenarios(rows.concat(fragment), list)).rejects.toThrow(
-      /1 of 13 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
+      /1 of 15 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
     );
   });
 });
