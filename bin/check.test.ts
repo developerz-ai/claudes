@@ -97,7 +97,8 @@ afterEach(() => {
  * passes and the tool-presence loop is what decides the outcome, and a no-op
  * executable stub for every tool the loop iterates. PATH contains only this
  * fixture's bin: shell/pin-guard and smoke utilities plus node are linked from
- * the host, while bun is stubbed to avoid recursive tests or real builds.
+ * the host. Bun tests/builds are stubbed, but stdin scripts use real Bun so the
+ * artifact import scanner genuinely runs.
  * Nothing of the checkout's own is written.
  */
 function makeFixture(overrides: { releaseYaml?: string } = {}): Fixture {
@@ -125,7 +126,10 @@ function makeFixture(overrides: { releaseYaml?: string } = {}): Fixture {
     if (executable === null) throw new Error(`fixture requires ${utility}`);
     symlinkSync(executable, join(root, "bin", utility));
   }
-  writeFileSync(join(root, "bin", "bun"), "#!/bin/sh\nexit 0\n");
+  writeFileSync(
+    join(root, "bin", "bun"),
+    `#!/bin/sh\nif [ "$1" = "-" ]; then exec ${JSON.stringify(process.execPath)} "$@"; fi\nexit 0\n`,
+  );
   chmodSync(join(root, "bin", "bun"), 0o755);
   mkdirSync(join(root, ".github", "workflows"), { recursive: true });
   const check = join(root, "bin", "check");
@@ -196,15 +200,9 @@ function assertSafeDiagnostics(output: string): void {
 /** No build, recursive test suite, network, or real CLI: only the shipped shell assertions. */
 function makeArtifactFixture(stdout: string, stderr: string): Fixture {
   const fixture = makeFixture();
-  for (const [name, script] of [
-    ["bun", "#!/bin/sh\nexit 0\n"],
-    ["uname", "#!/bin/sh\necho FixtureOS\n"],
-  ]) {
-    if (name === undefined || script === undefined) throw new Error("invalid tool stub");
-    const path = join(fixture.root, "bin", name);
-    writeFileSync(path, script);
-    chmodSync(path, 0o755);
-  }
+  const uname = join(fixture.root, "bin", "uname");
+  writeFileSync(uname, "#!/bin/sh\necho FixtureOS\n");
+  chmodSync(uname, 0o755);
   writeFileSync(join(fixture.root, "package.json"), JSON.stringify({ version: "0.0.0" }));
   writeFileSync(join(fixture.root, "doctor-output.json"), JSON.stringify({ stdout, stderr }));
   mkdirSync(join(fixture.root, "dist"));
@@ -238,6 +236,115 @@ switch (process.argv[2]) {
   chmodSync(cli, 0o755);
   return fixture;
 }
+
+const IMPORT_DIAGNOSTIC = "bin/check: dist/claudes.js retains a non-built-in runtime import";
+
+/** Replace only the artifact; all checks still run through the shipped gate. */
+function withArtifactSource(fixture: Fixture, source: string): void {
+  writeFileSync(join(fixture.root, "dist", "claudes.js"), `#!/usr/bin/env node\n${source}\n`);
+}
+
+describe("bin/check artifact import audit", () => {
+  for (const source of [
+    'import "zod";',
+    'export { z } from "zod";',
+    'require("zod");',
+    'import("zod");',
+    'function dormant() { return require("zod"); }',
+    'function dormant() { return import("zod"); }',
+    'function dormant() { return require("not-installed/subpath"); }',
+    'import "node:not-a-real-builtin";',
+  ]) {
+    test(
+      `rejects retained runtime dependency: ${source}`,
+      () => {
+        const fixture = makeArtifactFixture("", "");
+        const cli = join(fixture.root, "dist", "claudes.js");
+        // A marker before any executable code proves rejection precedes smoke execution.
+        withArtifactSource(
+          fixture,
+          `require("node:fs").writeFileSync(${JSON.stringify(join(fixture.root, "executed"))}, "");\n${source}`,
+        );
+        expect(existsSync(cli)).toBe(true);
+        const res = runCheck(fixture);
+        expect(res.error).toBeUndefined();
+        expect(res.status).toBe(1);
+        expect(res.stderr).toBe(`${IMPORT_DIAGNOSTIC}\n`);
+        expect(existsSync(join(fixture.root, "executed"))).toBe(false);
+      },
+      SPAWN_TEST_TIMEOUT_MS,
+    );
+  }
+
+  test(
+    "rejects zod even when it resolves from the fixture checkout",
+    () => {
+      const fixture = makeArtifactFixture("", "");
+      symlinkSync(join(REPO, "node_modules", "zod"), join(fixture.root, "node_modules", "zod"));
+      const resolved = spawnSync(Bun.which("node") ?? "node", ["-p", 'require.resolve("zod")'], {
+        cwd: fixture.root,
+        encoding: "utf8",
+        timeout: SPAWN_TEST_TIMEOUT_MS,
+      });
+      expect(resolved.error).toBeUndefined();
+      expect(resolved.status).toBe(0);
+      expect(resolved.stdout.trim()).not.toBe("");
+      withArtifactSource(fixture, 'function dormant() { return require("zod"); }');
+      const res = runCheck(fixture);
+      expect(res.error).toBeUndefined();
+      expect(res.status).toBe(1);
+      expect(res.stderr).toBe(`${IMPORT_DIAGNOSTIC}\n`);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "permits static Node built-in imports",
+    () => {
+      const fixture = makeArtifactFixture("", "");
+      const cli = join(fixture.root, "dist", "claudes.js");
+      const source = readFileSync(cli, "utf8")
+        .replace('const fs = require("node:fs");', 'import fs from "node:fs";')
+        .replace('const path = require("node:path");', 'import path from "path";')
+        .replace("__dirname", "import.meta.dirname");
+      writeFileSync(cli, source);
+      writeFileSync(
+        join(fixture.root, "package.json"),
+        JSON.stringify({ version: "0.0.0", type: "module" }),
+      );
+      const res = runCheck(fixture);
+      expect(res.error).toBeUndefined();
+      expect(res.status).toBe(0);
+      expect(res.stderr).toBe("");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "permits built-in require/dynamic imports and ignores comments and ordinary strings",
+    () => {
+      const fixture = makeArtifactFixture("", "");
+      const cli = join(fixture.root, "dist", "claudes.js");
+      const source = readFileSync(cli, "utf8");
+      writeFileSync(
+        cli,
+        `${source}\nfunction dormant() {
+          require("fs"); require("fs/promises"); require("node:test");
+          return import("node:path");
+        }
+        // import "comment-only-package";
+        /* require("comment-only-package"); */
+        const text = 'import("string-only-package")';
+        `,
+      );
+      const res = runCheck(fixture);
+      expect(res.error).toBeUndefined();
+      expect(res.status).toBe(0);
+      expect(res.stderr).toBe("");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+});
 
 describe("bin/check keyed doctor artifact assertion", () => {
   for (const stream of ["stdout", "stderr"] as const) {
