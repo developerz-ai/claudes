@@ -205,9 +205,27 @@ function scenarios(): Scenario[] {
       run: (h) => {
         const err: string[] = [];
         const writes: string[] = [];
-        const code = runKey({
+        const code = runKey([], {
           env: { HOME: h.home },
           stdoutIsTTY: true,
+          write: (text) => writes.push(text),
+          stderr: (text) => err.push(text),
+        });
+        expect(writes).toEqual([]);
+        return [{ code, text: err.join("") }];
+      },
+    },
+    {
+      // `claudes key` takes no arguments: the refusal fires before the
+      // config is read, so a home without a config serves as well — the exit
+      // code proves the argument was refused, not the missing config.
+      when: "`claudes key` got an argument",
+      run: () => {
+        const err: string[] = [];
+        const writes: string[] = [];
+        const code = runKey(["--help"], {
+          env: { HOME: "/nonexistent-home" },
+          stdoutIsTTY: false,
           write: (text) => writes.push(text),
           stderr: (text) => err.push(text),
         });
@@ -494,7 +512,7 @@ describe("README refusals and exit codes table", () => {
     // The guard rejects the table and names the row no scenario ever
     // asserted against.
     await expect(assertRowsMatchScenarios(rows.concat(fragment), list)).rejects.toThrow(
-      /1 of 15 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
+      /1 of 16 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
     );
   });
 });
