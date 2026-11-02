@@ -53,6 +53,37 @@ if [ "$shebang" != "#!/usr/bin/env node" ]; then
   exit 1
 fi
 
+# Audit literal runtime imports before executing any artifact code, including
+# dormant require/import calls. Scan syntax, not comments or ordinary strings.
+# Let Node define its own built-ins (including prefix-only ones like node:test),
+# never package resolution: an installed npm dependency is still a broken bundle.
+artifact_imports="$(bun - <<'BUN'
+try {
+  const source = await Bun.file("dist/claudes.js").text();
+  // scanImports rejects hashbangs; the shell already verified this first line.
+  const body = source.slice(source.indexOf("\n") + 1);
+  const imports = new Bun.Transpiler({ loader: "js" }).scanImports(body);
+  console.log(JSON.stringify(imports.map(({ path }) => path)));
+} catch {
+  console.error("bin/check: could not audit dist/claudes.js runtime imports");
+  process.exitCode = 1;
+}
+BUN
+)"
+ARTIFACT_IMPORTS="$artifact_imports" node <<'NODE'
+const { isBuiltin } = require("node:module");
+try {
+  const imports = JSON.parse(process.env.ARTIFACT_IMPORTS);
+  if (imports.some((specifier) => !isBuiltin(specifier))) {
+    console.error("bin/check: dist/claudes.js retains a non-built-in runtime import");
+    process.exitCode = 1;
+  }
+} catch {
+  console.error("bin/check: could not audit dist/claudes.js runtime imports");
+  process.exitCode = 1;
+}
+NODE
+
 # Version must come from package.json; nothing is hardcoded here.
 expected="$(node -p "require('./package.json').version")"
 actual="$(./dist/claudes.js --version)"
