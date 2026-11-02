@@ -50,7 +50,8 @@ suffix) are normalised to them.
 `claudes` itself owns only four first arguments: `login`, `doctor`, `key` and
 `--version` (`-v`). Everything else goes to `claude`. `claudes key` is the
 internal helper Claude Code calls to fetch the router key; at a terminal it
-refuses (exit 64).
+refuses (exit 64). It takes no arguments of its own: any argument after it is
+refused (exit 64) before the key is read.
 
 ## What it does and doesn't do
 
@@ -133,6 +134,7 @@ use.
 | 64 | An unknown `CLAUDE_CODE_USE_*` toggle or `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` is set truthy | `claudes: refusing: <name> is set, so this session would not go to the router` |
 | 64 | `BUN_CONFIG_VERBOSE_FETCH` is set truthy | `claudes: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed` |
 | 64 | `claudes key` ran at a terminal | `claudes key is for apiKeyHelper only` |
+| 64 | `claudes key` got an argument | `claudes key: unknown argument #1\nusage: claudes key` |
 | 69 | The router did not answer the pre-launch check | (message above) |
 | 69 | The router answered the pre-launch check without a usable version | `router answered the pre-launch check with an invalid version: the configured router URL does not point at a router claudes can use — run \`claudes doctor\`` |
 | 78 | No config, or a config `claudes` refuses to trust | `no claudes config: run \`claudes login --url <router>\`` |

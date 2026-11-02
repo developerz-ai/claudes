@@ -23,7 +23,7 @@ import {
  * The parser's own contract, checked against the README as it stands. The
  * guards that use the parser (src/readme-refusals.test.ts, src/readme.test.ts)
  * assert the behaviour the table promises; this file asserts that the table
- * is read the way they assume — fourteen rows, code spans unquoted, the
+ * is read the way they assume — fifteen rows, code spans unquoted, the
  * "(message above)" cell resolved and the prose cell left without a message.
  * It also guards the refusal prose's switch counts — the seven provider
  * switches and the known-benign tool toggles — against PROVIDER_SWITCHES and
@@ -33,11 +33,18 @@ import {
 const rows = readmeRefusalRows();
 
 describe("README refusals table", () => {
-  test("the table has the fourteen documented rows", () => {
-    expect(rows.length).toBe(14);
+  test("the table has the fifteen documented rows", () => {
+    expect(rows.length).toBe(15);
     expect(rows.map((row) => row.exit)).toEqual([
-      64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1, 64, 64,
+      64, 64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1, 64, 64,
     ]);
+  });
+
+  test("the key usage row parses its escaped newline back into two lines", () => {
+    const row = rows.find((candidate) => candidate.when.includes("`claudes key` got an argument"));
+    expect(row).toBeDefined();
+    expect(row?.exit).toBe(64);
+    expect(row?.message).toBe("claudes key: unknown argument #1\nusage: claudes key");
   });
 
   test("the --key row unescapes its backticks", () => {

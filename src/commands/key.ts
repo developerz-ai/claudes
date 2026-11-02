@@ -3,6 +3,7 @@ import type { Env } from "../config/paths";
 import { firstReroutingUseToggle } from "../launch/provider-switches";
 
 const TTY_REFUSAL = "claudes key is for apiKeyHelper only";
+const USAGE = "usage: claudes key";
 
 export interface KeyDeps {
   readonly env: Env;
@@ -15,11 +16,23 @@ export interface KeyDeps {
 /**
  * `claudes key`: prints the router key on stdout with no trailing newline.
  * Only apiKeyHelper is meant to call it — a terminal would just paste the key
- * into the scrollback, so a TTY stdout is refused with exit 64. The config is
- * read through the store, so insecure permissions are refused here exactly as
- * they are at launch time.
+ * into the scrollback, so a TTY stdout is refused with exit 64. The command
+ * takes no arguments: any argument is refused with exit 64 before the TTY
+ * check, the provider-switch check and the config read, so an unsupported
+ * argument can never reach a credential write. The config is read through the
+ * store, so insecure permissions are refused here exactly as they are at
+ * launch time.
  */
-export function runKey(deps: KeyDeps): number {
+export function runKey(argv: readonly string[], deps: KeyDeps): number {
+  // First, before anything else: no argument is accepted, so the first one
+  // after `key` is always the first unsupported one. The refusal names that
+  // position and never the token — a pasted key must not be echoed back, so
+  // the message carries no user input at all. The position is kept in the
+  // message so that a future accepted flag does not change its shape.
+  for (const [index] of argv.entries()) {
+    deps.stderr(`claudes key: unknown argument #${index + 1}\n${USAGE}\n`);
+    return 64;
+  }
   if (deps.stdoutIsTTY) {
     deps.stderr(`${TTY_REFUSAL}\n`);
     return 64;

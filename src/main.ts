@@ -16,7 +16,7 @@ async function main(argv: string[]): Promise<void> {
       process.exit(await runLogin(argv.slice(1)));
     }
     if (result.word === "key") {
-      process.exit(runKey(realKeyDeps()));
+      process.exit(runKey(argv.slice(1), realKeyDeps()));
     }
     if (result.word === "doctor") {
       process.exit(await runDoctor(argv.slice(1), realDoctorDeps()));

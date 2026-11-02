@@ -102,6 +102,58 @@ describe("claudes key through a real process (bun src/main.ts key)", () => {
   );
 
   test(
+    "an argument is refused with exit 64: no stdout, no key bytes",
+    () => {
+      const home = scratchHome();
+      try {
+        for (const arg of ["--help", "--anything", "positional"]) {
+          const res = spawnSync(process.execPath, [MAIN, "key", arg], {
+            env: childEnv(home),
+            encoding: "buffer",
+            timeout: SPAWN_TEST_TIMEOUT_MS,
+          });
+          expect(res.error).toBeUndefined();
+          expect(res.status).toBe(64);
+          // Nothing on stdout: the key never leaves the process.
+          expect(res.stdout.length).toBe(0);
+          const errText = res.stderr.toString("utf8");
+          expect(errText).toBe("claudes key: unknown argument #1\nusage: claudes key\n");
+          // The offending token is never named.
+          expect(errText).not.toContain(arg);
+          assertNoKeyFragment(errText, KEY);
+        }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a key-shaped argument is refused without leaking a byte of it",
+    () => {
+      const home = scratchHome();
+      try {
+        const res = spawnSync(process.execPath, [MAIN, "key", KEY], {
+          env: childEnv(home),
+          encoding: "buffer",
+          timeout: SPAWN_TEST_TIMEOUT_MS,
+        });
+        expect(res.error).toBeUndefined();
+        expect(res.status).toBe(64);
+        expect(res.stdout.length).toBe(0);
+        const errText = res.stderr.toString("utf8");
+        expect(errText).toBe("claudes key: unknown argument #1\nusage: claudes key\n");
+        assertNoKeyFragment(errText, KEY);
+        assertNoKeyFragment(res.stdout.toString("utf8"), KEY);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "a provider switch in the process env: exit 64, the refusal, no key bytes",
     () => {
       const home = scratchHome();

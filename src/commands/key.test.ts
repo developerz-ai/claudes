@@ -37,8 +37,12 @@ function config(): Config {
   };
 }
 
-function drive(stdoutIsTTY: boolean, env: Record<string, string | undefined> = {}): number {
-  return runKey({
+function drive(
+  argv: readonly string[],
+  stdoutIsTTY: boolean,
+  env: Record<string, string | undefined> = {},
+): number {
+  return runKey(argv, {
     env: { HOME: home, ...env },
     stdoutIsTTY,
     write: (text) => writes.push(text),
@@ -47,8 +51,62 @@ function drive(stdoutIsTTY: boolean, env: Record<string, string | undefined> = {
 }
 
 describe("runKey", () => {
+  test("refuses any argument with exit 64, naming only its position", () => {
+    // No config is written here: the exit-78 no-config path must not be what
+    // this run produces, so the refusal is the argument's own.
+    for (const arg of ["--help", "--anything", "-x", "positional"]) {
+      err = [];
+      writes = [];
+      const code = drive([arg], false);
+      expect(code).toBe(64);
+      expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+      expect(writes).toEqual([]);
+      // The offending token is never named: a token may be a pasted key.
+      expect(err.join("")).not.toContain(arg);
+    }
+  });
+
+  test("the refusal names the first unsupported argument's position", () => {
+    const code = drive(["first", "second"], false);
+    expect(code).toBe(64);
+    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(writes).toEqual([]);
+  });
+
+  test("the argument refusal fires before the TTY check", () => {
+    const code = drive(["--help"], true);
+    expect(code).toBe(64);
+    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(writes).toEqual([]);
+  });
+
+  test("the argument refusal fires before the provider-switch check", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    const code = drive(["--help"], false, { CLAUDE_CODE_USE_BEDROCK: "1" });
+    expect(code).toBe(64);
+    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(writes).toEqual([]);
+  });
+
+  test("the argument refusal fires before the config is read, so no key is served", () => {
+    writeConfig(configFile(configDir({ HOME: home })), config());
+    const code = drive(["--help"], false);
+    expect(code).toBe(64);
+    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    // No credential write happened.
+    expect(writes).toEqual([]);
+  });
+
+  test("a key-shaped argument is refused without leaking it", () => {
+    const code = drive([KEY], false);
+    expect(code).toBe(64);
+    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(writes).toEqual([]);
+    assertNoKeyFragment(err.join(""), KEY);
+  });
+
   test("refuses a TTY stdout with exit 64 and the helper-only message", () => {
-    const code = drive(true);
+    const code = drive([], true);
     expect(code).toBe(64);
     expect(err).toEqual(["claudes key is for apiKeyHelper only\n"]);
     expect(writes).toEqual([]);
@@ -56,7 +114,7 @@ describe("runKey", () => {
 
   test("refuses a truthy provider switch with exit 64, before any config is read", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
-    const code = drive(false, { CLAUDE_CODE_USE_BEDROCK: "1" });
+    const code = drive([], false, { CLAUDE_CODE_USE_BEDROCK: "1" });
     expect(code).toBe(64);
     // The variable is named; its value never is.
     expect(err).toEqual([
@@ -70,7 +128,7 @@ describe("runKey", () => {
     for (const name of PROVIDER_SWITCHES) {
       err = [];
       writes = [];
-      expect(drive(false, { [name]: "true" })).toBe(64);
+      expect(drive([], false, { [name]: "true" })).toBe(64);
       expect(err.join("")).toBe(
         `claudes key: refusing: ${name} is set, so this session would not go to the router\n`,
       );
@@ -81,7 +139,7 @@ describe("runKey", () => {
   test("a switch set to a falsy value does not trigger the refusal", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
     for (const value of ["", "0", "false", "FALSE", "False"]) {
-      expect(drive(false, { CLAUDE_CODE_USE_VERTEX: value })).toBe(0);
+      expect(drive([], false, { CLAUDE_CODE_USE_VERTEX: value })).toBe(0);
     }
     expect(writes).toEqual([KEY, KEY, KEY, KEY, KEY]);
     expect(err).toEqual([]);
@@ -89,7 +147,7 @@ describe("runKey", () => {
 
   test("refuses the gateway switch", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
-    expect(drive(false, { CLAUDE_CODE_USE_GATEWAY: "1" })).toBe(64);
+    expect(drive([], false, { CLAUDE_CODE_USE_GATEWAY: "1" })).toBe(64);
     expect(err.join("")).toBe(
       "claudes key: refusing: CLAUDE_CODE_USE_GATEWAY is set, so this session would not go to the router\n",
     );
@@ -98,7 +156,7 @@ describe("runKey", () => {
 
   test("refuses an unknown CLAUDE_CODE_USE_ toggle, naming only the variable", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
-    expect(drive(false, { CLAUDE_CODE_USE_FUTURE_THING: "1" })).toBe(64);
+    expect(drive([], false, { CLAUDE_CODE_USE_FUTURE_THING: "1" })).toBe(64);
     expect(err.join("")).toBe(
       "claudes key: refusing: CLAUDE_CODE_USE_FUTURE_THING is set, so this session would not go to the router\n",
     );
@@ -111,7 +169,7 @@ describe("runKey", () => {
     for (const value of ["0", ""]) {
       err = [];
       writes = [];
-      expect(drive(false, { CLAUDE_CODE_USE_FOO: value })).toBe(0);
+      expect(drive([], false, { CLAUDE_CODE_USE_FOO: value })).toBe(0);
       expect(writes).toEqual([KEY]);
       expect(err).toEqual([]);
     }
@@ -122,7 +180,7 @@ describe("runKey", () => {
     for (const name of BENIGN_USE_TOGGLES) {
       err = [];
       writes = [];
-      expect(drive(false, { [name]: "1" })).toBe(0);
+      expect(drive([], false, { [name]: "1" })).toBe(0);
       expect(writes).toEqual([KEY]);
       expect(err).toEqual([]);
     }
@@ -137,7 +195,7 @@ describe("runKey", () => {
     ]) {
       err = [];
       writes = [];
-      expect(drive(false, { ANTHROPIC_BASE_URL: value })).toBe(64);
+      expect(drive([], false, { ANTHROPIC_BASE_URL: value })).toBe(64);
       expect(err.join("")).toBe(
         "claudes key: refusing: ANTHROPIC_BASE_URL does not point at the configured router\n",
       );
@@ -151,7 +209,7 @@ describe("runKey", () => {
     for (const value of [undefined, "", ROUTER, `${ROUTER}/`]) {
       err = [];
       writes = [];
-      expect(drive(false, { ANTHROPIC_BASE_URL: value })).toBe(0);
+      expect(drive([], false, { ANTHROPIC_BASE_URL: value })).toBe(0);
       expect(writes).toEqual([KEY]);
       expect(err).toEqual([]);
     }
@@ -164,21 +222,21 @@ describe("runKey", () => {
   test("the generated settings' ANTHROPIC_BASE_URL passes the gate: exit 0, key printed", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
     const settings = buildSettings(config(), SELF, {});
-    const code = drive(false, { ANTHROPIC_BASE_URL: settings.env.ANTHROPIC_BASE_URL });
+    const code = drive([], false, { ANTHROPIC_BASE_URL: settings.env.ANTHROPIC_BASE_URL });
     expect(code).toBe(0);
     expect(writes).toEqual([KEY]);
     expect(err).toEqual([]);
   });
 
   test("the refusal fires even with no config at all", () => {
-    expect(drive(false, { CLAUDE_CODE_USE_FOUNDRY: "yes" })).toBe(64);
+    expect(drive([], false, { CLAUDE_CODE_USE_FOUNDRY: "yes" })).toBe(64);
     expect(err.join("")).toContain("CLAUDE_CODE_USE_FOUNDRY is set");
     expect(writes).toEqual([]);
   });
 
   test("under a pipe it writes the key, and nothing else, with no newline", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
-    const code = drive(false);
+    const code = drive([], false);
     expect(code).toBe(0);
     expect(writes).toEqual([KEY]);
     expect(writes.join("")).toBe(KEY);
@@ -186,7 +244,7 @@ describe("runKey", () => {
   });
 
   test("no config: exit 78 with the login remedy, nothing written", () => {
-    const code = drive(false);
+    const code = drive([], false);
     expect(code).toBe(78);
     expect(err).toEqual([`${MISSING_CONFIG_MESSAGE}\n`]);
     expect(writes).toEqual([]);
@@ -196,7 +254,7 @@ describe("runKey", () => {
     const path = configFile(configDir({ HOME: home }));
     writeConfig(path, config());
     chmodSync(path, 0o644);
-    const code = drive(false);
+    const code = drive([], false);
     expect(code).toBe(78);
     expect(err.join("")).toContain("readable by group or other users");
     expect(writes).toEqual([]);
@@ -207,7 +265,7 @@ describe("runKey", () => {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeFileSync(path, "not json", "utf8");
     chmodSync(path, 0o600);
-    const code = drive(false);
+    const code = drive([], false);
     expect(code).toBe(78);
     expect(err.join("")).toContain("is not valid JSON");
     expect(writes).toEqual([]);
@@ -215,10 +273,12 @@ describe("runKey", () => {
 
   test("no error path leaks the key", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
-    drive(true);
-    drive(false);
+    drive([], true);
+    drive([], false);
     rmSync(home, { recursive: true, force: true });
-    drive(false);
+    drive([], false);
+    // A key handed in as an argument is refused, not echoed.
+    drive([KEY], false);
     assertNoKeyFragment(err.join(""), KEY);
   });
 });
