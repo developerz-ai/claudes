@@ -52,12 +52,48 @@ Workflow commands live in `.claude/commands/`:
 | `src/test-support/fixtures.ts` | Framework-free shared fake `ROUTER`/`KEY` fixtures used by tests and harnesses |
 | `src/test-support/redact.ts` | `assertNoKeyFragment` (no 8-char window of the key body may appear in any output) |
 | `src/test-support/readme-table.ts` | Parses README.md's "Refusals and exit codes" table into rows (`exit`, `when`, `message`); code-span messages are unquoted and `(message above)` resolves to the router-down block |
+| `src/test-support/agent-cli-flags.ts` | Shared agent CLI flag inventory for documentation and refusal guards |
+| `src/test-support/fixtures.test.ts` | Shared fixture contract tests |
+| `src/test-support/readme-table.test.ts` | README refusal-table parser tests |
+| `src/agent-cli-flags-refusals.test.ts` | Agent CLI flag refusal regressions |
+| `src/claude-structure.test.ts` | Structure target existence and recursive src/bin coverage guard |
+| `src/docs-index.test.ts` | Documentation index guard |
+| `src/main.test.ts` | CLI entry and dispatch integration tests |
+| `src/dispatch.test.ts` | Pure argv dispatch tests |
+| `src/version.test.ts` | Package version drift guard |
+| `src/tiers.test.ts` | Model parsing and tier resolution tests |
+| `src/readme.test.ts` | README contract tests |
+| `src/readme-refusals.test.ts` | README refusal messages and exit codes checked against live behaviour |
+| `src/commands/doctor.test.ts` | Doctor command orchestration tests |
+| `src/commands/key.test.ts` | Key command safety and refusal tests |
+| `src/commands/key.spawn.test.ts` | Key command subprocess tests |
+| `src/commands/login-args.test.ts` | Login argv validation tests |
+| `src/commands/login-input.test.ts` | Secret input reader tests |
+| `src/commands/login-output.test.ts` | Login output and redaction tests |
+| `src/commands/login.test.ts` | Login command tests |
+| `src/commands/run-login.test.ts` | Login flow integration tests |
+| `src/config/load.test.ts` | Config loading and missing-config tests |
+| `src/config/paths.test.ts` | Config path resolution tests |
+| `src/config/private-file.test.ts` | Atomic private-file safety tests |
+| `src/config/schema.test.ts` | Config schema validation tests |
+| `src/config/store.test.ts` | Config persistence and trust checks |
+| `src/router/client.test.ts` | Router health and model request tests |
+| `src/router/errors.test.ts` | Router error classification and scrubbing tests |
 | `scripts/build.ts` | `Bun.build({ target: "node" })` of `src/main.ts` → `dist/claudes.js`, prepends `#!/usr/bin/env node`, `chmod 755` |
 | `bin/check` | Gate: `bin/check-bun-versions` (bun-pin agreement) → biome (`--error-on-warnings`) → tsc on both tsconfigs → `bun test` → build → shebang/version/exit-code smoke (no `bunx` — it silently auto-installs unrelated npm packages) |
+| `bin/check-bun-versions` | Refuses drift between the Bun version pins |
+| `bin/check-bun-versions.test.ts` | Bun pin agreement and drift regressions |
+| `bin/check.test.ts` | Gate smoke and leak-guard regressions |
+| `bin/setup` | Frozen dependency setup with pin checks and install diagnostics |
+| `bin/setup.test.ts` | Setup dependency and failure diagnostics tests |
+| `bin/dev` | No-op development service entry point |
+| `bin/stop` | No-op service shutdown entry point |
 | `.github/workflows/ci.yml` | CI matrix: ubuntu-latest + macos-latest × Node 22 + 24; `bun install --frozen-lockfile` then `bin/check` |
 | `.github/workflows/release.yml` | npm trusted publishing via OIDC; tag must equal `v` + `package.json` version, must be on `origin/main`, tarball verified to contain exactly `dist/claudes.js`, `package.json`, `README.md`, `LICENSE`; pre-releases refused; digest-verified pinned npm 12.2.0 |
 
 Dependency direction (the live import graph under `src/`, checkable with `grep -nE 'from "\.\.?/' <file>` — this also catches the closing `} from "…";` line of a multi-line import (e.g. `src/launch/run.ts:26`) and `export { … } from "…";` re-exports (e.g. `src/config/store.ts:15`), both of which `grep '^import .*from "\.'` misses): `main.ts → commands/{doctor,key,login}.ts | dispatch.ts | launch/run.ts | version.ts`; `commands/doctor.ts → config/{load,paths}.ts | doctor/checks/*.ts | doctor/{results,run-proc,stub-server}.ts | launch/provider-switches.ts | launch/run.ts | router/{client,errors}.ts | version.ts`; `commands/key.ts → config/{load,paths}.ts | launch/provider-switches.ts`; `commands/login.ts → commands/login-{args,input}.ts | config/{paths,schema,store}.ts | launch/provider-switches.ts | router/client.ts | tiers.ts`; `commands/login-harness.ts → config/paths.ts | router/client.ts | test-support/{fixtures,redact}.ts | commands/login.ts`; `launch/run.ts → config/{load,paths,private-file}.ts | router/{client,errors}.ts | launch/{argv,env,preflight,provider-switches,settings,settings-file}.ts`; the other `launch/*` modules reach only `config/{paths,schema,errors}.ts`, `router/{client,errors}.ts` and each other — except the test fixture module `launch/run-harness.ts → config/{paths,schema,store}.ts | router/client.ts | test-support/fixtures.ts | launch/run.ts`; `config/store.ts → config/{errors,private-file,schema}.ts`; `config/load.ts → config/{paths,schema,store}.ts`; `config/private-file.ts → config/errors.ts`; `router/client.ts → router/errors.ts`; `doctor/checks/* → doctor/claude-version.ts | doctor/results.ts | doctor/run-proc.ts | doctor/stub-server.ts | the modules above` (notably `doctor/checks/config.ts → commands/login.ts` for `REDACTED_KEY`); `doctor/harness.ts → config/schema.ts | doctor/run-proc.ts | test-support/fixtures.ts`; `test-support/redact.ts → config/schema.ts`. Tests live as `*.test.ts` next to the source they exercise; `tsconfig.build.json` excludes `**/*.test.ts`, `tsconfig.json` includes them. NOTE: src/claude-structure.test.ts guards CLAUDE.md but parses only the Structure table and ignores dependency prose (its own test at lines 135-146), so it cannot fail on this line — the edge verification is the survey's, recorded in the acceptance entries.
+
+Structure coverage: every regular file under `src/` and `bin/` must have an exact-file row or a real directory ancestor row in the table above. Directory rows cover descendants recursively, matching slash boundaries (`src/launch/` does not cover `src/launch-extra/`). Purpose references, dependency prose and test naming conventions do not provide coverage; update the table when adding or moving a file. `src/claude-structure.test.ts` enforces coverage and target existence.
 
 ## Conventions
 
