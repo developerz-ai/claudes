@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -58,8 +59,21 @@ function structureTargets(source: string): Target[] {
   return targets;
 }
 
-function checkStructure(root: string): Target[] {
-  const targets = structureTargets(readFileSync(join(root, "CLAUDE.md"), "utf8"));
+function inventory(root: string, directory: string): string[] {
+  return readdirSync(join(root, directory), { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) return inventory(root, path);
+    return entry.isFile() ? [path] : [];
+  });
+}
+
+function checkStructure(
+  root: string,
+  source = readFileSync(join(root, "CLAUDE.md"), "utf8"),
+): Target[] {
+  const targets = structureTargets(source);
+  const files = new Set<string>();
+  const directories: string[] = [];
   for (const target of targets) {
     let stats: ReturnType<typeof statSync>;
     try {
@@ -73,6 +87,13 @@ function checkStructure(root: string): Target[] {
     if (target.path.endsWith("/") && !stats.isDirectory()) {
       invalid(target.line, `directory target is not a directory: \`${target.path}\``);
     }
+    if (stats.isDirectory()) directories.push(`${target.path.replace(/\/$/, "")}/`);
+    else files.add(target.path);
+  }
+  for (const path of [...inventory(root, "src"), ...inventory(root, "bin")]) {
+    if (!files.has(path) && !directories.some((directory) => path.startsWith(directory))) {
+      invalid(1, `unrepresented file \`${path}\`; add an exact file or directory ancestor row`);
+    }
   }
   return targets;
 }
@@ -84,6 +105,8 @@ function table(...rows: string[]): string {
 function fixture(run: (root: string) => void): void {
   const root = mkdtempSync(join(tmpdir(), "claude-structure-"));
   try {
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "bin"));
     run(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -91,9 +114,33 @@ function fixture(run: (root: string) => void): void {
 }
 
 describe("CLAUDE.md Structure targets", () => {
-  test("every documented repository file and directory exists", () => {
+  test("every target exists and every src/bin file has Structure coverage", () => {
     checkStructure(REPO_ROOT);
   });
+
+  for (const path of [
+    "src/test-support/agent-cli-flags.ts",
+    "src/test-support/fixtures.test.ts",
+    "src/test-support/readme-table.test.ts",
+    "src/agent-cli-flags-refusals.test.ts",
+    "src/claude-structure.test.ts",
+    "src/docs-index.test.ts",
+    "bin/check-bun-versions.test.ts",
+    "bin/check.test.ts",
+    "bin/setup",
+    "bin/setup.test.ts",
+  ]) {
+    test(`removing the real Structure row for ${path} leaves its file unrepresented`, () => {
+      const source = readFileSync(join(REPO_ROOT, "CLAUDE.md"), "utf8");
+      const target = structureTargets(source).find((entry) => entry.path === path);
+      expect(target).toBeDefined();
+      const withoutRow = source
+        .split(/\r?\n/)
+        .filter((_, index) => index + 1 !== target?.line)
+        .join("\n");
+      expect(() => checkStructure(REPO_ROOT, withoutRow)).toThrow(`unrepresented file \`${path}\``);
+    });
+  }
 
   test("checks files, directories and dot-directory targets, not Purpose references", () => {
     fixture((root) => {
@@ -131,6 +178,74 @@ describe("CLAUDE.md Structure targets", () => {
       });
     });
   }
+
+  test("removing a file's coverage fails even though the remaining targets exist", () => {
+    fixture((root) => {
+      writeFileSync(join(root, "src", "first.ts"), "");
+      writeFileSync(join(root, "src", "second.ts"), "");
+      const first = "| `src/first.ts` | first |";
+      writeFileSync(join(root, "CLAUDE.md"), table(first, "| `src/second.ts` | second |"));
+      expect(() => checkStructure(root)).not.toThrow();
+      writeFileSync(join(root, "CLAUDE.md"), table(first));
+      expect(() => checkStructure(root)).toThrow("unrepresented file `src/second.ts`");
+    });
+  });
+
+  for (const directory of ["src", "bin"]) {
+    test(`rejects an unrepresented nested ${directory} file`, () => {
+      fixture((root) => {
+        writeFileSync(join(root, "module.ts"), "");
+        writeFileSync(join(root, "CLAUDE.md"), table("| `module.ts` | module |"));
+        expect(() => checkStructure(root)).not.toThrow();
+        mkdirSync(join(root, directory, "nested"));
+        writeFileSync(join(root, directory, "nested", "new-file"), "");
+        expect(() => checkStructure(root)).toThrow(
+          `unrepresented file \`${directory}/nested/new-file\``,
+        );
+      });
+    });
+  }
+
+  for (const suffix of ["", "/"]) {
+    test(`real directory rows ending in ${JSON.stringify(suffix)} cover nested files`, () => {
+      fixture((root) => {
+        mkdirSync(join(root, "src", "modules", "nested"), { recursive: true });
+        writeFileSync(join(root, "src", "modules", "nested", "module.ts"), "");
+        writeFileSync(join(root, "bin", "tool"), "");
+        writeFileSync(
+          join(root, "CLAUDE.md"),
+          table(`| \`src/modules${suffix}\` | modules |`, "| `bin/tool` | tool |"),
+        );
+        expect(() => checkStructure(root)).not.toThrow();
+        mkdirSync(join(root, "src", "modules-extra"));
+        writeFileSync(join(root, "src", "modules-extra", "other.ts"), "");
+        expect(() => checkStructure(root)).toThrow(
+          "unrepresented file `src/modules-extra/other.ts`",
+        );
+      });
+    });
+  }
+
+  test("a file row cannot cover a filename prefix collision", () => {
+    fixture((root) => {
+      writeFileSync(join(root, "bin", "check"), "");
+      writeFileSync(join(root, "bin", "check.test.ts"), "");
+      writeFileSync(join(root, "CLAUDE.md"), table("| `bin/check` | check |"));
+      expect(() => checkStructure(root)).toThrow("unrepresented file `bin/check.test.ts`");
+    });
+  });
+
+  test("moving a covered file outside its directory requires a map update", () => {
+    fixture((root) => {
+      mkdirSync(join(root, "src", "covered"));
+      const original = join(root, "src", "covered", "module.ts");
+      writeFileSync(original, "");
+      writeFileSync(join(root, "CLAUDE.md"), table("| `src/covered/` | modules |"));
+      expect(() => checkStructure(root)).not.toThrow();
+      renameSync(original, join(root, "src", "moved.ts"));
+      expect(() => checkStructure(root)).toThrow("unrepresented file `src/moved.ts`");
+    });
+  });
 
   test("scopes parsing to the Structure table, not dependency prose or other sections", () => {
     const source = [
