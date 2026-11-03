@@ -59,7 +59,7 @@ Workflow commands live in `.claude/commands/`:
 | `src/agent-cli-flags-refusals.test.ts` | Agent CLI flag refusal regressions |
 | `src/claude-structure.test.ts` | Structure target existence and recursive src/bin coverage guard |
 | `src/docs-index.test.ts` | Documentation index guard |
-| `src/main.test.ts` | CLI entry and dispatch integration tests |
+| `src/main.test.ts` | CLI entry and dispatch integration tests, plus the uninstall drill (install, login, a session, an uninstall, the `~/.claude` checksum) |
 | `src/dispatch.test.ts` | Pure argv dispatch tests |
 | `src/help.test.ts` | Help-output contract tests: every scope names exactly its own flags, the command help reuses the commands' usage strings, and no text carries a key or a deployment hostname |
 | `src/version.test.ts` | Package version drift guard |
@@ -122,6 +122,11 @@ Structure coverage: every regular file under `src/` and `bin/` must have an exac
 - Exit codes follow sysexits.h: `64` usage error, `78` config error, `1` runtime error, `69` router unanswered by the pre-launch check, or answering it without a usable version, `127` `claude` missing from PATH (or unsignalable), `130` Ctrl-C at prompt, `0` success. `src/readme-refusals.test.ts` parses the README's own refusals table (`src/test-support/readme-table.ts`) and asserts every documented row against live behaviour, so a doc-side edit fails the guard too; 130 and 0 are asserted elsewhere.
 - Every rejection of an argv value names the FLAG (e.g. `--url`, `#5`), never the VALUE — echoing input is the redaction leak path.
 - `bin/check` uses `node_modules/.bin/biome` and `node_modules/.bin/tsc` — NOT `bunx biome` / `bunx tsc`, which silently auto-install the unrelated npm packages `biome` and `tsc`.
+
+## The uninstall drill
+
+- The uninstall drill — issue #5's dev-box acceptance — is mechanised in `src/main.test.ts`: it installs the CLI into a fake global prefix, logs in against a local router stack, runs one session, uninstalls, and asserts that Claude Code's own `~/.claude/settings.json` is byte-identical before and after and that plain `claude` still starts afterwards. The drill's children are awaited, never spawned synchronously: the router stack that answers them lives in the test process, and a synchronous spawn would block its event loop.
+- The dev-box run itself stays human — the published package (issue #7), the real Claude Code binary and the team's router are outside the checkout. The procedure is the README's "The uninstall drill" section; the results belong on the issue that tracks them.
 
 ## Key safety (non-negotiable)
 

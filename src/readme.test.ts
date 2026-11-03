@@ -82,10 +82,11 @@ function refusalRowFor(flag: string): RefusalRow & { readonly message: string } 
 
 /**
  * Flags of the other commands in the README's shell snippets: npm's `-g` and
- * rm's `-rf` in the install/uninstall commands. Neither claudes' nor
- * claude's, so they are asserted against nothing.
+ * rm's `-rf` in the install/uninstall commands, and shasum's `-a` in the
+ * uninstall drill's checksum command. Neither claudes' nor claude's, so they
+ * are asserted against nothing.
  */
-const SHELL_FLAGS: ReadonlySet<string> = new Set(["-g", "-rf"]);
+const SHELL_FLAGS: ReadonlySet<string> = new Set(["-g", "-rf", "-a"]);
 
 /**
  * Every flag token a text mentions, long or short, deduped. A token counts

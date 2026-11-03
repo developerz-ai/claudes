@@ -342,6 +342,56 @@ Nothing else is left behind: `claudes` never writes `~/.claude`, and the
 per-launch settings files and `claudes doctor`'s throwaway probe directory
 live inside the config directory.
 
+## The uninstall drill
+
+The uninstall is the one step that only a real run can prove, so it has a
+drill of its own: install, log in, run one session, uninstall, and check that
+nothing of yours was touched. Run it on a dev box against your own router and
+paste the result on
+[developerz-ai/claudes#5](https://github.com/developerz-ai/claudes/issues/5).
+
+```sh
+# 1. install
+npm i -g @developerz.ai/claudes
+
+# 2. log in
+claudes login --url <your router URL>
+
+# 3. one session
+claudes -p "hello"
+
+# 4. Claude Code's own settings file, before the uninstall
+sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
+
+# 5. uninstall
+npm rm -g @developerz.ai/claudes && rm -rf ~/.config/claudes
+
+# 6. the same file again — the checksum must be the one from step 4
+sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
+
+# 7. plain claude still starts
+claude --version
+```
+
+What the drill proves:
+
+- The two checksums are equal: `~/.claude/settings.json` is Claude Code's own
+  file, and `claudes` never writes it — not before the session, not during it,
+  not after the uninstall.
+- The uninstall removed everything `claudes` wrote: the config, the per-launch
+  settings file and `claudes doctor`'s throwaway probe directory all live
+  under `~/.config/claudes` (or `$XDG_CONFIG_HOME/claudes`).
+- Plain `claude` still starts afterwards: no leftover settings file and no
+  leftover environment break your own sessions.
+- The session went to your router: `claudes doctor` proves the wiring, and the
+  session's own traffic is the router's.
+
+The same drill runs as an automated check in this repository's test suite,
+against a local router stub instead of your router: it proves the mechanics —
+the config lands, the key travels through `claudes key`, the uninstall removes
+what it claims to. What it cannot prove is the dev box itself: the published
+package, the real Claude Code and your router stay a human drill.
+
 ## Platforms
 
 Linux, macOS and WSL. Node 22 or newer, plus Claude Code at or above the
