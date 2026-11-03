@@ -225,12 +225,21 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
  * process, the config is really written and really read, the key really
  * travels through the apiKeyHelper, and the uninstall really removes what it
  * claims to. The drill's checksum subject is Claude Code's own settings file
- * — the one thing a user must never lose to a launcher.
+ * — the one thing a user must never lose to a launcher — and its baseline is
+ * taken BEFORE the install, so a login or a session that rewrote the file
+ * would fail the drill instead of hiding behind a later baseline.
  *
  * What the drill cannot stand in for is the dev box: the published package
  * (`npm i -g @developerz.ai/claudes`, blocked on issue #7), the real Claude
  * Code binary and the team's router. That part stays a human drill — the
- * README's "The uninstall drill" section spells it out.
+ * README's "The uninstall drill" section spells it out. A real run on
+ * 2026-11-03 (Claude Code 2.1.306, the packed tarball installed with
+ * `npm i -g`, a local router stack) showed what the fake `claude` cannot: on
+ * a HOME where Claude Code has never run a session, its first session
+ * rewrites the model alias in `~/.claude/settings.json` (`"model": "opus"` →
+ * `"model": "opus[1m]"`). Plain `claude` does the same with no `claudes`
+ * involved, and never again after that — so the byte-identity assertion
+ * below is about `claudes`' own writes, and the README says so.
  */
 
 /** One request the drill's router stack saw: the method, the path, the credential hashes. */
@@ -566,6 +575,11 @@ describe("the uninstall drill", () => {
   });
 
   const drill = async (): Promise<void> => {
+    // --- baseline: Claude Code's own settings file, before the install, the
+    // login, the session or the uninstall can touch it. A baseline taken
+    // after the install would let a login that rewrites the file pass.
+    const before = checksum(claudeSettings);
+
     // --- install: a package tree in a global prefix, the way `npm i -g` lays
     // it out. The published package does not exist yet (issue #7), so the
     // drill installs the tree it can: the CLI itself, behind a bin shim.
@@ -622,11 +636,15 @@ describe("the uninstall drill", () => {
       sonnet: "claude-sonnet-4-5",
       haiku: "claude-haiku-4-5",
     });
+    // Claude Code's own settings file is byte-identical after the login.
+    expect(checksum(claudeSettings)).toBe(before);
 
     // --- the session: the real launcher, the real settings file, the key
     // through the helper — and none of the user's own files touched.
-    const before = checksum(claudeSettings);
     const session = await runCli("claudes", ["-p", "hello"], drillEnv);
+    // The session's own output carries no fragment of the key: a launcher
+    // that printed it would leak it into the user's scrollback.
+    assertNoKeyFragment(`${session.stdout}${session.stderr}`, KEY);
     expect(session.status).toBe(0);
     expect(session.stderr).toBe("");
 

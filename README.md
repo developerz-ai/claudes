@@ -345,28 +345,29 @@ live inside the config directory.
 ## The uninstall drill
 
 The uninstall is the one step that only a real run can prove, so it has a
-drill of its own: install, log in, run one session, uninstall, and check that
-nothing of yours was touched. Run it on a dev box against your own router and
-paste the result on
+drill of its own: take the baseline, install, log in, run one session,
+uninstall, and check that nothing of yours was touched. Run it on a dev box
+against your own router and paste the result on
 [developerz-ai/claudes#5](https://github.com/developerz-ai/claudes/issues/5).
 
 ```sh
-# 1. install
+# 1. the baseline: Claude Code's own settings file, before anything of yours runs
+sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
+
+# 2. install
 npm i -g @developerz.ai/claudes
 
-# 2. log in
+# 3. log in
 claudes login --url <your router URL>
 
-# 3. one session
+# 4. one session
 claudes -p "hello"
-
-# 4. Claude Code's own settings file, before the uninstall
-sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
 
 # 5. uninstall
 npm rm -g @developerz.ai/claudes && rm -rf ~/.config/claudes
 
-# 6. the same file again — the checksum must be the one from step 4
+# 6. the same file again — the checksum must be the one from step 1
+#    (unless Claude Code has never run on this machine: see the note below)
 sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
 
 # 7. plain claude still starts
@@ -375,9 +376,16 @@ claude --version
 
 What the drill proves:
 
-- The two checksums are equal: `~/.claude/settings.json` is Claude Code's own
-  file, and `claudes` never writes it — not before the session, not during it,
-  not after the uninstall.
+- `claudes` never writes `~/.claude/settings.json` — not at the install, not
+  at the login, not during the session, not after the uninstall — so the
+  checksum from step 6 is the one from step 1. The baseline is taken before
+  the install, so a change by any of those four steps shows up.
+- One difference is Claude Code's own, not `claudes`': on a machine where
+  Claude Code has never run a session, its first session rewrites the model
+  alias in that file (`"model": "opus"` → `"model": "opus[1m]"`). Plain
+  `claude` does the same with no `claudes` involved, and never again after
+  that. Run the drill twice — the second run's checksums must match — or run
+  one plain `claude` session before step 1.
 - The uninstall removed everything `claudes` wrote: the config, the per-launch
   settings file and `claudes doctor`'s throwaway probe directory all live
   under `~/.config/claudes` (or `$XDG_CONFIG_HOME/claudes`).
@@ -387,10 +395,15 @@ What the drill proves:
   session's own traffic is the router's.
 
 The same drill runs as an automated check in this repository's test suite,
-against a local router stub instead of your router: it proves the mechanics —
-the config lands, the key travels through `claudes key`, the uninstall removes
-what it claims to. What it cannot prove is the dev box itself: the published
-package, the real Claude Code and your router stay a human drill.
+against a local router stub and a fake `claude` instead of your router and
+your Claude Code: it proves the mechanics — the config lands, the key travels
+through `claudes key`, the checksum of Claude Code's own settings file is
+taken before the install and compared after the login, the session and the
+uninstall, the session's own output carries no fragment of the key, and the
+uninstall removes what it claims to. What it cannot prove is your machine:
+the real Claude Code binary, your own router and the published package
+([#7](https://github.com/developerz-ai/claudes/issues/7)) are outside the
+checkout.
 
 ## Platforms
 
