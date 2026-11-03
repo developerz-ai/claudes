@@ -31,6 +31,9 @@ and haiku tiers (built-in defaults fill any gap), and saves the result to
 a 0600 file in a 0700 directory. Override the tier pins with `--opus`,
 `--sonnet` or `--haiku`.
 
+`claudes login --help` prints the login usage and exits 0; the flags it names
+are `--url`, `--opus`, `--sonnet` and `--haiku`.
+
 ## Daily use
 
 Type `claudes` wherever you would type `claude`; every argument passes
@@ -41,17 +44,24 @@ claudes                  # interactive session
 claudes -p "..."         # non-interactive print mode
 claudes --model opus     # or sonnet / haiku
 claudes --version        # or -v
+claudes --help           # what claudes itself accepts
 ```
 
 `--model` takes the tier names `opus|sonnet|haiku`; the longer spellings
 `claude-opus`, `claude-sonnet` and `claude-haiku` (with or without a `[1m]`
 suffix) are normalised to them.
 
-`claudes` itself owns only four first arguments: `login`, `doctor`, `key` and
-`--version` (`-v`). Everything else goes to `claude`. `claudes key` is the
-internal helper Claude Code calls to fetch the router key; at a terminal it
-refuses (exit 64). It takes no arguments of its own: any argument after it is
-refused (exit 64) before the key is read.
+`claudes` itself owns only five first arguments: `login`, `doctor`, `key`,
+`--version` (`-v`) and `--help`. Everything else goes to `claude`.
+
+`claudes --help` prints a help text on stdout and exits 0. It names the flags
+`claudes` owns itself — `--version`, `-v` and `--help` — and the two Claude
+Code flags it accepts: `--model` and `-p`.
+
+`claudes key` is the internal helper Claude Code calls to fetch the router
+key; at a terminal it refuses (exit 64). It takes no arguments of its own: any
+argument after it is refused (exit 64) before the key is read,
+`claudes key --help` included.
 
 ## What it does and doesn't do
 
@@ -87,15 +97,17 @@ exactly this reason.
 
 ## Known gaps through Claude subscriptions
 
-Confirmed by the spike
-([developerz-ai/multi-ai-router#211](https://github.com/developerz-ai/multi-ai-router/issues/211))
-and its final verdict
-([developerz-ai/multi-ai-router#213](https://github.com/developerz-ai/multi-ai-router/issues/213)),
-linked here as the source. The table may shrink as the router catches up.
+The canonical verdict on these gaps is
+[developerz-ai/multi-ai-router#213](https://github.com/developerz-ai/multi-ai-router/issues/213),
+from the spike
+([developerz-ai/multi-ai-router#211](https://github.com/developerz-ai/multi-ai-router/issues/211)),
+linked here as the source. The gaps were observed with Claude Code 2.25.8: a
+newer Claude Code may behave differently. The table may shrink as the router
+catches up.
 
 | What | Status in a claudes session | Router issue |
 | --- | --- | --- |
-| WebSearch | Disabled (`permissions.deny` in the generated settings): the subscription path cannot serve server tools | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
+| WebSearch | Disabled (`permissions.deny` in the generated settings): by design — the subscription path cannot serve server tools | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
 | Advisor tool | Disabled (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the generated settings): it rides every main turn and the subscription path rejects it | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
 | PDFs / document blocks | Confirmed live: the model sees only a "PDF file read" line, never the content | [#298](https://github.com/developerz-ai/multi-ai-router/issues/298) |
 | `count_tokens` | Refused on a subscription-only pool. Interactive `/context` does call it: one `/context` made 50 calls, all refused, and `/context` then shows a wrong message-token figure. `claude -p` runs did not call it | [#299](https://github.com/developerz-ai/multi-ai-router/issues/299) |
@@ -140,7 +152,7 @@ use.
 | 78 | No config, or a config `claudes` refuses to trust | `no claudes config: run \`claudes login --url <router>\`` |
 | 127 | `claude` is not on `PATH` | `claude not found on PATH` |
 | 1 | `claudes doctor` had at least one FAIL | (the FAIL lines themselves) |
-| 64 | `claudes doctor` got an argument other than `--live` | `claudes doctor: unknown argument #1\nusage: claudes doctor [--live]` |
+| 64 | `claudes doctor` got an argument other than `--live`; `--help` is only accepted on its own, where it prints the usage and exits 0 | `claudes doctor: unknown argument #1\nusage: claudes doctor [--live]` |
 | 64 | `claudes login` ran without `--url` | `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.` |
 
 The seven known provider switches (`CLAUDE_CODE_USE_BEDROCK` and friends) are
@@ -162,6 +174,9 @@ empty, `0` and `false` are all left alone.
 ```sh
 claudes doctor [--live]
 ```
+
+`claudes doctor --help` prints that usage and exits 0; the only flag it names
+is `--live`.
 
 Runs every check in order, printing each verdict as it arrives — the wiring
 probe alone can take a minute — and exits 1 when any check FAILed, 0

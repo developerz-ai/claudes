@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { DOCTOR_FLAGS, type DoctorDeps, runDoctor } from "./commands/doctor";
 import { LOGIN_FLAGS, parseLoginArgs } from "./commands/login-args";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
-import { dispatch, VERSION_FLAGS } from "./dispatch";
+import { dispatch, HELP_SCOPES, type HelpScope, VERSION_FLAGS } from "./dispatch";
+import { HELP_FLAGS, HELP_SCOPE_FLAGS, HELP_TEXTS } from "./help";
 import { buildArgv } from "./launch/argv";
 import * as preflight from "./launch/preflight";
 import { UNSUPPORTED_FEATURES, type UnsupportedFeature } from "./launch/unsupported";
@@ -15,16 +16,25 @@ import {
 } from "./test-support/readme-table";
 
 /**
- * claudes has no --help output of its own: dispatch() routes the first
- * argument (login / doctor / key / --version) and passes everything else
- * through to claude. The assertions below therefore run against the parsers
- * themselves — dispatch(), parseLoginArgs() and runDoctor()'s argument loop —
- * which are the source of truth for what this CLI accepts.
+ * The README and the CLI are one contract: dispatch() routes the first
+ * argument (login / doctor / key / --version / --help) and passes everything
+ * else through to claude, so the assertions below run against the parsers and
+ * the help output themselves — dispatch(), parseLoginArgs(), runDoctor()'s
+ * argument loop and the texts in src/help.ts — which are the source of truth
+ * for what this CLI accepts.
  */
 
 const LOGIN_URL = "https://router.invalid";
 const readmeSource = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-const OWNED_FLAGS: readonly string[] = [...VERSION_FLAGS, ...LOGIN_FLAGS, ...DOCTOR_FLAGS];
+/**
+ * claudes' own flags: the ones the CLI claims, the ones the top-level help
+ * names, and the ones the commands own. The help inventory is part of it: the
+ * top-level help documents --help, --model and -p, so they are claudes' own
+ * spellings and the README has to document them.
+ */
+const OWNED_FLAGS: readonly string[] = [
+  ...new Set([...VERSION_FLAGS, ...HELP_FLAGS, ...LOGIN_FLAGS, ...DOCTOR_FLAGS]),
+];
 
 /** Undocumented owned spellings require a reason; remove exceptions once documented. */
 const UNDOCUMENTED_FLAGS: Readonly<Record<string, string>> = {};
@@ -32,7 +42,9 @@ const UNDOCUMENTED_FLAGS: Readonly<Record<string, string>> = {};
 /**
  * Flags that are Claude Code's own, not claudes': claudes rewrites their
  * values (--model) or passes them through untouched (-p). They are claude's
- * to define, so they are allowlisted here and asserted against nothing.
+ * to define, so they are allowlisted here; claudes' help output names them
+ * too, so they also carry a parser check — the rewrite and the pass-through
+ * are claudes' own behaviour.
  */
 const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "-p"]);
 
@@ -76,20 +88,19 @@ function refusalRowFor(flag: string): RefusalRow & { readonly message: string } 
 const SHELL_FLAGS: ReadonlySet<string> = new Set(["-g", "-rf"]);
 
 /**
- * Every flag token the README mentions, long or short, deduped. A token
- * counts as a flag only after whitespace, a quote, a backtick, a bracket or
- * a line start, so hyphenated prose ("known-benign", "claude-opus-5-5") and
- * the bare `--` terminator are not mistaken for flags.
+ * Every flag token a text mentions, long or short, deduped. A token counts
+ * as a flag only after whitespace, a quote, a backtick, a bracket or a line
+ * start, so hyphenated prose ("known-benign", "claude-opus-5-5") and the bare
+ * `--` terminator are not mistaken for flags. The README and the help outputs
+ * are read the same way, so one reader serves both.
  */
-function readmeFlags(source = readmeSource): Set<string> {
+function flagsIn(source: string): Set<string> {
   return new Set(source.match(/(?<=[\s`"([]|^)--?[A-Za-z][A-Za-z0-9-]*/gm) ?? []);
 }
 
 /** Refusal examples are not positive documentation of accepted options. */
 function positiveReadmeFlags(source: string): Set<string> {
-  return readmeFlags(
-    source.replace(/^## Refusals and exit codes\r?\n.*?(?=^## |$(?![\s\S]))/gms, ""),
-  );
+  return flagsIn(source.replace(/^## Refusals and exit codes\r?\n.*?(?=^## |$(?![\s\S]))/gms, ""));
 }
 
 /**
@@ -138,6 +149,24 @@ const CLAUDES_FLAG_CHECKS: Readonly<Record<string, () => Promise<void>>> = {
   },
   "-v": async () => {
     expect(dispatch(["-v"]).kind).toBe("version");
+  },
+  "--help": async () => {
+    expect(dispatch(["--help"]).kind).toBe("help");
+  },
+  "--model": async () => {
+    // claudes owns the rewrite: Claude Code's alias becomes the bare tier
+    // name the router serves.
+    expect(buildArgv(["--model", "claude-opus"], "/tmp/settings.json")).toEqual({
+      ok: true,
+      argv: ["--settings", "/tmp/settings.json", "--model", "opus"],
+    });
+  },
+  "-p": async () => {
+    // Passed through untouched: the prompt is claude's to read.
+    expect(buildArgv(["-p", "hi"], "/tmp/settings.json")).toEqual({
+      ok: true,
+      argv: ["--settings", "/tmp/settings.json", "-p", "hi"],
+    });
   },
   "--url": async () => {
     expect(parseLoginArgs(["--url", LOGIN_URL]).ok).toBe(true);
@@ -226,7 +255,7 @@ describe("README flags", () => {
     const source = readmeSource
       .replaceAll("--opus", "omitted")
       .replace("## Refusals and exit codes", "## Refusals and exit codes\n\n`--opus` is refused.");
-    expect(readmeFlags(source).has("--opus")).toBe(true);
+    expect(flagsIn(source).has("--opus")).toBe(true);
     expect(() => assertOwnedFlagCoverage(source)).toThrow("--opus: missing README documentation");
   });
 
@@ -248,7 +277,7 @@ describe("README flags", () => {
   });
 
   test("extraction excludes prose and bare terminators but retains short aliases", () => {
-    expect([...readmeFlags("known-benign claude-opus-5-5 -- `-v` [--live] --model -p")]).toEqual([
+    expect([...flagsIn("known-benign claude-opus-5-5 -- `-v` [--live] --model -p")]).toEqual([
       "-v",
       "--live",
       "--model",
@@ -256,7 +285,7 @@ describe("README flags", () => {
     ]);
   });
   test("every flag the README mentions is owned by claudes or by claude", () => {
-    const flags = readmeFlags();
+    const flags = flagsIn(readmeSource);
     expect(flags.size).toBeGreaterThan(0); // the extraction itself still works
     const unknown = [...flags]
       .filter(
@@ -303,12 +332,90 @@ describe("README flags", () => {
 
   test("the parsers still refuse flags nobody documents", async () => {
     // dispatch passes anything unknown through to claude — claudes itself
-    // only recognises the reserved words and --version.
+    // only recognises the reserved words, --version and --help.
     expect(dispatch(["--bogus"]).kind).toBe("passthrough");
     expect(parseLoginArgs(["--url", LOGIN_URL, "--bogus"]).ok).toBe(false);
     const { deps, err } = noConfigDoctorDeps();
     expect(await runDoctor(["--bogus"], deps)).toBe(64);
     expect(err.join("")).toContain("unknown argument");
+  });
+});
+
+/**
+ * The README and the help output are one contract: every flag the README
+ * documents must be in the help output that applies to it, and every flag the
+ * help output names must be documented in the README. The refusals table and
+ * the shell flags of the install snippets are outside it — they are refusals
+ * and npm's / rm's options, not options claudes accepts.
+ */
+function assertHelpMatchesReadme(
+  source: string,
+  texts: Readonly<Record<HelpScope, string>> = HELP_TEXTS,
+): void {
+  const documented = positiveReadmeFlags(source);
+  const problems: string[] = [];
+  for (const flag of documented) {
+    if (REFUSED_FLAGS.has(flag) || SHELL_FLAGS.has(flag)) {
+      continue;
+    }
+    // The applicable help output is the one whose scope owns the flag.
+    const scopes = HELP_SCOPES.filter((scope) => HELP_SCOPE_FLAGS[scope].includes(flag));
+    if (scopes.length === 0) {
+      problems.push(`${flag}: documented in the README but no help output covers it`);
+      continue;
+    }
+    for (const scope of scopes) {
+      if (!flagsIn(texts[scope]).has(flag)) {
+        problems.push(`${flag}: missing from the ${scope} --help output`);
+      }
+    }
+  }
+  for (const scope of HELP_SCOPES) {
+    for (const flag of flagsIn(texts[scope])) {
+      if (!documented.has(flag)) {
+        problems.push(
+          `${flag}: named in the ${scope} --help output but not documented in the README`,
+        );
+      }
+    }
+  }
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+describe("README and help output contract", () => {
+  test("every documented flag is in the applicable help output, and every named flag is documented", () => {
+    assertHelpMatchesReadme(readmeSource);
+  });
+
+  test("rejects a README that drops a flag the help output names", () => {
+    for (const flag of ["--model", "-p", "--url", "--live"]) {
+      const source = readmeSource.replaceAll(flag, "omitted");
+      expect(() => assertHelpMatchesReadme(source)).toThrow(flag);
+    }
+  });
+
+  test("rejects a help output that drops a flag the README documents", () => {
+    const cases: readonly { readonly scope: HelpScope; readonly flag: string }[] = [
+      { scope: "top", flag: "--model" },
+      { scope: "login", flag: "--url" },
+      { scope: "doctor", flag: "--live" },
+    ];
+    for (const { scope, flag } of cases) {
+      const texts: Readonly<Record<HelpScope, string>> = {
+        ...HELP_TEXTS,
+        [scope]: HELP_TEXTS[scope].replaceAll(flag, "omitted"),
+      };
+      expect(() => assertHelpMatchesReadme(readmeSource, texts)).toThrow(flag);
+    }
+  });
+
+  test("the refusals table and the shell flags are outside the contract", () => {
+    // --settings and --key are refusals, -g and -rf belong to npm and rm:
+    // no help output may be asked to document them.
+    for (const flag of [...REFUSED_FLAGS, ...SHELL_FLAGS]) {
+      const named = HELP_SCOPES.some((scope) => flagsIn(HELP_TEXTS[scope]).has(flag));
+      expect(named).toBe(false);
+    }
   });
 });
 

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
+import { helpText } from "./help";
 import { scrub } from "./router/errors";
 import { assertNoKeyFragment } from "./test-support/redact";
 import { VERSION } from "./version";
@@ -151,8 +152,44 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expectNoKeyMaterial(res.stderr);
   });
 
-  test("a non-reserved argument: the passthrough path, exit 78 without a config", () => {
+  test("--help: the help text on stdout, exit 0", () => {
     const res = runMain(["--help"]);
+    expect(res.status).toBe(0);
+    expect(res.stderr).toBe("");
+    expect(res.stdout).toBe(`${helpText("top")}\n`);
+    expectNoKeyMaterial(res.stdout);
+  });
+
+  test("login --help: the login usage on stdout, exit 0", () => {
+    const res = runMain(["login", "--help"]);
+    expect(res.status).toBe(0);
+    expect(res.stderr).toBe("");
+    expect(res.stdout).toBe(`${helpText("login")}\n`);
+    expect(res.stdout).toContain("usage: claudes login --url <router-url>");
+    expectNoKeyMaterial(res.stdout);
+  });
+
+  test("doctor --help: the doctor usage on stdout, exit 0", () => {
+    const res = runMain(["doctor", "--help"]);
+    expect(res.status).toBe(0);
+    expect(res.stderr).toBe("");
+    expect(res.stdout).toBe(`${helpText("doctor")}\n`);
+    expect(res.stdout).toContain("usage: claudes doctor [--live]");
+    expectNoKeyMaterial(res.stdout);
+  });
+
+  test("key --help: the key command refuses the argument, exit 64", () => {
+    // The key command takes no arguments, so --help is not a help request:
+    // the README's refusals table promises this refusal.
+    const res = runMain(["key", "--help"]);
+    expect(res.status).toBe(64);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toBe("claudes key: unknown argument #1\nusage: claudes key\n");
+    expectNoKeyMaterial(res.stderr);
+  });
+
+  test("a non-reserved argument: the passthrough path, exit 78 without a config", () => {
+    const res = runMain(["--verbose"]);
     expect(res.status).toBe(78);
     expect(res.stderr).toBe(`${MISSING_CONFIG_MESSAGE}\n`);
     expect(res.stdout).toBe("");
