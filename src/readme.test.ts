@@ -26,6 +26,7 @@ import {
 
 const LOGIN_URL = "https://router.invalid";
 const readmeSource = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const brainSource = readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8");
 /**
  * claudes' own flags: the ones the CLI claims, the ones the top-level help
  * names, and the ones the commands own. The help inventory is part of it: the
@@ -542,5 +543,174 @@ describe("README network-note guard", () => {
         FUTURE_NOTE_MESSAGE: "note: newly exported hint",
       }),
     ).toThrow();
+  });
+});
+
+/**
+ * The uninstall drill's record — the acceptance evidence issue #5 asks for.
+ *
+ * WHY: the drill proves seven things, and a record that quietly drops one of
+ * them is a record that claims more than it shows. Three documents carry the
+ * evidence — the README's drill procedure, the README's block of what to paste
+ * on the issue, and the brain's record of the run — so all three are checked
+ * here: the procedure and the paste block must name every step, and the
+ * record must carry a result per step, with a digest (or the word "absent")
+ * in the two checksum-bearing rows.
+ *
+ * The guard is proved able to fail: every mutation below must be rejected, so
+ * a record that lost a step cannot pass as a complete one.
+ */
+
+/** The seven drill results, in the order the drill takes them. */
+const DRILL_STEPS: readonly string[] = [
+  "1. baseline",
+  "2. install",
+  "3. login",
+  "4. session",
+  "5. uninstall",
+  "6. checksum",
+  "7. plain claude",
+];
+
+/** The steps whose result is a checksum of Claude Code's own settings file. */
+const CHECKSUM_STEPS: readonly string[] = ["1. baseline", "6. checksum"];
+
+/** The heading of the record in the brain. */
+const RECORD_HEADING = "### The recorded dev-box run";
+
+/** The issue the drill's results are for; the record has to name it. */
+const DRILL_ISSUE_URL = "https://github.com/developerz-ai/claudes/issues/5";
+
+/**
+ * The text of a section, from its heading to the next heading of the same or
+ * a higher level. A heading that is not there is an error, not an empty
+ * section: a missing record must fail the guard, not pass it vacuously.
+ *
+ * The scan tracks fenced code blocks: a shell comment inside a fence looks
+ * like a heading but is not one, and the drill's steps live in a fence.
+ */
+function section(source: string, heading: string): string {
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start === -1) {
+    throw new Error(`the document has no "${heading}" section`);
+  }
+  const level = heading.match(/^#+/)?.[0].length ?? 0;
+  const body: string[] = [];
+  let inFence = false;
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      body.push(line);
+      continue;
+    }
+    if (!inFence) {
+      const match = /^(#{1,6})\s/.exec(line);
+      if (match !== null && (match[1]?.length ?? 0) <= level) break;
+    }
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+/** The result cell of the record's row for a step, or undefined when the row is missing. */
+function recordRow(record: string, step: string): string | undefined {
+  for (const line of record.split(/\r?\n/)) {
+    const match = /^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$/.exec(line);
+    if (match?.[1] === step) {
+      return match[2] ?? "";
+    }
+  }
+  return undefined;
+}
+
+/** Every drill step a text names — the steps it forgot are the problem. */
+function assertDrillSteps(text: string, what: string): void {
+  const missing = DRILL_STEPS.filter((step) => !text.includes(step));
+  if (missing.length > 0) {
+    throw new Error(`${what} does not name the drill steps: ${missing.join(", ")}`);
+  }
+}
+
+/** The record's own contract: a result per step, and a checksum where one belongs. */
+function assertDrillRecord(record: string): void {
+  const problems: string[] = [];
+  for (const step of DRILL_STEPS) {
+    const result = recordRow(record, step);
+    if (result === undefined) {
+      problems.push(`${step}: no row in the record`);
+      continue;
+    }
+    if (result.trim() === "") {
+      problems.push(`${step}: the row carries no result`);
+      continue;
+    }
+    if (
+      CHECKSUM_STEPS.includes(step) &&
+      !/[0-9a-f]{64}/.test(result) &&
+      !/\babsent\b/.test(result)
+    ) {
+      problems.push(`${step}: the row carries no checksum and does not say "absent"`);
+    }
+  }
+  if (!record.includes(DRILL_ISSUE_URL)) {
+    problems.push(`the record does not name the issue it feeds: ${DRILL_ISSUE_URL}`);
+  }
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+describe("the uninstall drill record", () => {
+  test("the README's drill procedure and its paste block name all seven steps", () => {
+    assertDrillSteps(section(readmeSource, "## The uninstall drill"), "the README's drill section");
+    assertDrillSteps(
+      section(readmeSource, "### What to paste on the issue"),
+      "the README's paste block",
+    );
+  });
+
+  test("the brain's record carries every result, and the checksums with it", () => {
+    assertDrillRecord(section(brainSource, RECORD_HEADING));
+  });
+
+  test("rejects a record that drops a step", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const dropped = record.replace(/^\| 4\. session \|[^\n]*\n/m, "");
+    expect(() => assertDrillRecord(dropped)).toThrow("4. session: no row in the record");
+  });
+
+  test("rejects a record whose result is empty", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const emptied = record.replace(/^\| 2\. install \|[^\n]*$/m, "| 2. install |  |");
+    expect(() => assertDrillRecord(emptied)).toThrow("2. install: the row carries no result");
+  });
+
+  test("rejects a checksum row that carries no digest and does not say absent", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const blind = record.replace(/^\| 6\. checksum \|[^\n]*$/m, "| 6. checksum | unchanged |");
+    expect(() => assertDrillRecord(blind)).toThrow(
+      '6. checksum: the row carries no checksum and does not say "absent"',
+    );
+  });
+
+  test("rejects a record that does not name the issue it feeds", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const unlinked = record.replaceAll(DRILL_ISSUE_URL, "the issue");
+    expect(() => assertDrillRecord(unlinked)).toThrow(
+      "the record does not name the issue it feeds",
+    );
+  });
+
+  test("rejects a README whose drill steps drop one", () => {
+    const source = readmeSource.replaceAll("4. session", "4. a chat");
+    expect(() => assertDrillSteps(section(source, "## The uninstall drill"), "the drill")).toThrow(
+      "does not name the drill steps: 4. session",
+    );
+  });
+
+  test("rejects a missing record instead of passing it vacuously", () => {
+    expect(() => section(brainSource, "### No such record")).toThrow(
+      'the document has no "### No such record" section',
+    );
   });
 });

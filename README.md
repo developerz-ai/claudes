@@ -351,26 +351,26 @@ against your own router and paste the result on
 [developerz-ai/claudes#5](https://github.com/developerz-ai/claudes/issues/5).
 
 ```sh
-# 1. the baseline: Claude Code's own settings file, before anything of yours runs
+# 1. baseline: Claude Code's own settings file, before anything of yours runs
 sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
 
 # 2. install
 npm i -g @developerz.ai/claudes
 
-# 3. log in
+# 3. login
 claudes login --url <your router URL>
 
-# 4. one session
+# 4. session
 claudes -p "hello"
 
 # 5. uninstall
 npm rm -g @developerz.ai/claudes && rm -rf ~/.config/claudes
 
-# 6. the same file again — the checksum must be the one from step 1
+# 6. checksum: the same file again — it must be the one from step 1
 #    (unless Claude Code has never run on this machine: see the note below)
 sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
 
-# 7. plain claude still starts
+# 7. plain claude: plain claude still starts
 claude --version
 ```
 
@@ -394,9 +394,25 @@ What the drill proves:
 - The session went to your router: `claudes doctor` proves the wiring, and the
   session's own traffic is the router's.
 
-A recorded run of both passes — the real Claude Code, the packed tarball, a
-local stack, and equal checksums on the second pass — is in the repository's
-[`CLAUDE.md`](CLAUDE.md).
+### What to paste on the issue
+
+The issue asks for the drill's results, and the checksums are what make the
+claim checkable. Paste these seven lines on it, one per step, with your own
+values in them:
+
+```text
+1. baseline: ~/.claude/settings.json -> absent
+2. install: claudes --version -> exit 0, <claudes' version>
+3. login: exit 0, logged in to <your router URL>
+4. session: exit 0; the router saw the session carry the router key
+5. uninstall: claudes is gone from PATH, the config directory is gone
+6. checksum: before -> absent | after -> absent (MATCH)
+7. plain claude: exit 0, <claude's version>
+```
+
+A recorded run of the whole lifecycle — the real Claude Code, the packed
+tarball, the local stack, both passes and the matching checksums — is in the
+repository's [`CLAUDE.md`](CLAUDE.md).
 
 ### The same drill against a local router stack
 
@@ -418,7 +434,9 @@ const MODELS = ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"];
 const server = createServer((req, res) => {
   const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
   const credential = req.headers["x-api-key"] ?? req.headers.authorization ?? "";
-  console.log(`${req.method} ${path}`);
+  // "present", never the credential itself: the drill's evidence that the
+  // request carried the router key, with no key material in the log.
+  console.log(`${req.method} ${path} credential=${credential === "" ? "none" : "present"}`);
   if (path === "/healthz") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ version: "1.4.2" }));
@@ -478,7 +496,9 @@ server.listen(0, "127.0.0.1", () => {
 ```
 
 Run it with `node router.mjs`. It prints the URL it listens on and one line
-per request, so you can watch the session's traffic arrive.
+per request — the method, the path, and whether the request carried a
+credential — so you can watch the session's traffic arrive and see that the
+router key travelled with it. The credential itself is never printed.
 
 Then run the same seven steps, with two changes: install the tarball this
 repository builds instead of the published package, and log in against the
@@ -491,7 +511,7 @@ bun run build
 npm pack
 npm i -g ./developerz.ai-claudes-0.1.0.tgz
 
-# 3. log in against the local stack; paste any key of the router's shape at
+# 3. login against the local stack; paste any key of the router's shape at
 #    the prompt — `mar_live_` followed by 32 characters. The local stack does
 #    not check it.
 claudes login --url http://127.0.0.1:<the port the stack printed>
@@ -502,6 +522,10 @@ machine where Claude Code has never run, `~/.claude/settings.json` may not
 exist yet — take the baseline as "absent", and after the drill the file must
 either still be absent or hold only Claude Code's own first-session change
 (the note above).
+
+This is the walkthrough to run when the published package and the team's router
+are out of reach. It ends in the same seven steps, and the seven lines are
+what goes on the issue.
 
 The same drill runs as an automated check in this repository's test suite,
 against a local router stub and a fake `claude` instead of your router and

@@ -64,7 +64,7 @@ Workflow commands live in `.claude/commands/`:
 | `src/help.test.ts` | Help-output contract tests: every scope names exactly its own flags, the command help reuses the commands' usage strings, and no text carries a key or a deployment hostname |
 | `src/version.test.ts` | Package version drift guard |
 | `src/tiers.test.ts` | Model parsing and tier resolution tests |
-| `src/readme.test.ts` | README contract tests |
+| `src/readme.test.ts` | README contract tests, plus the uninstall-drill record guard: the README's drill steps and the brain's record must name all seven drill results, and the two checksum-bearing rows must carry a digest or say "absent" |
 | `src/readme-refusals.test.ts` | README refusal messages and exit codes checked against live behaviour |
 | `src/commands/doctor.test.ts` | Doctor command orchestration tests |
 | `src/commands/key.test.ts` | Key command safety and refusal tests |
@@ -126,8 +126,28 @@ Structure coverage: every regular file under `src/` and `bin/` must have an exac
 ## The uninstall drill
 
 - The uninstall drill — issue #5's dev-box acceptance — is mechanised in `src/main.test.ts`: it installs the CLI into a fake global prefix, logs in against a local router stack, runs one session, uninstalls, and asserts that Claude Code's own `~/.claude/settings.json` is byte-identical before and after and that plain `claude` still starts afterwards. The baseline checksum is taken BEFORE the install and compared after the login, the session and the uninstall, and the session's own output is checked for key fragments. The drill's children are awaited, never spawned synchronously: the router stack that answers them lives in the test process, and a synchronous spawn would block its event loop.
-- The dev-box run itself stays human — the published package is still issue #7, and the team's own router is not in the checkout. The procedure is the README's "The uninstall drill" section, which now also carries a local-router-stack variant, so the run needs neither the published package nor the team's router; the results belong on the issue that tracks them.
-- The drill WAS run on a dev box (2026-11-04, by the dz-agent lane), twice, as the README says — a cold Claude Code home and a warm one differ. Seeded run (Node 24.13.0, npm 11.6.2, Claude Code 2.1.306, the packed tarball installed with `npm i -g` into a scratch prefix, a local router stack on 127.0.0.1, a scratch HOME whose `~/.claude/settings.json` held `{"model":"opus"}`): pass 1 changed the checksum — Claude Code's own first-session model-alias rewrite, `{"model": "opus"}` → `"model": "opus[1m]"` — and pass 2, the same HOME warmed up, matched its baseline exactly (`b088a8c086d859e1d7b6acf281928b3adba26d82c8c86328a35c0d80a936c9cd` before the install and after the login, the session and the uninstall). The README's own recipe, run verbatim (Node 24.22.2, npm 11.19.1, Bun 1.4.4, Claude Code 2.1.306, the local stack the README now carries, a fresh HOME with no `~/.claude/settings.json` at all): both passes matched — absent before and after every step. Both runs passed the whole lifecycle — the login, a session (the router saw the router key as its only credential), the uninstall (`claudes` gone from PATH, the config directory gone) and plain `claude --version` (2.1.306, exit 0) — and no fragment of the key reached any output file. The fake `claude` in `src/main.test.ts` cannot show any of this; only the real binary can. The results belong on issue #5, and the README's "The uninstall drill" section now carries the local-router-stack variant the verbatim run followed, so a teammate can run the same drill without the team's router or the published package.
+- The dev-box run itself stays human — the published package is still issue #7, and the team's own router is not in the checkout. The procedure is the README's "The uninstall drill" section, which now also carries a local-router-stack variant and a "What to paste on the issue" block, so the run needs neither the published package nor the team's router; the results belong on the issue that tracks them.
+- The record below is that result, kept in the repository so it is reviewable: the drill's seven results, the digests and the versions they were taken with. `src/readme.test.ts` guards it step by step, so a record that drops a result fails the gate instead of quietly going stale.
+
+### The recorded dev-box run
+
+Run for real on a dev box, against the real Claude Code binary, the tarball this repository builds (`bun run build` → `npm pack` → `npm i -g` into a scratch prefix), and the README's local router stack on 127.0.0.1. The HOME was a scratch directory, so the run could not touch the box's own `~/.claude`. Versions: Linux x86_64, Node v24.22.1, npm 11.19.1, Bun 1.4.4, Claude Code 2.1.306 (2026-11-04, the dz-agent lane).
+
+| Step | Result |
+|---|---|
+| 1. baseline | `~/.claude/settings.json` — absent on a fresh HOME; `1c4e6085b06883f78f3705682ec2c2181ad6a09e90c463dca4934c00b86c4afe` on a HOME that already held Claude Code's own `{"model":"opus"}` |
+| 2. install | `claudes --version` → exit 0, `0.1.0` — the packed tarball, whose contents are `dist/claudes.js`, `package.json`, `README.md` and `LICENSE` |
+| 3. login | exit 0 — `logged in to http://127.0.0.1:<port> (router version 1.4.2)`; the config landed 0600 in a 0700 directory |
+| 4. session | `claudes -p "hello"` → exit 0, `pong`; the stack logged `POST /v1/messages credential=present` — the router key travelled, and no fragment of it reached any output file |
+| 5. uninstall | `claudes` gone from PATH, the config directory gone |
+| 6. checksum | absent before the install and absent after the uninstall on the fresh HOME — MATCH · the warmed HOME: `1c4e6085…` → `b088a8c086d859e1d7b6acf281928b3adba26d82c8c86328a35c0d80a936c9cd` on its first pass, and that same digest before and after the second pass — MATCH |
+| 7. plain claude | `claude --version` → exit 0, `2.1.306 (Claude Code)` |
+
+The warmed HOME is where the one difference that is Claude Code's, not `claudes`', shows up: its first session rewrites the model alias (`"model": "opus"` → `"model": "opus[1m]"`), so that pass's checksum differs — and the second pass on the same, warmed HOME matches its baseline exactly, as the README says. An earlier run of the same recipe (Node 24.13.0, npm 11.6.2, Claude Code 2.1.306) produced the same warmed-pass digest.
+
+The stack's own log of the lifecycle is the wiring's evidence: `GET /healthz credential=none` (the pre-launch check), `GET /v1/models credential=present` (the login), `POST /v1/messages credential=present` (the session). The credential is never printed itself, and no fragment of the key reached any output file.
+
+The fake `claude` in `src/main.test.ts` cannot show any of this; only the real binary can. The results belong on [issue #5](https://github.com/developerz-ai/claudes/issues/5): the README's "What to paste on the issue" block is what a maintainer posts there. That post, and a teammate's own walkthrough of the README end to end against the local stack, are the issue's acceptance steps — neither is a thing this lane can do, so neither is claimed here.
 
 ## Key safety (non-negotiable)
 
