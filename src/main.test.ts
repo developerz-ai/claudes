@@ -229,6 +229,12 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
  * taken BEFORE the install, so a login or a session that rewrote the file
  * would fail the drill instead of hiding behind a later baseline.
  *
+ * The drill's PATH is drill-local — the fake `claude`, the installed shim
+ * and a runtime dir whose only entry is `node` (the test runner itself, which
+ * executes the fake's plain CommonJS the same way node does) — so a `claudes`
+ * already on the developer's own PATH cannot answer for the uninstalled
+ * command: the ENOENT after the uninstall is this drill's own proof.
+ *
  * What the drill cannot stand in for is the dev box: the published package
  * (`npm i -g @developerz.ai/claudes`, blocked on issue #7), the real Claude
  * Code binary and the team's router. That part stays a human drill — the
@@ -524,12 +530,27 @@ async function runCli(
   return { status: outcome.status, stdout, stderr, errorCode: outcome.errorCode };
 }
 
+/**
+ * The drill's PATH must be drill-local: a segment from outside the drill's
+ * own tree — yesterday's inherited `${process.env.PATH}` — could hold a
+ * globally installed `claudes`, which would answer for the uninstalled
+ * command and turn the drill's ENOENT proof into a false pass.
+ */
+function assertDrillLocalPath(envPath: string, rootDir: string): void {
+  for (const dir of envPath.split(":")) {
+    if (!dir.startsWith(`${rootDir}/`)) {
+      throw new Error(`the drill PATH must be drill-local; it leaked ${dir}`);
+    }
+  }
+}
+
 describe("the uninstall drill", () => {
   let stack: RouterStack;
   let root: string;
   let home: string;
   let xdg: string;
   let binDir: string;
+  let runtimeDir: string;
   let prefix: string;
   let prefixBin: string;
   let shim: string;
@@ -564,15 +585,26 @@ describe("the uninstall drill", () => {
     writeFileSync(claudeSettings, '{"model":"opus"}\n', "utf8");
     writeFileSync(join(binDir, "claude"), FAKE_CLAUDE, "utf8");
     chmodSync(join(binDir, "claude"), 0o755);
+    // The fake claude's `#!/usr/bin/env node` needs a `node` on PATH. The
+    // drill must not borrow the ambient PATH for it — an installed `claudes`
+    // there would answer for the uninstalled command below — so it exposes
+    // exactly one: the test runner itself, which executes the fake's plain
+    // CommonJS the same way node does.
+    runtimeDir = join(root, "runtime");
+    mkdirSync(runtimeDir, { recursive: true });
+    symlinkSync(process.execPath, join(runtimeDir, "node"));
+    const drillPath = `${binDir}:${prefixBin}:${runtimeDir}`;
     drillEnv = {
-      // The fake claude first, then the installed claudes, then the real PATH
-      // so the fake's own `#!/usr/bin/env node` still resolves.
-      PATH: `${binDir}:${prefixBin}:${process.env.PATH ?? ""}`,
+      // Drill-local PATH only: the fake claude, then the installed claudes,
+      // then the interpreter dir. Nothing ambient can answer for `claudes`
+      // or `claude`, so the ENOENT below is the uninstall's own proof.
+      PATH: drillPath,
       HOME: home,
       XDG_CONFIG_HOME: xdg,
       TERM: "dumb",
       FAKE_CLAUDE_OUT: sessionRecord,
     };
+    assertDrillLocalPath(drillPath, root);
   });
 
   afterEach(() => {
@@ -684,11 +716,14 @@ describe("the uninstall drill", () => {
 
     // --- plain claude still starts after the uninstall.
     const plain = await runCli(join(binDir, "claude"), ["--version"], {
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      // Drill-local PATH, post-uninstall: no prefix bin (uninstalled), the
+      // fake claude and the interpreter dir — nothing ambient.
+      PATH: `${binDir}:${runtimeDir}`,
       HOME: home,
       TERM: "dumb",
       FAKE_CLAUDE_OUT: plainRecord,
     });
+    assertDrillLocalPath(`${binDir}:${runtimeDir}`, root);
     expect(plain.status).toBe(0);
     expect(plain.stdout).toContain("2.1.300");
     const plainSeen = readFakeRecord(plainRecord);
