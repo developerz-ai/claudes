@@ -394,6 +394,115 @@ What the drill proves:
 - The session went to your router: `claudes doctor` proves the wiring, and the
   session's own traffic is the router's.
 
+A recorded run of both passes — the real Claude Code, the packed tarball, a
+local stack, and equal checksums on the second pass — is in the repository's
+[`CLAUDE.md`](CLAUDE.md).
+
+### The same drill against a local router stack
+
+The drill above needs two things a newcomer does not have: the published
+package ([#7](https://github.com/developerz-ai/claudes/issues/7)) and the
+team's router. Neither is needed to run the whole drill. A local stack
+answers the endpoints `claudes` itself talks to, and the package can be
+installed from the tarball this repository builds.
+
+Save this as `router.mjs`:
+
+```js
+// A local stand-in for the team's router: just enough of it for the drill —
+// the health probe, the model list and one assistant turn.
+import { createServer } from "node:http";
+
+const MODELS = ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"];
+
+const server = createServer((req, res) => {
+  const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+  const credential = req.headers["x-api-key"] ?? req.headers.authorization ?? "";
+  console.log(`${req.method} ${path}`);
+  if (path === "/healthz") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ version: "1.4.2" }));
+    return;
+  }
+  if (path === "/v1/models") {
+    res.writeHead(credential === "" ? 401 : 200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ data: MODELS.map((id) => ({ id })) }));
+    return;
+  }
+  if (path === "/v1/messages") {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const events = [
+      [
+        "message_start",
+        {
+          type: "message_start",
+          message: {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            model: MODELS[1],
+            content: [],
+            stop_reason: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        },
+      ],
+      [
+        "content_block_start",
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      ],
+      [
+        "content_block_delta",
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "pong" } },
+      ],
+      ["content_block_stop", { type: "content_block_stop", index: 0 }],
+      [
+        "message_delta",
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+      ],
+      ["message_stop", { type: "message_stop" }],
+    ];
+    for (const [event, data] of events) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+    res.end();
+    return;
+  }
+  res.writeHead(404);
+  res.end("{}");
+});
+
+server.listen(0, "127.0.0.1", () => {
+  console.log(`router: http://127.0.0.1:${server.address().port}`);
+});
+```
+
+Run it with `node router.mjs`. It prints the URL it listens on and one line
+per request, so you can watch the session's traffic arrive.
+
+Then run the same seven steps, with two changes: install the tarball this
+repository builds instead of the published package, and log in against the
+stack's own URL:
+
+```sh
+# 2. install: the published package is not on npm yet, so install the tarball
+#    this repository builds (the file name carries package.json's version)
+bun run build
+npm pack
+npm i -g ./developerz.ai-claudes-0.1.0.tgz
+
+# 3. log in against the local stack; paste any key of the router's shape at
+#    the prompt — `mar_live_` followed by 32 characters. The local stack does
+#    not check it.
+claudes login --url http://127.0.0.1:<the port the stack printed>
+```
+
+Steps 1, 4, 5, 6 and 7 are the ones above, unchanged. One detail: on a
+machine where Claude Code has never run, `~/.claude/settings.json` may not
+exist yet — take the baseline as "absent", and after the drill the file must
+either still be absent or hold only Claude Code's own first-session change
+(the note above).
+
 The same drill runs as an automated check in this repository's test suite,
 against a local router stub and a fake `claude` instead of your router and
 your Claude Code: it proves the mechanics — the config lands, the key travels
@@ -401,9 +510,8 @@ through `claudes key`, the checksum of Claude Code's own settings file is
 taken before the install and compared after the login, the session and the
 uninstall, the session's own output carries no fragment of the key, and the
 uninstall removes what it claims to. What it cannot prove is your machine:
-the real Claude Code binary, your own router and the published package
-([#7](https://github.com/developerz-ai/claudes/issues/7)) are outside the
-checkout.
+the real Claude Code binary is not in the checkout — the recipe above runs
+the same drill with the real binary, against a local stack.
 
 ## Platforms
 

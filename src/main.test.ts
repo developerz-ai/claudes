@@ -232,14 +232,19 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
  * What the drill cannot stand in for is the dev box: the published package
  * (`npm i -g @developerz.ai/claudes`, blocked on issue #7), the real Claude
  * Code binary and the team's router. That part stays a human drill — the
- * README's "The uninstall drill" section spells it out. A real run on
- * 2026-11-03 (Claude Code 2.1.306, the packed tarball installed with
- * `npm i -g`, a local router stack) showed what the fake `claude` cannot: on
- * a HOME where Claude Code has never run a session, its first session
- * rewrites the model alias in `~/.claude/settings.json` (`"model": "opus"` →
- * `"model": "opus[1m]"`). Plain `claude` does the same with no `claudes`
- * involved, and never again after that — so the byte-identity assertion
- * below is about `claudes`' own writes, and the README says so.
+ * README's "The uninstall drill" section spells it out, and now also carries
+ * a local-router-stack variant a teammate can follow without the team's
+ * router. A real run on 2026-11-03 (Claude Code 2.1.306, the packed tarball
+ * installed with `npm i -g`, a local router stack) showed what the fake
+ * `claude` cannot: on a HOME where Claude Code has never run a session, its
+ * first session rewrites the model alias in `~/.claude/settings.json`
+ * (`"model": "opus"` → `"model": "opus[1m]"`). Plain `claude` does the same
+ * with no `claudes` involved, and never again after that — so the
+ * byte-identity assertion below is about `claudes`' own writes, and the
+ * README says so. The repeat on 2026-11-04 ran the drill twice on the same
+ * HOME: the first pass changed the checksum the way above describes, the
+ * second (warmed-up) pass matched its baseline exactly, and plain
+ * `claude --version` answered 2.1.306 after the uninstall.
  */
 
 /** One request the drill's router stack saw: the method, the path, the credential hashes. */
