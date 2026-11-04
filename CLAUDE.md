@@ -131,21 +131,21 @@ Structure coverage: every regular file under `src/` and `bin/` must have an exac
 
 ### The recorded dev-box run
 
-Run for real on a dev box, against the real Claude Code binary, the tarball this repository builds (`bun run build` → `npm pack` → `npm i -g` into a scratch prefix), and the README's local router stack on 127.0.0.1. The HOME was a scratch directory, so the run could not touch the box's own `~/.claude`. Versions: Linux x86_64, Node v24.22.1, npm 11.19.1, Bun 1.4.4, Claude Code 2.1.306 (2026-11-04, the dz-agent lane).
+Run for real on a dev box, against the real Claude Code binary, the tarball this repository builds (`bun run build` → `npm pack` → `npm i -g` into a scratch prefix), and the README's local router stack on 127.0.0.1 — the stack that compares every request's credential against the drill key and refuses anything else with a 401. The HOME was a scratch directory, so the run could not touch the box's own `~/.claude`. Versions: Linux x86_64, Node v24.22.1, npm 11.19.1, Bun 1.4.4, Claude Code 2.1.306 (2026-11-04, the dz-agent lane).
 
 | Step | Result |
 |---|---|
 | 1. baseline | `~/.claude/settings.json` — absent on a fresh HOME; `1c4e6085b06883f78f3705682ec2c2181ad6a09e90c463dca4934c00b86c4afe` on a HOME that already held Claude Code's own `{"model":"opus"}` |
 | 2. install | `claudes --version` → exit 0, `0.1.0` — the packed tarball, whose contents are `dist/claudes.js`, `package.json`, `README.md` and `LICENSE` |
 | 3. login | exit 0 — `logged in to http://127.0.0.1:<port> (router version 1.4.2)`; the config landed 0600 in a 0700 directory |
-| 4. session | `claudes -p "hello"` → exit 0, `pong`; the stack logged `POST /v1/messages credential=present` — the router key travelled, and no fragment of it reached any output file |
+| 4. session | `claudes -p "hello"` → exit 0, `pong`; the stack logged `POST /v1/messages credential=match` — the credential was compared against the drill key and matched, and no fragment of the key reached any output file |
 | 5. uninstall | `claudes` gone from PATH, the config directory gone |
-| 6. checksum | absent before the install and absent after the uninstall on the fresh HOME — MATCH · the warmed HOME: `1c4e6085…` → `b088a8c086d859e1d7b6acf281928b3adba26d82c8c86328a35c0d80a936c9cd` on its first pass, and that same digest before and after the second pass — MATCH |
+| 6. checksum | absent before the install and absent after the uninstall on the fresh HOME — MATCH · the warmed HOME: `1c4e6085b06883f78f3705682ec2c2181ad6a09e90c463dca4934c00b86c4afe` before and after both warmed passes — MATCH |
 | 7. plain claude | `claude --version` → exit 0, `2.1.306 (Claude Code)` |
 
-The warmed HOME is where the one difference that is Claude Code's, not `claudes`', shows up: its first session rewrites the model alias (`"model": "opus"` → `"model": "opus[1m]"`), so that pass's checksum differs — and the second pass on the same, warmed HOME matches its baseline exactly, as the README says. An earlier run of the same recipe (Node 24.13.0, npm 11.6.2, Claude Code 2.1.306) produced the same warmed-pass digest.
+The warmed HOME is where the one difference that is Claude Code's, not `claudes`', CAN show up: on an earlier run of the same recipe (Node 24.13.0, npm 11.6.2, Claude Code 2.1.306), its first session on a warmed HOME rewrote the model alias (`"model": "opus"` → `"model": "opus[1m]"`), so that pass's checksum differed — `b088a8c086d859e1d7b6acf281928b3adba26d82c8c86328a35c0d80a936c9cd` — and the second pass on the same, warmed HOME matched its baseline exactly. This run's warmed HOME came back byte-identical on both passes instead. Either way the comparison is about `claudes`' own writes, and the README says so.
 
-The stack's own log of the lifecycle is the wiring's evidence: `GET /healthz credential=none` (the pre-launch check), `GET /v1/models credential=present` (the login), `POST /v1/messages credential=present` (the session). The credential is never printed itself, and no fragment of the key reached any output file.
+The stack's own log of the lifecycle is the wiring's evidence: `GET /healthz credential=none` (the pre-launch check), `GET /v1/models credential=match` (the login), `HEAD /api/hello credential=none` and `POST /v1/messages credential=match` (the session), one such lifecycle per pass. `match` is an equality verdict — the stack compares each request's credential with the drill key and refuses anything else with a 401 — so the log proves the configured key travelled, not merely that some credential did. The credential is never printed itself, and no fragment of the key reached any output file (checked: no 8-character window of the drill key's body appears in any log).
 
 The fake `claude` in `src/main.test.ts` cannot show any of this; only the real binary can. The results belong on [issue #5](https://github.com/developerz-ai/claudes/issues/5): the README's "What to paste on the issue" block is what a maintainer posts there. That post, and a teammate's own walkthrough of the README end to end against the local stack, are the issue's acceptance steps — neither is a thing this lane can do, so neither is claimed here.
 

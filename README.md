@@ -426,28 +426,64 @@ Save this as `router.mjs`:
 
 ```js
 // A local stand-in for the team's router: just enough of it for the drill —
-// the health probe, the model list and one assistant turn.
+// the health probe, the model list and one assistant turn. It expects the
+// drill's own key in the ROUTER_KEY environment variable and compares every
+// credential a request carries against it: the verdict goes to the log, the
+// value never does, and a request without the right key is refused.
 import { createServer } from "node:http";
 
 const MODELS = ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"];
 
+const EXPECTED = process.env.ROUTER_KEY ?? "";
+if (EXPECTED === "") {
+  console.log("router: set ROUTER_KEY to the drill's key before starting the stack");
+  process.exit(1);
+}
+
+// The credential one request carried: the x-api-key value, a Bearer body, or
+// "" for none — the shapes the router key legitimately travels in.
+function credentialOf(req) {
+  const apiKey = req.headers["x-api-key"];
+  if (typeof apiKey === "string" && apiKey !== "") {
+    return apiKey;
+  }
+  const auth = req.headers.authorization;
+  if (typeof auth === "string" && auth !== "") {
+    return auth.startsWith("Bearer ") ? auth.slice(7) : auth;
+  }
+  return "";
+}
+
 const server = createServer((req, res) => {
   const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
-  const credential = req.headers["x-api-key"] ?? req.headers.authorization ?? "";
-  // "present", never the credential itself: the drill's evidence that the
-  // request carried the router key, with no key material in the log.
-  console.log(`${req.method} ${path} credential=${credential === "" ? "none" : "present"}`);
+  const sent = credentialOf(req);
+  // none / match / mismatch: the comparison is the drill's evidence that the
+  // configured key travelled, and no key material reaches the log.
+  const state = sent === "" ? "none" : sent === EXPECTED ? "match" : "mismatch";
+  console.log(`${req.method} ${path} credential=${state}`);
   if (path === "/healthz") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ version: "1.4.2" }));
     return;
   }
+  const refuse = () => {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { type: "authentication_error" } }));
+  };
   if (path === "/v1/models") {
-    res.writeHead(credential === "" ? 401 : 200, { "content-type": "application/json" });
+    if (state !== "match") {
+      refuse();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ data: MODELS.map((id) => ({ id })) }));
     return;
   }
   if (path === "/v1/messages") {
+    if (state !== "match") {
+      refuse();
+      return;
+    }
     res.writeHead(200, { "content-type": "text/event-stream" });
     const events = [
       [
@@ -495,10 +531,21 @@ server.listen(0, "127.0.0.1", () => {
 });
 ```
 
-Run it with `node router.mjs`. It prints the URL it listens on and one line
-per request — the method, the path, and whether the request carried a
-credential — so you can watch the session's traffic arrive and see that the
-router key travelled with it. The credential itself is never printed.
+Start it with the drill's key in its environment, so it can compare — the key
+is the same throwaway one you paste at the login prompt below:
+
+```sh
+ROUTER_KEY='<a throwaway key in the router's shape: mar_live_ plus 32 characters>' node router.mjs
+```
+
+It prints the URL it listens on and one line per request — the method, the
+path, and the credential verdict: `none` when the request carried no
+credential, `match` when the credential is the drill key, `mismatch` when it
+is anything else. A `/v1/models` or `/v1/messages` request that does not
+carry the drill key is refused with a 401, so the drill cannot record a
+successful session on the wrong key: a session line reading
+`credential=match` is what proves the router key travelled. The credential
+itself is never printed.
 
 Then run the same seven steps, with two changes: install the tarball this
 repository builds instead of the published package, and log in against the
@@ -511,9 +558,9 @@ bun run build
 npm pack
 npm i -g ./developerz.ai-claudes-0.1.0.tgz
 
-# 3. login against the local stack; paste any key of the router's shape at
-#    the prompt — `mar_live_` followed by 32 characters. The local stack does
-#    not check it.
+# 3. login against the local stack; at the prompt paste the SAME throwaway
+#    key the stack was started with — the router's shape, `mar_live_` followed
+#    by 32 characters. The stack compares it and refuses any other key.
 claudes login --url http://127.0.0.1:<the port the stack printed>
 ```
 
@@ -525,7 +572,9 @@ either still be absent or hold only Claude Code's own first-session change
 
 This is the walkthrough to run when the published package and the team's router
 are out of reach. It ends in the same seven steps, and the seven lines are
-what goes on the issue.
+what goes on the issue; for step 4, the stack's
+`POST /v1/messages credential=match` line is the evidence that the configured
+router key travelled.
 
 The same drill runs as an automated check in this repository's test suite,
 against a local router stub and a fake `claude` instead of your router and

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { DOCTOR_FLAGS, type DoctorDeps, runDoctor } from "./commands/doctor";
 import { LOGIN_FLAGS, parseLoginArgs } from "./commands/login-args";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
@@ -8,12 +11,14 @@ import { HELP_FLAGS, HELP_SCOPE_FLAGS, HELP_TEXTS } from "./help";
 import { buildArgv } from "./launch/argv";
 import * as preflight from "./launch/preflight";
 import { UNSUPPORTED_FEATURES, type UnsupportedFeature } from "./launch/unsupported";
+import { KEY } from "./test-support/fixtures";
 import {
   type RefusalRow,
   readmeKnownGapRows,
   readmeNetworkNotes,
   readmeRefusalRows,
 } from "./test-support/readme-table";
+import { assertNoKeyFragment } from "./test-support/redact";
 
 /**
  * The README and the CLI are one contract: dispatch() routes the first
@@ -713,4 +718,145 @@ describe("the uninstall drill record", () => {
       'the document has no "### No such record" section',
     );
   });
+});
+
+/**
+ * The README's local router stack — the recipe the drill's local-stack variant
+ * runs. The recipe is executed here, not merely quoted: its whole point is
+ * that a session line reading `credential=match` is evidence the configured
+ * key travelled, so the guard proves the comparison refuses everything else
+ * and that no key material reaches the recipe's log.
+ */
+describe("the README's local router stack", () => {
+  const STACK_MARKER = "Save this as `router.mjs`:";
+  const WRONG_KEY = "mar_live_WRONGKEY0123456789abcdefghijklmn";
+
+  /** The recipe: the ```js fence that follows the marker, verbatim. */
+  function stackSource(): string {
+    const at = readmeSource.indexOf(STACK_MARKER);
+    if (at === -1) {
+      throw new Error("the README no longer introduces the local stack");
+    }
+    const open = readmeSource.indexOf("```js\n", at);
+    if (open === -1) {
+      throw new Error("the local-stack recipe has no js fence");
+    }
+    const close = readmeSource.indexOf("\n```", open);
+    if (close === -1) {
+      throw new Error("the local-stack recipe fence is never closed");
+    }
+    return `${readmeSource.slice(open + "```js\n".length, close)}\n`;
+  }
+
+  /** The recipe on disk, in a scratch directory the test removes after. */
+  function writeStack(): string {
+    const dir = mkdtempSync(join(tmpdir(), "claudes-readme-stack-"));
+    const path = join(dir, "router.mjs");
+    writeFileSync(path, stackSource(), "utf8");
+    return path;
+  }
+
+  /** The recipe's own promise: no key material in anything it prints. */
+  function assertLogCarriesNoKey(text: string): void {
+    assertNoKeyFragment(text, KEY);
+    assertNoKeyFragment(text, WRONG_KEY);
+  }
+
+  test("refuses to start without the drill key in its environment", () => {
+    const path = writeStack();
+    try {
+      const res = spawnSync("node", [path], {
+        env: { PATH: process.env.PATH ?? "" },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(res.status).toBe(1);
+      expect(res.stdout).toContain("set ROUTER_KEY");
+      assertLogCarriesNoKey(`${res.stdout}${res.stderr}`);
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  });
+
+  test("answers only the drill key: none, match and mismatch in the log, 401 otherwise", async () => {
+    const path = writeStack();
+    const child = spawn("node", [path], {
+      env: { ROUTER_KEY: KEY, PATH: process.env.PATH ?? "" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let log = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      log += chunk;
+    });
+    const listening = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("the local stack never listened")), 10_000);
+      child.stdout?.on("data", (chunk: string) => {
+        log += chunk;
+        const at = log.indexOf("router: http://127.0.0.1:");
+        if (at !== -1) {
+          clearTimeout(timer);
+          const end = log.indexOf("\n", at);
+          resolve(log.slice(at, end === -1 ? undefined : end));
+        }
+      });
+      child.on("error", (err: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    try {
+      const base = (await listening).slice("router: ".length).trimEnd();
+      // The pre-launch health check: no credential, answered regardless.
+      const health = await fetch(`${base}/healthz`);
+      expect(health.status).toBe(200);
+      expect(((await health.json()) as { version: string }).version).toBe("1.4.2");
+      // The login's models request: the drill key as a Bearer token.
+      const login = await fetch(`${base}/v1/models`, {
+        headers: { authorization: `Bearer ${KEY}` },
+      });
+      expect(login.status).toBe(200);
+      expect(((await login.json()) as { data: unknown[] }).data).toHaveLength(3);
+      // A wrong credential is refused on /v1/models, not merely counted.
+      const wrongModels = await fetch(`${base}/v1/models`, {
+        headers: { "x-api-key": WRONG_KEY },
+      });
+      expect(wrongModels.status).toBe(401);
+      // So is no credential at all.
+      expect((await fetch(`${base}/v1/models`)).status).toBe(401);
+      // The session: the drill key as x-api-key gets the assistant turn.
+      const session = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 1, messages: [] }),
+      });
+      expect(session.status).toBe(200);
+      expect(await session.text()).toContain("pong");
+      // And a session under the wrong key is refused before any success.
+      const wrongSession = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${WRONG_KEY}` },
+        body: "{}",
+      });
+      expect(wrongSession.status).toBe(401);
+    } finally {
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
+        child.once("close", () => resolve());
+      });
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+    expect(log).toContain("GET /healthz credential=none");
+    expect(log).toContain("GET /v1/models credential=match");
+    expect(log).toContain("GET /v1/models credential=mismatch");
+    expect(log).toContain("GET /v1/models credential=none");
+    expect(log).toContain("POST /v1/messages credential=match");
+    expect(log).toContain("POST /v1/messages credential=mismatch");
+    assertLogCarriesNoKey(log);
+  }, 20_000);
 });
