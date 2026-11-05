@@ -134,6 +134,6 @@ Structure coverage: every regular file under `src/` and `bin/` must have an exac
 
 - `bun scripts/build.ts` is the ONLY build entry; the produced `dist/claudes.js` carries `#!/usr/bin/env node` and is `chmod 755`.
 - `bin/check` is the gate: bun-pin agreement (`bin/check-bun-versions`), biome, tsc on both configs, `bun test`, build, then shebang/version/exit-code smoke. A PR is proven when it exits 0.
-- CI pins bun `1.4.3`, and `.bun-version` carries that same pin; `.bun-version`, `ci.yml` and `release.yml` must agree — `bin/check-bun-versions` refuses drift among them. The committed `bun.lock` is v2 — bun < 1.4 cannot read it. Node is `>=22` per `engines.node`.
+- CI pins bun `1.4.4`, and `.bun-version` carries that same pin; `.bun-version`, `ci.yml` and `release.yml` must agree — `bin/check-bun-versions` refuses drift among them. The committed `bun.lock` is v2 — bun < 1.4 cannot read it. Node is `>=22` per `engines.node`.
 - A refused frozen install is that bun being older than the lockfile format, not a bad dependency: `bin/setup` prints `bun --version`, the `.bun-version` pin, `bun.lock`'s `lockfileVersion` and the CI-pinned bun version before it exits non-zero. Never edit `bun.lock` to make an install succeed.
 - npm release is OIDC trusted publishing only (`release.yml`) — no `NPM_TOKEN` anywhere. The release tag MUST equal `v` + `package.json` version, and the commit MUST be an ancestor of `origin/main`; pre-releases are refused.
