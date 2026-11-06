@@ -1,9 +1,0 @@
-dist/
-node_modules/
-.env
-.env.*
-*.pem
-*.key
-*.tgz
-.DS_Store
-!.env.example
