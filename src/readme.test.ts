@@ -1,30 +1,46 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { DOCTOR_FLAGS, type DoctorDeps, runDoctor } from "./commands/doctor";
 import { LOGIN_FLAGS, parseLoginArgs } from "./commands/login-args";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
-import { dispatch, VERSION_FLAGS } from "./dispatch";
+import { dispatch, HELP_SCOPES, type HelpScope, VERSION_FLAGS } from "./dispatch";
+import { HELP_FLAGS, HELP_SCOPE_FLAGS, HELP_TEXTS } from "./help";
 import { buildArgv } from "./launch/argv";
 import * as preflight from "./launch/preflight";
 import { UNSUPPORTED_FEATURES, type UnsupportedFeature } from "./launch/unsupported";
+import { KEY } from "./test-support/fixtures";
 import {
   type RefusalRow,
   readmeKnownGapRows,
   readmeNetworkNotes,
   readmeRefusalRows,
 } from "./test-support/readme-table";
+import { assertNoKeyFragment } from "./test-support/redact";
 
 /**
- * claudes has no --help output of its own: dispatch() routes the first
- * argument (login / doctor / key / --version) and passes everything else
- * through to claude. The assertions below therefore run against the parsers
- * themselves — dispatch(), parseLoginArgs() and runDoctor()'s argument loop —
- * which are the source of truth for what this CLI accepts.
+ * The README and the CLI are one contract: dispatch() routes the first
+ * argument (login / doctor / key / --version / --help) and passes everything
+ * else through to claude, so the assertions below run against the parsers and
+ * the help output themselves — dispatch(), parseLoginArgs(), runDoctor()'s
+ * argument loop and the texts in src/help.ts — which are the source of truth
+ * for what this CLI accepts.
  */
 
 const LOGIN_URL = "https://router.invalid";
 const readmeSource = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-const OWNED_FLAGS: readonly string[] = [...VERSION_FLAGS, ...LOGIN_FLAGS, ...DOCTOR_FLAGS];
+const brainSource = readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8");
+/**
+ * claudes' own flags: the ones the CLI claims, the ones the top-level help
+ * names, and the ones the commands own. The help inventory is part of it: the
+ * top-level help documents --help, --model and -p, so they are claudes' own
+ * spellings and the README has to document them.
+ */
+const OWNED_FLAGS: readonly string[] = [
+  ...new Set([...VERSION_FLAGS, ...HELP_FLAGS, ...LOGIN_FLAGS, ...DOCTOR_FLAGS]),
+];
 
 /** Undocumented owned spellings require a reason; remove exceptions once documented. */
 const UNDOCUMENTED_FLAGS: Readonly<Record<string, string>> = {};
@@ -32,7 +48,9 @@ const UNDOCUMENTED_FLAGS: Readonly<Record<string, string>> = {};
 /**
  * Flags that are Claude Code's own, not claudes': claudes rewrites their
  * values (--model) or passes them through untouched (-p). They are claude's
- * to define, so they are allowlisted here and asserted against nothing.
+ * to define, so they are allowlisted here; claudes' help output names them
+ * too, so they also carry a parser check — the rewrite and the pass-through
+ * are claudes' own behaviour.
  */
 const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "-p"]);
 
@@ -70,26 +88,26 @@ function refusalRowFor(flag: string): RefusalRow & { readonly message: string } 
 
 /**
  * Flags of the other commands in the README's shell snippets: npm's `-g` and
- * rm's `-rf` in the install/uninstall commands. Neither claudes' nor
- * claude's, so they are asserted against nothing.
+ * rm's `-rf` in the install/uninstall commands, and shasum's `-a` in the
+ * uninstall drill's checksum command. Neither claudes' nor claude's, so they
+ * are asserted against nothing.
  */
-const SHELL_FLAGS: ReadonlySet<string> = new Set(["-g", "-rf"]);
+const SHELL_FLAGS: ReadonlySet<string> = new Set(["-g", "-rf", "-a"]);
 
 /**
- * Every flag token the README mentions, long or short, deduped. A token
- * counts as a flag only after whitespace, a quote, a backtick, a bracket or
- * a line start, so hyphenated prose ("known-benign", "claude-opus-5-5") and
- * the bare `--` terminator are not mistaken for flags.
+ * Every flag token a text mentions, long or short, deduped. A token counts
+ * as a flag only after whitespace, a quote, a backtick, a bracket or a line
+ * start, so hyphenated prose ("known-benign", "claude-opus-5-5") and the bare
+ * `--` terminator are not mistaken for flags. The README and the help outputs
+ * are read the same way, so one reader serves both.
  */
-function readmeFlags(source = readmeSource): Set<string> {
+function flagsIn(source: string): Set<string> {
   return new Set(source.match(/(?<=[\s`"([]|^)--?[A-Za-z][A-Za-z0-9-]*/gm) ?? []);
 }
 
 /** Refusal examples are not positive documentation of accepted options. */
 function positiveReadmeFlags(source: string): Set<string> {
-  return readmeFlags(
-    source.replace(/^## Refusals and exit codes\r?\n.*?(?=^## |$(?![\s\S]))/gms, ""),
-  );
+  return flagsIn(source.replace(/^## Refusals and exit codes\r?\n.*?(?=^## |$(?![\s\S]))/gms, ""));
 }
 
 /**
@@ -138,6 +156,24 @@ const CLAUDES_FLAG_CHECKS: Readonly<Record<string, () => Promise<void>>> = {
   },
   "-v": async () => {
     expect(dispatch(["-v"]).kind).toBe("version");
+  },
+  "--help": async () => {
+    expect(dispatch(["--help"]).kind).toBe("help");
+  },
+  "--model": async () => {
+    // claudes owns the rewrite: Claude Code's alias becomes the bare tier
+    // name the router serves.
+    expect(buildArgv(["--model", "claude-opus"], "/tmp/settings.json")).toEqual({
+      ok: true,
+      argv: ["--settings", "/tmp/settings.json", "--model", "opus"],
+    });
+  },
+  "-p": async () => {
+    // Passed through untouched: the prompt is claude's to read.
+    expect(buildArgv(["-p", "hi"], "/tmp/settings.json")).toEqual({
+      ok: true,
+      argv: ["--settings", "/tmp/settings.json", "-p", "hi"],
+    });
   },
   "--url": async () => {
     expect(parseLoginArgs(["--url", LOGIN_URL]).ok).toBe(true);
@@ -226,7 +262,7 @@ describe("README flags", () => {
     const source = readmeSource
       .replaceAll("--opus", "omitted")
       .replace("## Refusals and exit codes", "## Refusals and exit codes\n\n`--opus` is refused.");
-    expect(readmeFlags(source).has("--opus")).toBe(true);
+    expect(flagsIn(source).has("--opus")).toBe(true);
     expect(() => assertOwnedFlagCoverage(source)).toThrow("--opus: missing README documentation");
   });
 
@@ -248,7 +284,7 @@ describe("README flags", () => {
   });
 
   test("extraction excludes prose and bare terminators but retains short aliases", () => {
-    expect([...readmeFlags("known-benign claude-opus-5-5 -- `-v` [--live] --model -p")]).toEqual([
+    expect([...flagsIn("known-benign claude-opus-5-5 -- `-v` [--live] --model -p")]).toEqual([
       "-v",
       "--live",
       "--model",
@@ -256,7 +292,7 @@ describe("README flags", () => {
     ]);
   });
   test("every flag the README mentions is owned by claudes or by claude", () => {
-    const flags = readmeFlags();
+    const flags = flagsIn(readmeSource);
     expect(flags.size).toBeGreaterThan(0); // the extraction itself still works
     const unknown = [...flags]
       .filter(
@@ -303,12 +339,90 @@ describe("README flags", () => {
 
   test("the parsers still refuse flags nobody documents", async () => {
     // dispatch passes anything unknown through to claude — claudes itself
-    // only recognises the reserved words and --version.
+    // only recognises the reserved words, --version and --help.
     expect(dispatch(["--bogus"]).kind).toBe("passthrough");
     expect(parseLoginArgs(["--url", LOGIN_URL, "--bogus"]).ok).toBe(false);
     const { deps, err } = noConfigDoctorDeps();
     expect(await runDoctor(["--bogus"], deps)).toBe(64);
     expect(err.join("")).toContain("unknown argument");
+  });
+});
+
+/**
+ * The README and the help output are one contract: every flag the README
+ * documents must be in the help output that applies to it, and every flag the
+ * help output names must be documented in the README. The refusals table and
+ * the shell flags of the install snippets are outside it — they are refusals
+ * and npm's / rm's options, not options claudes accepts.
+ */
+function assertHelpMatchesReadme(
+  source: string,
+  texts: Readonly<Record<HelpScope, string>> = HELP_TEXTS,
+): void {
+  const documented = positiveReadmeFlags(source);
+  const problems: string[] = [];
+  for (const flag of documented) {
+    if (REFUSED_FLAGS.has(flag) || SHELL_FLAGS.has(flag)) {
+      continue;
+    }
+    // The applicable help output is the one whose scope owns the flag.
+    const scopes = HELP_SCOPES.filter((scope) => HELP_SCOPE_FLAGS[scope].includes(flag));
+    if (scopes.length === 0) {
+      problems.push(`${flag}: documented in the README but no help output covers it`);
+      continue;
+    }
+    for (const scope of scopes) {
+      if (!flagsIn(texts[scope]).has(flag)) {
+        problems.push(`${flag}: missing from the ${scope} --help output`);
+      }
+    }
+  }
+  for (const scope of HELP_SCOPES) {
+    for (const flag of flagsIn(texts[scope])) {
+      if (!documented.has(flag)) {
+        problems.push(
+          `${flag}: named in the ${scope} --help output but not documented in the README`,
+        );
+      }
+    }
+  }
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+describe("README and help output contract", () => {
+  test("every documented flag is in the applicable help output, and every named flag is documented", () => {
+    assertHelpMatchesReadme(readmeSource);
+  });
+
+  test("rejects a README that drops a flag the help output names", () => {
+    for (const flag of ["--model", "-p", "--url", "--live"]) {
+      const source = readmeSource.replaceAll(flag, "omitted");
+      expect(() => assertHelpMatchesReadme(source)).toThrow(flag);
+    }
+  });
+
+  test("rejects a help output that drops a flag the README documents", () => {
+    const cases: readonly { readonly scope: HelpScope; readonly flag: string }[] = [
+      { scope: "top", flag: "--model" },
+      { scope: "login", flag: "--url" },
+      { scope: "doctor", flag: "--live" },
+    ];
+    for (const { scope, flag } of cases) {
+      const texts: Readonly<Record<HelpScope, string>> = {
+        ...HELP_TEXTS,
+        [scope]: HELP_TEXTS[scope].replaceAll(flag, "omitted"),
+      };
+      expect(() => assertHelpMatchesReadme(readmeSource, texts)).toThrow(flag);
+    }
+  });
+
+  test("the refusals table and the shell flags are outside the contract", () => {
+    // --settings and --key are refusals, -g and -rf belong to npm and rm:
+    // no help output may be asked to document them.
+    for (const flag of [...REFUSED_FLAGS, ...SHELL_FLAGS]) {
+      const named = HELP_SCOPES.some((scope) => flagsIn(HELP_TEXTS[scope]).has(flag));
+      expect(named).toBe(false);
+    }
   });
 });
 
@@ -435,4 +549,314 @@ describe("README network-note guard", () => {
       }),
     ).toThrow();
   });
+});
+
+/**
+ * The uninstall drill's record — the acceptance evidence issue #5 asks for.
+ *
+ * WHY: the drill proves seven things, and a record that quietly drops one of
+ * them is a record that claims more than it shows. Three documents carry the
+ * evidence — the README's drill procedure, the README's block of what to paste
+ * on the issue, and the brain's record of the run — so all three are checked
+ * here: the procedure and the paste block must name every step, and the
+ * record must carry a result per step, with a digest (or the word "absent")
+ * in the two checksum-bearing rows.
+ *
+ * The guard is proved able to fail: every mutation below must be rejected, so
+ * a record that lost a step cannot pass as a complete one.
+ */
+
+/** The seven drill results, in the order the drill takes them. */
+const DRILL_STEPS: readonly string[] = [
+  "1. baseline",
+  "2. install",
+  "3. login",
+  "4. session",
+  "5. uninstall",
+  "6. checksum",
+  "7. plain claude",
+];
+
+/** The steps whose result is a checksum of Claude Code's own settings file. */
+const CHECKSUM_STEPS: readonly string[] = ["1. baseline", "6. checksum"];
+
+/** The heading of the record in the brain. */
+const RECORD_HEADING = "### The recorded dev-box run";
+
+/** The issue the drill's results are for; the record has to name it. */
+const DRILL_ISSUE_URL = "https://github.com/developerz-ai/claudes/issues/5";
+
+/**
+ * The text of a section, from its heading to the next heading of the same or
+ * a higher level. A heading that is not there is an error, not an empty
+ * section: a missing record must fail the guard, not pass it vacuously.
+ *
+ * The scan tracks fenced code blocks: a shell comment inside a fence looks
+ * like a heading but is not one, and the drill's steps live in a fence.
+ */
+function section(source: string, heading: string): string {
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start === -1) {
+    throw new Error(`the document has no "${heading}" section`);
+  }
+  const level = heading.match(/^#+/)?.[0].length ?? 0;
+  const body: string[] = [];
+  let inFence = false;
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      body.push(line);
+      continue;
+    }
+    if (!inFence) {
+      const match = /^(#{1,6})\s/.exec(line);
+      if (match !== null && (match[1]?.length ?? 0) <= level) break;
+    }
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+/** The result cell of the record's row for a step, or undefined when the row is missing. */
+function recordRow(record: string, step: string): string | undefined {
+  for (const line of record.split(/\r?\n/)) {
+    const match = /^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$/.exec(line);
+    if (match?.[1] === step) {
+      return match[2] ?? "";
+    }
+  }
+  return undefined;
+}
+
+/** Every drill step a text names — the steps it forgot are the problem. */
+function assertDrillSteps(text: string, what: string): void {
+  const missing = DRILL_STEPS.filter((step) => !text.includes(step));
+  if (missing.length > 0) {
+    throw new Error(`${what} does not name the drill steps: ${missing.join(", ")}`);
+  }
+}
+
+/** The record's own contract: a result per step, and a checksum where one belongs. */
+function assertDrillRecord(record: string): void {
+  const problems: string[] = [];
+  for (const step of DRILL_STEPS) {
+    const result = recordRow(record, step);
+    if (result === undefined) {
+      problems.push(`${step}: no row in the record`);
+      continue;
+    }
+    if (result.trim() === "") {
+      problems.push(`${step}: the row carries no result`);
+      continue;
+    }
+    if (
+      CHECKSUM_STEPS.includes(step) &&
+      !/[0-9a-f]{64}/.test(result) &&
+      !/\babsent\b/.test(result)
+    ) {
+      problems.push(`${step}: the row carries no checksum and does not say "absent"`);
+    }
+  }
+  if (!record.includes(DRILL_ISSUE_URL)) {
+    problems.push(`the record does not name the issue it feeds: ${DRILL_ISSUE_URL}`);
+  }
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+}
+
+describe("the uninstall drill record", () => {
+  test("the README's drill procedure and its paste block name all seven steps", () => {
+    assertDrillSteps(section(readmeSource, "## The uninstall drill"), "the README's drill section");
+    assertDrillSteps(
+      section(readmeSource, "### What to paste on the issue"),
+      "the README's paste block",
+    );
+  });
+
+  test("the brain's record carries every result, and the checksums with it", () => {
+    assertDrillRecord(section(brainSource, RECORD_HEADING));
+  });
+
+  test("rejects a record that drops a step", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const dropped = record.replace(/^\| 4\. session \|[^\n]*\n/m, "");
+    expect(() => assertDrillRecord(dropped)).toThrow("4. session: no row in the record");
+  });
+
+  test("rejects a record whose result is empty", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const emptied = record.replace(/^\| 2\. install \|[^\n]*$/m, "| 2. install |  |");
+    expect(() => assertDrillRecord(emptied)).toThrow("2. install: the row carries no result");
+  });
+
+  test("rejects a checksum row that carries no digest and does not say absent", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const blind = record.replace(/^\| 6\. checksum \|[^\n]*$/m, "| 6. checksum | unchanged |");
+    expect(() => assertDrillRecord(blind)).toThrow(
+      '6. checksum: the row carries no checksum and does not say "absent"',
+    );
+  });
+
+  test("rejects a record that does not name the issue it feeds", () => {
+    const record = section(brainSource, RECORD_HEADING);
+    const unlinked = record.replaceAll(DRILL_ISSUE_URL, "the issue");
+    expect(() => assertDrillRecord(unlinked)).toThrow(
+      "the record does not name the issue it feeds",
+    );
+  });
+
+  test("rejects a README whose drill steps drop one", () => {
+    const source = readmeSource.replaceAll("4. session", "4. a chat");
+    expect(() => assertDrillSteps(section(source, "## The uninstall drill"), "the drill")).toThrow(
+      "does not name the drill steps: 4. session",
+    );
+  });
+
+  test("rejects a missing record instead of passing it vacuously", () => {
+    expect(() => section(brainSource, "### No such record")).toThrow(
+      'the document has no "### No such record" section',
+    );
+  });
+});
+
+/**
+ * The README's local router stack — the recipe the drill's local-stack variant
+ * runs. The recipe is executed here, not merely quoted: its whole point is
+ * that a session line reading `credential=match` is evidence the configured
+ * key travelled, so the guard proves the comparison refuses everything else
+ * and that no key material reaches the recipe's log.
+ */
+describe("the README's local router stack", () => {
+  const STACK_MARKER = "Save this as `router.mjs`:";
+  const WRONG_KEY = "mar_live_WRONGKEY0123456789abcdefghijklmn";
+
+  /** The recipe: the ```js fence that follows the marker, verbatim. */
+  function stackSource(): string {
+    const at = readmeSource.indexOf(STACK_MARKER);
+    if (at === -1) {
+      throw new Error("the README no longer introduces the local stack");
+    }
+    const open = readmeSource.indexOf("```js\n", at);
+    if (open === -1) {
+      throw new Error("the local-stack recipe has no js fence");
+    }
+    const close = readmeSource.indexOf("\n```", open);
+    if (close === -1) {
+      throw new Error("the local-stack recipe fence is never closed");
+    }
+    return `${readmeSource.slice(open + "```js\n".length, close)}\n`;
+  }
+
+  /** The recipe on disk, in a scratch directory the test removes after. */
+  function writeStack(): string {
+    const dir = mkdtempSync(join(tmpdir(), "claudes-readme-stack-"));
+    const path = join(dir, "router.mjs");
+    writeFileSync(path, stackSource(), "utf8");
+    return path;
+  }
+
+  /** The recipe's own promise: no key material in anything it prints. */
+  function assertLogCarriesNoKey(text: string): void {
+    assertNoKeyFragment(text, KEY);
+    assertNoKeyFragment(text, WRONG_KEY);
+  }
+
+  test("refuses to start without the drill key in its environment", () => {
+    const path = writeStack();
+    try {
+      const res = spawnSync("node", [path], {
+        env: { PATH: process.env.PATH ?? "" },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(res.status).toBe(1);
+      expect(res.stdout).toContain("set ROUTER_KEY");
+      assertLogCarriesNoKey(`${res.stdout}${res.stderr}`);
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  });
+
+  test("answers only the drill key: none, match and mismatch in the log, 401 otherwise", async () => {
+    const path = writeStack();
+    const child = spawn("node", [path], {
+      env: { ROUTER_KEY: KEY, PATH: process.env.PATH ?? "" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let log = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      log += chunk;
+    });
+    const listening = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("the local stack never listened")), 10_000);
+      child.stdout?.on("data", (chunk: string) => {
+        log += chunk;
+        const at = log.indexOf("router: http://127.0.0.1:");
+        if (at !== -1) {
+          clearTimeout(timer);
+          const end = log.indexOf("\n", at);
+          resolve(log.slice(at, end === -1 ? undefined : end));
+        }
+      });
+      child.on("error", (err: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    try {
+      const base = (await listening).slice("router: ".length).trimEnd();
+      // The pre-launch health check: no credential, answered regardless.
+      const health = await fetch(`${base}/healthz`);
+      expect(health.status).toBe(200);
+      expect(((await health.json()) as { version: string }).version).toBe("1.4.2");
+      // The login's models request: the drill key as a Bearer token.
+      const login = await fetch(`${base}/v1/models`, {
+        headers: { authorization: `Bearer ${KEY}` },
+      });
+      expect(login.status).toBe(200);
+      expect(((await login.json()) as { data: unknown[] }).data).toHaveLength(3);
+      // A wrong credential is refused on /v1/models, not merely counted.
+      const wrongModels = await fetch(`${base}/v1/models`, {
+        headers: { "x-api-key": WRONG_KEY },
+      });
+      expect(wrongModels.status).toBe(401);
+      // So is no credential at all.
+      expect((await fetch(`${base}/v1/models`)).status).toBe(401);
+      // The session: the drill key as x-api-key gets the assistant turn.
+      const session = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 1, messages: [] }),
+      });
+      expect(session.status).toBe(200);
+      expect(await session.text()).toContain("pong");
+      // And a session under the wrong key is refused before any success.
+      const wrongSession = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${WRONG_KEY}` },
+        body: "{}",
+      });
+      expect(wrongSession.status).toBe(401);
+    } finally {
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
+        child.once("close", () => resolve());
+      });
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+    expect(log).toContain("GET /healthz credential=none");
+    expect(log).toContain("GET /v1/models credential=match");
+    expect(log).toContain("GET /v1/models credential=mismatch");
+    expect(log).toContain("GET /v1/models credential=none");
+    expect(log).toContain("POST /v1/messages credential=match");
+    expect(log).toContain("POST /v1/messages credential=mismatch");
+    assertLogCarriesNoKey(log);
+  }, 20_000);
 });
