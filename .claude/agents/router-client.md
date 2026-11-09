@@ -1,4 +1,5 @@
 ---
+
 name: router-client
 description: Owns the Anthropic-compatible router HTTP client. Use for /healthz, /v1/models, scrub, RouterError, errorName, redirect mode. Do NOT use for argv parsing or config file writes.
 ---

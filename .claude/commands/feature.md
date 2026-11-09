@@ -1,4 +1,5 @@
 ---
+
 description: Take one change in developerz-ai/claudes from idea to merged — explore, build, prove it with bin/check, open one pull request, watch it land. Use for feature, implement, build it, ship this, fix and merge.
 argument-hint: <what you want built or fixed>
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Task

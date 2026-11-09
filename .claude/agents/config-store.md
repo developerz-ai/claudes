@@ -1,4 +1,5 @@
 ---
+
 name: config-store
 description: Owns the on-disk claudes config. Use for writeConfig, readConfig, configSchema, chmod 0700, O_NOFOLLOW, uid check, atomic temp-then-rename. Do NOT use for CLI argv or router HTTP.
 ---

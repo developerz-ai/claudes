@@ -670,7 +670,7 @@ describe("the environment-variable contract", () => {
       envExampleSource,
     ],
     "a name renamed in the table": [
-      readmeSource.replace("| `SSL_CERT_DIR` |", "| `SSL_CERT_DIR_2` |"),
+      readmeSource.replace(/^\| `SSL_CERT_DIR`/m, "| `SSL_CERT_DIR_2`"),
       envExampleSource,
     ],
     "a name dropped from the template": [
@@ -688,6 +688,8 @@ describe("the environment-variable contract", () => {
   };
   for (const [label, [readme, example]] of Object.entries(mutations)) {
     test(`rejects ${label}`, () => {
+      // A mutation that silently no-ops would pass this test for the wrong reason.
+      expect(readme !== readmeSource || example !== envExampleSource).toBe(true);
       expect(() => assertEnvContract(readme, example)).toThrow();
     });
   }
