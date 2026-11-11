@@ -31,6 +31,9 @@ and haiku tiers (built-in defaults fill any gap), and saves the result to
 a 0600 file in a 0700 directory. Override the tier pins with `--opus`,
 `--sonnet` or `--haiku`.
 
+`claudes login --help` prints the login usage and exits 0; the flags it names
+are `--url`, `--opus`, `--sonnet` and `--haiku`.
+
 ## Daily use
 
 Type `claudes` wherever you would type `claude`; every argument passes
@@ -41,17 +44,24 @@ claudes                  # interactive session
 claudes -p "..."         # non-interactive print mode
 claudes --model opus     # or sonnet / haiku
 claudes --version        # or -v
+claudes --help           # what claudes itself accepts
 ```
 
 `--model` takes the tier names `opus|sonnet|haiku`; the longer spellings
 `claude-opus`, `claude-sonnet` and `claude-haiku` (with or without a `[1m]`
 suffix) are normalised to them.
 
-`claudes` itself owns only four first arguments: `login`, `doctor`, `key` and
-`--version` (`-v`). Everything else goes to `claude`. `claudes key` is the
-internal helper Claude Code calls to fetch the router key; at a terminal it
-refuses (exit 64). It takes no arguments of its own: any argument after it is
-refused (exit 64) before the key is read.
+`claudes` itself owns only five first arguments: `login`, `doctor`, `key`,
+`--version` (`-v`) and `--help`. Everything else goes to `claude`.
+
+`claudes --help` prints a help text on stdout and exits 0. It names the flags
+`claudes` owns itself — `--version`, `-v` and `--help` — and the two Claude
+Code flags it accepts: `--model` and `-p`.
+
+`claudes key` is the internal helper Claude Code calls to fetch the router
+key; at a terminal it refuses (exit 64). It takes no arguments of its own: any
+argument after it is refused (exit 64) before the key is read,
+`claudes key --help` included.
 
 ## What it does and doesn't do
 
@@ -87,15 +97,17 @@ exactly this reason.
 
 ## Known gaps through Claude subscriptions
 
-Confirmed by the spike
-([developerz-ai/multi-ai-router#211](https://github.com/developerz-ai/multi-ai-router/issues/211))
-and its final verdict
-([developerz-ai/multi-ai-router#213](https://github.com/developerz-ai/multi-ai-router/issues/213)),
-linked here as the source. The table may shrink as the router catches up.
+The canonical verdict on these gaps is
+[developerz-ai/multi-ai-router#213](https://github.com/developerz-ai/multi-ai-router/issues/213),
+from the spike
+([developerz-ai/multi-ai-router#211](https://github.com/developerz-ai/multi-ai-router/issues/211)),
+linked here as the source. The gaps were observed with Claude Code 2.25.8: a
+newer Claude Code may behave differently. The table may shrink as the router
+catches up.
 
 | What                    | Status in a claudes session                                                                                                                                                                                   | Router issue                                                        |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| WebSearch               | Disabled (`permissions.deny` in the generated settings): the subscription path cannot serve server tools                                                                                                      | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
+| WebSearch               | Disabled (`permissions.deny` in the generated settings): by design — the subscription path cannot serve server tools                                                                                          | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
 | Advisor tool            | Disabled (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the generated settings): it rides every main turn and the subscription path rejects it                                                                      | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
 | PDFs / document blocks  | Confirmed live: the model sees only a "PDF file read" line, never the content                                                                                                                                 | [#298](https://github.com/developerz-ai/multi-ai-router/issues/298) |
 | `count_tokens`          | Refused on a subscription-only pool. Interactive `/context` does call it: one `/context` made 50 calls, all refused, and `/context` then shows a wrong message-token figure. `claude -p` runs did not call it | [#299](https://github.com/developerz-ai/multi-ai-router/issues/299) |
@@ -125,23 +137,23 @@ use.
 
 `claudes` refuses loudly rather than guess. Messages are quoted exactly.
 
-| Exit | When                                                                                          | Message                                                                                                                                                                                                                                                                |
-| ---- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 64   | You passed `--settings`                                                                       | `claudes: --settings is not supported — claudes writes its own settings file to point claude at the router`                                                                                                                                                            |
-| 64   | You passed `--key`                                                                            | `claudes: --key is not supported — the router key comes from the config written by \`claudes login\``                                                                                                                                                                  |
-| 64   | An argument looks like a router key (in any position, including after the `--` terminator)    | `claudes: refusing an argument that looks like a router key — a key on the command line leaks into shell history and process listings`                                                                                                                                 |
-| 64   | `CLAUDE_CODE_HOST_AUTH_ENV_VAR` is set to any non-empty value, `0` and `false` included       | `claudes: refusing: <name> is set, so this session would not go to the router`                                                                                                                                                                                         |
-| 64   | An unknown `CLAUDE_CODE_USE_*` toggle or `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` is set truthy | `claudes: refusing: <name> is set, so this session would not go to the router`                                                                                                                                                                                         |
-| 64   | `BUN_CONFIG_VERBOSE_FETCH` is set truthy                                                      | `claudes: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed`                                                                                                                                                                               |
-| 64   | `claudes key` ran at a terminal                                                               | `claudes key is for apiKeyHelper only`                                                                                                                                                                                                                                 |
-| 64   | `claudes key` got an argument                                                                 | `claudes key: unknown argument #1\nusage: claudes key`                                                                                                                                                                                                                 |
-| 69   | The router did not answer the pre-launch check                                                | (message above)                                                                                                                                                                                                                                                        |
-| 69   | The router answered the pre-launch check without a usable version                             | `router answered the pre-launch check with an invalid version: the configured router URL does not point at a router claudes can use — run \`claudes doctor\``                                                                                                          |
-| 78   | No config, or a config `claudes` refuses to trust                                             | `no claudes config: run \`claudes login --url <router>\``                                                                                                                                                                                                              |
-| 127  | `claude` is not on `PATH`                                                                     | `claude not found on PATH`                                                                                                                                                                                                                                             |
-| 1    | `claudes doctor` had at least one FAIL                                                        | (the FAIL lines themselves)                                                                                                                                                                                                                                            |
-| 64   | `claudes doctor` got an argument other than `--live`                                          | `claudes doctor: unknown argument #1\nusage: claudes doctor [--live]`                                                                                                                                                                                                  |
-| 64   | `claudes login` ran without `--url`                                                           | `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.` |
+| Exit | When                                                                                                                              | Message                                                                                                                                                                                                                                                                |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 64   | You passed `--settings`                                                                                                           | `claudes: --settings is not supported — claudes writes its own settings file to point claude at the router`                                                                                                                                                            |
+| 64   | You passed `--key`                                                                                                                | `claudes: --key is not supported — the router key comes from the config written by \`claudes login\``                                                                                                                                                                  |
+| 64   | An argument looks like a router key (in any position, including after the `--` terminator)                                        | `claudes: refusing an argument that looks like a router key — a key on the command line leaks into shell history and process listings`                                                                                                                                 |
+| 64   | `CLAUDE_CODE_HOST_AUTH_ENV_VAR` is set to any non-empty value, `0` and `false` included                                           | `claudes: refusing: <name> is set, so this session would not go to the router`                                                                                                                                                                                         |
+| 64   | An unknown `CLAUDE_CODE_USE_*` toggle or `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` is set truthy                                     | `claudes: refusing: <name> is set, so this session would not go to the router`                                                                                                                                                                                         |
+| 64   | `BUN_CONFIG_VERBOSE_FETCH` is set truthy                                                                                          | `claudes: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed`                                                                                                                                                                               |
+| 64   | `claudes key` ran at a terminal                                                                                                   | `claudes key is for apiKeyHelper only`                                                                                                                                                                                                                                 |
+| 64   | `claudes key` got an argument                                                                                                     | `claudes key: unknown argument #1\nusage: claudes key`                                                                                                                                                                                                                 |
+| 69   | The router did not answer the pre-launch check                                                                                    | (message above)                                                                                                                                                                                                                                                        |
+| 69   | The router answered the pre-launch check without a usable version                                                                 | `router answered the pre-launch check with an invalid version: the configured router URL does not point at a router claudes can use — run \`claudes doctor\``                                                                                                          |
+| 78   | No config, or a config `claudes` refuses to trust                                                                                 | `no claudes config: run \`claudes login --url <router>\``                                                                                                                                                                                                              |
+| 127  | `claude` is not on `PATH`                                                                                                         | `claude not found on PATH`                                                                                                                                                                                                                                             |
+| 1    | `claudes doctor` had at least one FAIL                                                                                            | (the FAIL lines themselves)                                                                                                                                                                                                                                            |
+| 64   | `claudes doctor` got an argument other than `--live`; `--help` is only accepted on its own, where it prints the usage and exits 0 | `claudes doctor: unknown argument #1\nusage: claudes doctor [--live]`                                                                                                                                                                                                  |
+| 64   | `claudes login` ran without `--url`                                                                                               | `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.` |
 
 The seven known provider switches (`CLAUDE_CODE_USE_BEDROCK` and friends) are
 not a launch refusal: they are stripped from the child environment and pinned off
@@ -162,6 +174,9 @@ empty, `0` and `false` are all left alone.
 ```sh
 claudes doctor [--live]
 ```
+
+`claudes doctor --help` prints that usage and exits 0; the only flag it names
+is `--live`.
 
 Runs every check in order, printing each verdict as it arrives — the wiring
 probe alone can take a minute — and exits 1 when any check FAILed, 0
@@ -326,6 +341,264 @@ npm rm -g @developerz.ai/claudes && rm -rf ~/.config/claudes
 Nothing else is left behind: `claudes` never writes `~/.claude`, and the
 per-launch settings files and `claudes doctor`'s throwaway probe directory
 live inside the config directory.
+
+## The uninstall drill
+
+The uninstall is the one step that only a real run can prove, so it has a
+drill of its own: take the baseline, install, log in, run one session,
+uninstall, and check that nothing of yours was touched. Run it on a dev box
+against your own router and paste the result on
+[developerz-ai/claudes#5](https://github.com/developerz-ai/claudes/issues/5).
+
+```sh
+# 1. baseline: Claude Code's own settings file, before anything of yours runs
+sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
+
+# 2. install
+npm i -g @developerz.ai/claudes
+
+# 3. login
+claudes login --url <your router URL>
+
+# 4. session
+claudes -p "hello"
+
+# 5. uninstall
+npm rm -g @developerz.ai/claudes && rm -rf ~/.config/claudes
+
+# 6. checksum: the same file again — it must be the one from step 1
+#    (unless Claude Code has never run on this machine: see the note below)
+sha256sum ~/.claude/settings.json     # Linux; on macOS: shasum -a 256 ~/.claude/settings.json
+
+# 7. plain claude: plain claude still starts
+claude --version
+```
+
+What the drill proves:
+
+- `claudes` never writes `~/.claude/settings.json` — not at the install, not
+  at the login, not during the session, not after the uninstall — so the
+  checksum from step 6 is the one from step 1. The baseline is taken before
+  the install, so a change by any of those four steps shows up.
+- One difference is Claude Code's own, not `claudes`': on a machine where
+  Claude Code has never run a session, its first session rewrites the model
+  alias in that file (`"model": "opus"` → `"model": "opus[1m]"`). Plain
+  `claude` does the same with no `claudes` involved, and never again after
+  that. Run the drill twice — the second run's checksums must match — or run
+  one plain `claude` session before step 1.
+- The uninstall removed everything `claudes` wrote: the config, the per-launch
+  settings file and `claudes doctor`'s throwaway probe directory all live
+  under `~/.config/claudes` (or `$XDG_CONFIG_HOME/claudes`).
+- Plain `claude` still starts afterwards: no leftover settings file and no
+  leftover environment break your own sessions.
+- The session went to your router: `claudes doctor` proves the wiring, and the
+  session's own traffic is the router's.
+
+### What to paste on the issue
+
+The issue asks for the drill's results, and the checksums are what make the
+claim checkable. Paste these seven lines on it, one per step, with your own
+values in them:
+
+```text
+1. baseline: ~/.claude/settings.json -> absent
+2. install: claudes --version -> exit 0, <claudes' version>
+3. login: exit 0, logged in to <your router URL>
+4. session: exit 0; the router saw the session carry the router key
+5. uninstall: claudes is gone from PATH, the config directory is gone
+6. checksum: before -> absent | after -> absent (MATCH)
+7. plain claude: exit 0, <claude's version>
+```
+
+A recorded run of the whole lifecycle — the real Claude Code, the packed
+tarball, the local stack, both passes and the matching checksums — is in the
+repository's [`CLAUDE.md`](CLAUDE.md).
+
+### The same drill against a local router stack
+
+The drill above needs two things a newcomer does not have: the published
+package ([#7](https://github.com/developerz-ai/claudes/issues/7)) and the
+team's router. Neither is needed to run the whole drill. A local stack
+answers the endpoints `claudes` itself talks to, and the package can be
+installed from the tarball this repository builds.
+
+Save this as `router.mjs`:
+
+```js
+// A local stand-in for the team's router: just enough of it for the drill —
+// the health probe, the model list and one assistant turn. It expects the
+// drill's own key in the ROUTER_KEY environment variable and compares every
+// credential a request carries against it: the verdict goes to the log, the
+// value never does, and a request without the right key is refused.
+import { createServer } from "node:http";
+
+const MODELS = ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"];
+
+const EXPECTED = process.env.ROUTER_KEY ?? "";
+if (EXPECTED === "") {
+  console.log(
+    "router: set ROUTER_KEY to the drill's key before starting the stack",
+  );
+  process.exit(1);
+}
+
+// The credential one request carried: the x-api-key value, a Bearer body, or
+// "" for none — the shapes the router key legitimately travels in.
+function credentialOf(req) {
+  const apiKey = req.headers["x-api-key"];
+  if (typeof apiKey === "string" && apiKey !== "") {
+    return apiKey;
+  }
+  const auth = req.headers.authorization;
+  if (typeof auth === "string" && auth !== "") {
+    return auth.startsWith("Bearer ") ? auth.slice(7) : auth;
+  }
+  return "";
+}
+
+const server = createServer((req, res) => {
+  const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+  const sent = credentialOf(req);
+  // none / match / mismatch: the comparison is the drill's evidence that the
+  // configured key travelled, and no key material reaches the log.
+  const state = sent === "" ? "none" : sent === EXPECTED ? "match" : "mismatch";
+  console.log(`${req.method} ${path} credential=${state}`);
+  if (path === "/healthz") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ version: "1.4.2" }));
+    return;
+  }
+  const refuse = () => {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { type: "authentication_error" } }));
+  };
+  if (path === "/v1/models") {
+    if (state !== "match") {
+      refuse();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ data: MODELS.map((id) => ({ id })) }));
+    return;
+  }
+  if (path === "/v1/messages") {
+    if (state !== "match") {
+      refuse();
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const events = [
+      [
+        "message_start",
+        {
+          type: "message_start",
+          message: {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            model: MODELS[1],
+            content: [],
+            stop_reason: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        },
+      ],
+      [
+        "content_block_start",
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+      ],
+      [
+        "content_block_delta",
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "pong" },
+        },
+      ],
+      ["content_block_stop", { type: "content_block_stop", index: 0 }],
+      [
+        "message_delta",
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 1 },
+        },
+      ],
+      ["message_stop", { type: "message_stop" }],
+    ];
+    for (const [event, data] of events) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+    res.end();
+    return;
+  }
+  res.writeHead(404);
+  res.end("{}");
+});
+
+server.listen(0, "127.0.0.1", () => {
+  console.log(`router: http://127.0.0.1:${server.address().port}`);
+});
+```
+
+Start it with the drill's key in its environment, so it can compare — the key
+is the same throwaway one you paste at the login prompt below:
+
+```sh
+ROUTER_KEY='<a throwaway key in the router's shape: mar_live_ plus 32 characters>' node router.mjs
+```
+
+It prints the URL it listens on and one line per request — the method, the
+path, and the credential verdict: `none` when the request carried no
+credential, `match` when the credential is the drill key, `mismatch` when it
+is anything else. A `/v1/models` or `/v1/messages` request that does not
+carry the drill key is refused with a 401, so the drill cannot record a
+successful session on the wrong key: a session line reading
+`credential=match` is what proves the router key travelled. The credential
+itself is never printed.
+
+Then run the same seven steps, with two changes: install the tarball this
+repository builds instead of the published package, and log in against the
+stack's own URL:
+
+```sh
+# 2. install: the published package is not on npm yet, so install the tarball
+#    this repository builds (the file name carries package.json's version)
+bun run build
+npm pack
+npm i -g ./developerz.ai-claudes-0.1.0.tgz
+
+# 3. login against the local stack; at the prompt paste the SAME throwaway
+#    key the stack was started with — the router's shape, `mar_live_` followed
+#    by 32 characters. The stack compares it and refuses any other key.
+claudes login --url http://127.0.0.1:<the port the stack printed>
+```
+
+Steps 1, 4, 5, 6 and 7 are the ones above, unchanged. One detail: on a
+machine where Claude Code has never run, `~/.claude/settings.json` may not
+exist yet — take the baseline as "absent", and after the drill the file must
+either still be absent or hold only Claude Code's own first-session change
+(the note above).
+
+This is the walkthrough to run when the published package and the team's router
+are out of reach. It ends in the same seven steps, and the seven lines are
+what goes on the issue; for step 4, the stack's
+`POST /v1/messages credential=match` line is the evidence that the configured
+router key travelled.
+
+The same drill runs as an automated check in this repository's test suite,
+against a local router stub and a fake `claude` instead of your router and
+your Claude Code: it proves the mechanics — the config lands, the key travels
+through `claudes key`, the checksum of Claude Code's own settings file is
+taken before the install and compared after the login, the session and the
+uninstall, the session's own output carries no fragment of the key, and the
+uninstall removes what it claims to. What it cannot prove is your machine:
+the real Claude Code binary is not in the checkout — the recipe above runs
+the same drill with the real binary, against a local stack.
 
 ## Platforms
 

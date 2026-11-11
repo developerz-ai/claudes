@@ -1,7 +1,8 @@
 import { ROUTER_KEY_PREFIX } from "../config/schema";
 import { parseTierId, type TierName } from "../tiers";
 
-const USAGE = `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]
+/** The one usage text: every usage error ends with it, and the help output reuses it. */
+export const USAGE = `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]
 
 The router key is read from the "Router key: " prompt, or from the first line of
 stdin when it is piped; it is never accepted as a command-line argument.`;

@@ -2,6 +2,7 @@ import { realDoctorDeps, runDoctor } from "./commands/doctor";
 import { realKeyDeps, runKey } from "./commands/key";
 import { runLogin } from "./commands/login";
 import { dispatch } from "./dispatch";
+import { helpText } from "./help";
 import { realRunDeps, run } from "./launch/run";
 import { VERSION } from "./version";
 
@@ -9,6 +10,10 @@ async function main(argv: string[]): Promise<void> {
   const result = dispatch(argv);
   if (result.kind === "version") {
     console.log(VERSION);
+    process.exit(0);
+  }
+  if (result.kind === "help") {
+    console.log(helpText(result.scope));
     process.exit(0);
   }
   if (result.kind === "reserved") {

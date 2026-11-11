@@ -17,7 +17,8 @@ import type { FetchLike } from "../router/client";
 import { scrub } from "../router/errors";
 import { VERSION } from "../version";
 
-const USAGE = "usage: claudes doctor [--live]";
+/** The one usage text: the refusal quotes it, and the help output reuses it. */
+export const USAGE = "usage: claudes doctor [--live]";
 
 export const DOCTOR_FLAGS = ["--live"] as const;
 
