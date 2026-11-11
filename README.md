@@ -124,24 +124,31 @@ exactly this reason.
 
 ## Known gaps through Claude subscriptions
 
-The canonical verdict on these gaps is
-[developerz-ai/multi-ai-router#213](https://github.com/developerz-ai/multi-ai-router/issues/213),
-from the spike
-([developerz-ai/multi-ai-router#211](https://github.com/developerz-ai/multi-ai-router/issues/211)),
-linked here as the source. The gaps were observed with Claude Code 2.25.8: a
-newer Claude Code may behave differently. The table may shrink as the router
-catches up.
+Audited against router **v2.57.0** by source and test inspection, not a live test;
+the cited upstream tests were inspected, not executed for this audit. This is
+the verified version, not necessarily the first release containing each fix,
+and does not establish your router's deployed version or configuration.
 
-| What                    | Status in a claudes session                                                                                                                                                                                   | Router issue                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| WebSearch               | Disabled (`permissions.deny` in the generated settings): by design — the subscription path cannot serve server tools                                                                                          | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
-| Advisor tool            | Disabled (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the generated settings): it rides every main turn and the subscription path rejects it                                                                      | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
-| PDFs / document blocks  | Confirmed live: the model sees only a "PDF file read" line, never the content                                                                                                                                 | [#298](https://github.com/developerz-ai/multi-ai-router/issues/298) |
-| `count_tokens`          | Refused on a subscription-only pool. Interactive `/context` does call it: one `/context` made 50 calls, all refused, and `/context` then shows a wrong message-token figure. `claude -p` runs did not call it | [#299](https://github.com/developerz-ai/multi-ai-router/issues/299) |
-| `anthropic-beta` header | Not forwarded on the subscription path                                                                                                                                                                        | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
-| Request duration        | A single request is capped at 10 minutes, queue time included                                                                                                                                                 | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
-| Working directory       | The router-side working directory is visible to the model, so it may try to read paths that do not exist on your machine                                                                                      | [#296](https://github.com/developerz-ai/multi-ai-router/issues/296) |
-| Tool-call relay         | Informational: the model may mention that its tool calls "look declined" before the results arrive. That is how the router relays tool calls; the tools still run on your machine                             | None                                                                |
+Subscription requests have two transports: fast mode sends HTTP directly;
+SDK mode/fallback runs a router-side Claude SDK subprocess. The audited router
+defaults to fast mode, with SDK fallback; see the inspected
+[mode configuration](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/config/env-reader.ts)
+and [fast invoker](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-fast/invoker.ts).
+SDK-specific limitations below do not describe every subscription request.
+Claudes' two Disabled rows are launcher policy and remain enforced regardless
+of router improvements. The historical “Router issue” column now records
+version-pinned evidence and the confirmation method, not active issue tracking.
+
+| What | Status in a claudes session | Router issue |
+| --- | --- | --- |
+| WebSearch | Disabled (`permissions.deny` in the generated settings): launcher policy remains in force in either transport. The router's SDK mode/fallback rejects non-custom server tools; this is not a blanket claim about fast mode. | Source inspection: [`rejectServerTools`](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/request.ts). |
+| Advisor tool | Disabled (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the generated settings): launcher policy remains in force in either transport. SDK mode/fallback rejects non-custom server tools; fast-mode support would not remove this launcher restriction. | Source inspection: [`rejectServerTools`](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/request.ts). |
+| PDFs / document blocks | Fixed by v2.57.0: the old blanket content-loss claim no longer holds. SDK translation preserves base64 PDFs, text and URL documents, including nested tool results. File-ID and content sources remain unsupported on SDK transport. | Source inspection: [`documentSourceSchema`, `readDocument`, `toolResultAttachments`](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/prompt.ts). |
+| `count_tokens` | Subscription-only pools now return a labelled estimate rather than the old refusal. It is not an exact token count; API-key pools retain exact counting. The historical `/context` refusal anecdote is not evidence for this version. | Test inspection: [subscription estimate and exact API-key-pool cases in `count-tokens.test.ts`](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/test/integration/count-tokens.test.ts). |
+| `anthropic-beta` header | Fixed by v2.57.0: fast mode forwards requested betas via client headers. SDK mode/fallback has no equivalent client-header forwarding in its request/options translation; do not assume parity between transports. | Source inspection: [`input.clientHeaders` in the fast invoker](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-fast/invoker.ts), [`fastHeaders` beta merge](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-fast/profile.ts), SDK [request](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/request.ts) and [options](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/options.ts). |
+| Request duration | Configurable, transport-specific bounds, not a universal ten-minute cap including queue time. `UPSTREAM_TIMEOUT_MS` defaults to 600000 ms; streaming defaults are 300000 ms first-byte, 55000 ms idle and 3600000 ms total. HTTP and SDK attempts apply deadlines differently; these source defaults do not establish deployed limits. | Source inspection: [`UPSTREAM_TIMEOUT_MS`](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/config/routing-env.ts), [streaming defaults](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/config/upstream-stream.ts), [HTTP attempt deadlines](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/services/dataplane/attempt.ts) and [SDK attempt deadlines](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/services/dataplane/sdk-attempt.ts). |
+| Working directory | Fixed by v2.57.0: SDK `isolatedOptions` uses a neutral `workspaceDir(dirname(configDir))`, not the account credential directory. Residual SDK-only context: this is still a router-side workspace, not your client's cwd. Fast transport does not spawn an inference subprocess. | Source inspection: [`isolatedOptions`](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/options.ts) and [direct HTTP fast invoker](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-fast/invoker.ts). |
+| Tool-call relay | Informational, SDK mode/fallback only: deny/capture relay can make tool calls look declined before client-side results arrive; tools still run on your machine. Fast mode sends HTTP directly and does not use this SDK relay. This is an implementation caveat, not a new live reproduction. | Source inspection: [SDK tool registration](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/tools/register.ts), [SDK relay options](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-sdk/options.ts) and [fast invoker](https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers/claude-fast/invoker.ts). |
 
 ## Router is down
 

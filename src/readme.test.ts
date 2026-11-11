@@ -432,9 +432,8 @@ function assertDisabledGaps(source: string, features = UNSUPPORTED_FEATURES): vo
     .map((row) => {
       const feature = row.what === "Advisor tool" ? "advisor" : row.what;
       const status = row.status.match(/^Disabled \(`([^`]+)` in the generated settings\): .+$/);
-      const issue = row.issue.match(/^\[#[0-9]+\]\((https:\/\/github\.com\/[^)]+)\)$/);
-      if (status === null || issue === null) {
-        throw new Error(`README disabled gap has malformed mechanism or issue: ${row.what}`);
+      if (status === null) {
+        throw new Error(`README disabled gap has malformed mechanism: ${row.what}`);
       }
       const mechanism = status[1] ?? "";
       const env = mechanism.match(/^([A-Z_][A-Z0-9_]*)=([^=]+)$/);
@@ -446,21 +445,16 @@ function assertDisabledGaps(source: string, features = UNSUPPORTED_FEATURES): vo
         mechanism === "permissions.deny"
           ? { kind: "deny", rule: feature }
           : { kind: "env", name: env?.[1], value: env?.[2] };
-      return JSON.stringify({ feature, removedBy, issue: issue[1] });
+      return JSON.stringify({ feature, removedBy });
     })
     .sort();
   const expected = features
-    .map((feature) => {
-      const issue = feature.issue.match(/^([^#]+)#([0-9]+)$/);
-      if (issue === null) {
-        throw new Error(`Unsupported feature has malformed issue: ${feature.issue}`);
-      }
-      return JSON.stringify({
+    .map((feature) =>
+      JSON.stringify({
         feature: feature.feature,
         removedBy: feature.removedBy,
-        issue: `https://github.com/${issue[1]}/issues/${issue[2]}`,
-      });
-    })
+      }),
+    )
     .sort();
   expect(documented).toEqual(expected);
 }
@@ -495,7 +489,6 @@ describe("README disabled-feature guard", () => {
       added: `${row}\n${row.replace(/^\| [^|]+ \|/, "| New feature |")}`,
       "changed feature": row.replace(/^\| [^|]+ \|/, "| Renamed feature |"),
       "changed mechanism": row.replace(/`[^`]+`/, "`WRONG_SWITCH=1`"),
-      "changed issue URL": row.replace(/issues\/\d+/, "issues/999"),
       "no longer Disabled": row.replace("Disabled", "Informational"),
     })) {
       test(`rejects ${label}: ${row.split("|")[1]?.trim()}`, () => {
@@ -518,6 +511,133 @@ describe("README disabled-feature guard", () => {
     expect(() => assertDisabledGaps(readmeSource, [...UNSUPPORTED_FEATURES, extra])).toThrow();
     expect(() => assertDisabledGaps(readmeSource, UNSUPPORTED_FEATURES.slice(1))).toThrow();
   });
+
+  test("historical tracking metadata does not determine launcher policy", () => {
+    assertDisabledGaps(
+      readmeSource,
+      UNSUPPORTED_FEATURES.map((feature) => ({ ...feature, issue: "historical metadata" })),
+    );
+  });
+});
+
+const ROUTER_AUDIT_VERSION = "v2.57.0";
+const ROUTER_SOURCE = "https://github.com/developerz-ai/multi-ai-router/blob/";
+const CLOSED_ROUTER_ISSUES = [210, 211, 213, 296, 298, 299];
+const SDK_SOURCE = "apps/api/src/providers/claude-sdk/";
+const FAST_SOURCE = "apps/api/src/providers/claude-fast/";
+const GAP_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
+  WebSearch: [`${SDK_SOURCE}request.ts`],
+  "Advisor tool": [`${SDK_SOURCE}request.ts`],
+  "PDFs / document blocks": [`${SDK_SOURCE}prompt.ts`],
+  "`count_tokens`": ["apps/api/test/integration/count-tokens.test.ts"],
+  "`anthropic-beta` header": [
+    `${FAST_SOURCE}invoker.ts`,
+    `${FAST_SOURCE}profile.ts`,
+    `${SDK_SOURCE}request.ts`,
+    `${SDK_SOURCE}options.ts`,
+  ],
+  "Request duration": [
+    "apps/api/src/config/routing-env.ts",
+    "apps/api/src/config/upstream-stream.ts",
+    "apps/api/src/services/dataplane/attempt.ts",
+    "apps/api/src/services/dataplane/sdk-attempt.ts",
+  ],
+  "Working directory": [`${SDK_SOURCE}options.ts`, `${FAST_SOURCE}invoker.ts`],
+  "Tool-call relay": [
+    `${SDK_SOURCE}tools/register.ts`,
+    `${SDK_SOURCE}options.ts`,
+    `${FAST_SOURCE}invoker.ts`,
+  ],
+};
+const FIXED_GAPS = ["PDFs / document blocks", "`anthropic-beta` header", "Working directory"];
+
+/** Offline provenance guard, not a claim that the upstream tests ran here. */
+function assertGapAudit(source: string): void {
+  const section = source.match(
+    /^## Known gaps through Claude subscriptions\r?\n(.*?)(?=^## |$(?![\s\S]))/ms,
+  )?.[1];
+  expect(section).toBeDefined();
+  expect(section).toContain(`Audited against router **${ROUTER_AUDIT_VERSION}**`);
+  expect(section).toContain("not a live test");
+  for (const issue of CLOSED_ROUTER_ISSUES) {
+    expect(section).not.toMatch(
+      new RegExp(`https://github\\.com/developerz-ai/multi-ai-router/issues/${issue}\\b`),
+    );
+  }
+  const rows = readmeKnownGapRows(source);
+  expect(rows.map((row) => row.what).sort()).toEqual(Object.keys(GAP_EVIDENCE).sort());
+  for (const row of rows) {
+    expect(row.issue).toMatch(/^(Source|Test) inspection:/);
+    for (const path of GAP_EVIDENCE[row.what] ?? []) {
+      expect(row.issue).toContain(`](${ROUTER_SOURCE}${ROUTER_AUDIT_VERSION}/${path})`);
+    }
+    const citations = [...row.issue.matchAll(/\]\((https:\/\/[^)]+)\)/g)];
+    expect(citations.length).toBeGreaterThan(0);
+    for (const citation of citations) {
+      expect(citation[1]).toStartWith(`${ROUTER_SOURCE}${ROUTER_AUDIT_VERSION}/`);
+    }
+    if (FIXED_GAPS.includes(row.what) || /\bfixed\b/i.test(row.status)) {
+      expect(row.status).toContain(`Fixed by ${ROUTER_AUDIT_VERSION}:`);
+    }
+  }
+}
+
+describe("README versioned router audit", () => {
+  test("accounts for all eight gaps with pinned, inspection-based evidence", () => {
+    assertGapAudit(readmeSource);
+  });
+
+  const rows = readmeKnownGapRows(readmeSource);
+  for (const row of rows) {
+    for (const [label, evidence] of Object.entries({
+      "missing evidence": "None",
+      "changed evidence version": row.issue.replaceAll(ROUTER_AUDIT_VERSION, "v0.0.0"),
+      "missing confirmation method": row.issue.replace(/^(Source|Test) inspection:/, "Evidence:"),
+    })) {
+      test(`rejects ${label}: ${row.what}`, () => {
+        const line = readmeSource
+          .split("\n")
+          .find((line) => line.split("|")[1]?.trim() === row.what);
+        expect(line).toBeDefined();
+        const source = readmeSource.replace(line ?? "", (line ?? "").replace(row.issue, evidence));
+        expect(source).not.toBe(readmeSource);
+        expect(() => assertGapAudit(source)).toThrow();
+      });
+    }
+    if (FIXED_GAPS.includes(row.what)) {
+      test(`rejects missing fixed-version label: ${row.what}`, () => {
+        const source = readmeSource.replace(
+          row.status,
+          row.status.replace(`Fixed by ${ROUTER_AUDIT_VERSION}:`, "Fixed:"),
+        );
+        expect(source).not.toBe(readmeSource);
+        expect(() => assertGapAudit(source)).toThrow();
+      });
+    }
+  }
+
+  test("rejects a changed audit version", () => {
+    expect(() =>
+      assertGapAudit(readmeSource.replace(`**${ROUTER_AUDIT_VERSION}**`, "**v0.0.0**")),
+    ).toThrow();
+  });
+
+  for (const issue of CLOSED_ROUTER_ISSUES) {
+    for (const location of ["introduction", "row"]) {
+      test(`rejects closed issue #${issue} in ${location}`, () => {
+        const target =
+          location === "introduction"
+            ? "## Known gaps through Claude subscriptions"
+            : (rows[0]?.issue ?? "");
+        const link = ` [#${issue}](https://github.com/developerz-ai/multi-ai-router/issues/${issue})`;
+        const source = readmeSource.replace(
+          target,
+          `${target}${location === "introduction" ? "\n" : ""}${link}`,
+        );
+        expect(() => assertGapAudit(source)).toThrow();
+      });
+    }
+  }
 });
 
 describe("README network-note guard", () => {
