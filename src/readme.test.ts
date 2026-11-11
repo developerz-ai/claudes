@@ -619,6 +619,112 @@ function section(source: string, heading: string): string {
   return body.join("\n");
 }
 
+const packageMetadata = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { version: string; engines: { node: string }; repository: { url: string } };
+const bunPin = readFileSync(new URL("../.bun-version", import.meta.url), "utf8").trim();
+const SOURCE_COMMANDS = [
+  `git clone ${packageMetadata.repository.url.replace(/^git\+/, "")}`,
+  "cd claudes",
+  "bin/setup",
+  "bin/check",
+  "npm i -g .",
+  "claudes --version",
+];
+const INSTALL_REQUIREMENTS = [
+  {
+    heading: "# claudes",
+    patterns: [
+      /requires/,
+      /\[multi-ai-router\]\(https:\/\/github\.com\/developerz-ai\/multi-ai-router\)/,
+      /per-person `mar_live_` key/,
+      /cannot talk to the Anthropic API directly/,
+    ],
+  },
+  {
+    heading: "## Install",
+    patterns: [
+      /available once v0\.1\.0 is published/,
+      /\[#7\]\(https:\/\/github\.com\/developerz-ai\/claudes\/issues\/7\)/,
+      /npm i -g @developerz\.ai\/claudes/,
+    ],
+  },
+  {
+    heading: "## Build from source",
+    patterns: [
+      /Node 22\+/,
+      /npm \(bundled with Node\)/,
+      /, git, and/,
+      /Bun matching `\.bun-version`/,
+      /writable npm global prefix/,
+      /put its executable directory on your `PATH`/,
+      /version in `package\.json`/,
+      /exits 0/,
+    ],
+  },
+];
+
+function installSection(source: string, heading: string): string {
+  const body = section(source, heading);
+  return heading === "# claudes" ? (body.trim().split(/\n\s*\n/)[0] ?? "") : body;
+}
+
+function assertInstallationGuide(source: string): void {
+  for (const { heading, patterns } of INSTALL_REQUIREMENTS) {
+    const body = installSection(source, heading).replace(/\s+/g, " ");
+    for (const pattern of patterns) expect(body).toMatch(pattern);
+  }
+  const build = section(source, "## Build from source");
+  expect(build).toContain(`currently ${bunPin}`);
+  expect(build).toContain(`currently ${packageMetadata.version}`);
+  expect(packageMetadata.engines.node).toBe(">=22");
+  const headings = Array.from(source.matchAll(/^## .+$/gm), (match) => match[0]);
+  expect(headings[headings.indexOf("## Install") + 1]).toBe("## Build from source");
+  const commands = build.match(/```sh\n([\s\S]*?)\n```/)?.[1]?.split("\n");
+  expect(commands).toEqual(SOURCE_COMMANDS);
+}
+
+describe("README installation guide", () => {
+  test("documents router requirements and adjacent registry/source installation", () => {
+    assertInstallationGuide(readmeSource);
+  });
+
+  for (const { heading, patterns } of INSTALL_REQUIREMENTS) {
+    for (const pattern of patterns) {
+      test(`rejects missing or misplaced ${pattern} in ${heading}`, () => {
+        const body = installSection(readmeSource, heading);
+        // Preserve fences and headings: only the requirement itself may change.
+        const wrapped = new RegExp(pattern.source.replaceAll(" ", "\\s+"));
+        expect(body).toMatch(wrapped);
+        const changed = readmeSource.replace(body, body.replace(wrapped, "omitted"));
+        expect(() => assertInstallationGuide(changed)).toThrow();
+        expect(() => assertInstallationGuide(`${changed}\n## Elsewhere\n${body}`)).toThrow();
+      });
+    }
+  }
+
+  test("rejects every omitted or reordered source step even with the drill intact", () => {
+    const body = section(readmeSource, "## Build from source");
+    for (const [index, command] of SOURCE_COMMANDS.entries()) {
+      const missing = body.replace(`${command}\n`, "");
+      expect(() => assertInstallationGuide(readmeSource.replace(body, missing))).toThrow();
+      const reordered = [...SOURCE_COMMANDS];
+      const next = (index + 1) % reordered.length;
+      reordered[index] = SOURCE_COMMANDS[next] ?? "";
+      reordered[next] = command;
+      const swapped = body.replace(SOURCE_COMMANDS.join("\n"), reordered.join("\n"));
+      expect(() => assertInstallationGuide(readmeSource.replace(body, swapped))).toThrow();
+    }
+  });
+
+  test("rejects a source guide moved away from Install", () => {
+    const heading = "## Build from source";
+    const body = section(readmeSource, heading);
+    const moved = readmeSource.replace(`${heading}\n${body}`, "");
+    expect(() => assertInstallationGuide(`${moved}\n${heading}\n${body}`)).toThrow();
+  });
+});
+
 /** The result cell of the record's row for a step, or undefined when the row is missing. */
 function recordRow(record: string, step: string): string | undefined {
   for (const line of record.split(/\r?\n/)) {
