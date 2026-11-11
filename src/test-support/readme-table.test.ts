@@ -139,7 +139,7 @@ const pinnedSectionBadName = [
 ].join("\n");
 
 describe("README known-gaps parser", () => {
-  test("retains all eight rows, including the six informational gaps", () => {
+  test("retains all eight audited rows and the tool-relay source citations", () => {
     const gaps = readmeKnownGapRows();
     expect(gaps.map((row) => row.what)).toEqual([
       "WebSearch",
@@ -152,7 +152,13 @@ describe("README known-gaps parser", () => {
       "Tool-call relay",
     ]);
     expect(gaps.filter((row) => row.status.startsWith("Disabled"))).toHaveLength(2);
-    expect(gaps[7]?.issue).toBe("None");
+    const providers =
+      "https://github.com/developerz-ai/multi-ai-router/blob/v2.57.0/apps/api/src/providers";
+    expect(gaps[7]?.issue).toBe(
+      `Source inspection: [SDK tool registration](${providers}/claude-sdk/tools/register.ts), ` +
+        `[SDK relay options](${providers}/claude-sdk/options.ts) and ` +
+        `[fast invoker](${providers}/claude-fast/invoker.ts).`,
+    );
   });
 
   test("preserves every cell, including code spans and escaped pipes", () => {
