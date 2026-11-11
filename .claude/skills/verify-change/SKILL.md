@@ -1,4 +1,5 @@
 ---
+
 description: Prove a change in developerz-ai/claudes before committing or opening a pull request — the repo's own install, run and check commands. Use before every commit.
 applies: [typescript, javascript, bun]
 ---
@@ -19,12 +20,12 @@ explicitly. If that activation has not happened on your clone, leave it to the c
 owner — your job is the explicit `bin/check` run, and a change that passes it passes
 everywhere.
 
-| Step | Command | What it is |
-|------|---------|------------|
-| install | `bin/setup` | `bun install --frozen-lockfile`, skipped when `node_modules` already holds every pin `bun.lock` declares |
-| run | `bin/dev` | true — on developerz.ai runs, start it with code_bash_background when you need a running stack |
-| prove | `bin/check` | `bin/check-bun-versions` (bun-pin agreement) → biome lint (`--error-on-warnings`) → `tsc` on both tsconfigs (`tsconfig.json`, `tsconfig.build.json`) → `bun test` → `bun scripts/build.ts` → shebang / `--version` / exit-code smoke on the built `dist/claudes.js` |
-| stop | `bin/stop` | true — on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself |
+| Step    | Command     | What it is                                                                                                                                                                                                                                                          |
+| ------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| install | `bin/setup` | `bun install --frozen-lockfile`, skipped when `node_modules` already holds every pin `bun.lock` declares                                                                                                                                                            |
+| run     | `bin/dev`   | true — on developerz.ai runs, start it with code_bash_background when you need a running stack                                                                                                                                                                      |
+| prove   | `bin/check` | `bin/check-bun-versions` (bun-pin agreement) → biome lint (`--error-on-warnings`) → `tsc` on both tsconfigs (`tsconfig.json`, `tsconfig.build.json`) → `bun test` → `bun scripts/build.ts` → shebang / `--version` / exit-code smoke on the built `dist/claudes.js` |
+| stop    | `bin/stop`  | true — on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself                                                                                                                                                        |
 
 ## Rules
 
@@ -43,12 +44,11 @@ A coding box runs this gate before it commits, and it has to tell a FAILING chan
 from a gate it could not run — otherwise correct work is thrown away as if it were
 red. Exit 1 cannot carry that difference, so one code is reserved:
 
-| Exit | Means | What the platform does |
-|------|-------|------------------------|
-| 0 | the change passes | commit it |
-| 75 | a resource the gate NEEDS is unreachable (a database, a service, a credential) — it refused to grade | refuse the commit, and blame the environment, never the change |
-| any other non-zero | the gate ran and the change is red | refuse the commit, and blame the change |
-
+| Exit               | Means                                                                                                | What the platform does                                         |
+| ------------------ | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| 0                  | the change passes                                                                                    | commit it                                                      |
+| 75                 | a resource the gate NEEDS is unreachable (a database, a service, a credential) — it refused to grade | refuse the commit, and blame the environment, never the change |
+| any other non-zero | the gate ran and the change is red                                                                   | refuse the commit, and blame the change                        |
 - Guard preconditions FIRST and `exit 75` when one is unmet. `exit 1` there tells the
   platform your change is broken when it is your environment that is.
 - Changed a dependency? Re-run `bin/setup` before `bin/check`, or you are proving a stale tree.

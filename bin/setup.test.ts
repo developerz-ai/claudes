@@ -128,7 +128,7 @@ afterEach(() => {
 function makeFixture(
   lock: string,
   ciYaml = readFileSync(CI_WORKFLOW, "utf8"),
-  bunVersion: string | null = "1.4.3\n",
+  bunVersion: string | null = readFileSync(join(REPO, ".bun-version"), "utf8"),
 ): Fixture {
   const id = fixtures++;
   const root = join(scratch, `repo-${id}`);
@@ -271,6 +271,12 @@ describe("bin/setup when bun refuses the frozen install", () => {
   test(
     "exit 1, and stderr names the four facts that classify the refusal",
     () => {
+      const checkoutPin = readFileSync(join(REPO, ".bun-version"), "utf8").trim();
+      expect(checkoutPin).toMatch(/^\d+\.\d+\.\d+$/);
+      const ciPin = readFileSync(CI_WORKFLOW, "utf8").match(
+        /^[ \t]*bun-version:[ \t]*(\d+\.\d+\.\d+)[ \t]*$/m,
+      )?.[1];
+      if (!ciPin) throw new Error("ci.yml must declare an exact bun-version pin");
       const fixture = refusingFixture();
       const res = runSetup(fixture, {
         FAKE_BUN_INSTALL_OUT: "lockfile had changes, but lockfile had no changes",
@@ -284,9 +290,9 @@ describe("bin/setup when bun refuses the frozen install", () => {
       // The executing bun (FAKE_BUN_VERSION) and the pin this checkout requires
       // (.bun-version) are distinct facts from distinct sources.
       expect(res.stderr).toMatch(labelled("bun --version:", "1.1.9"));
-      expect(res.stderr).toMatch(labelled("bun version .bun-version requires:", "1.4.3"));
+      expect(res.stderr).toMatch(labelled("bun version .bun-version requires:", checkoutPin));
       expect(res.stderr).toMatch(labelled("bun.lock lockfileVersion:", "2"));
-      expect(res.stderr).toMatch(labelled("bun version CI installs:", "1.4.3"));
+      expect(res.stderr).toMatch(labelled("bun version CI installs:", ciPin));
       // A refusal is not a reason to re-run the install without --frozen-lockfile.
       expect(bunCalls(fixture)).toEqual(["install --frozen-lockfile", "--version"]);
     },

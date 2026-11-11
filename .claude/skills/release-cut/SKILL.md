@@ -1,10 +1,10 @@
 ---
+
 description: Cuts a claudes npm release via the GitHub Actions release workflow. Use for release, tag, npm, version bump, publish, trusted publishing.
 applies: [typescript, javascript, bun]
 ---
 
 > House skill — established by dz-runner setup mode from this repo's own evidence, then owned by its maintainers. Correct it in place; setup never overwrites a skill that exists.
-
 1. Bump `version` in `package.json` to the new semver (e.g., `0.1.0`). `src/version.ts` MUST match — `src/version.test.ts` reads `package.json` and asserts the drift.
 2. Open a PR; merge to `main` only after `.github/workflows/ci.yml` is green on the full matrix (ubuntu-latest + macos-latest × Node 22 + 24).
 3. Tag the merge commit on `main` as exactly `v${version}` (e.g., `v0.1.0`). `release.yml` refuses any other tag; an existing GitHub release with a mismatched tag will not publish.
