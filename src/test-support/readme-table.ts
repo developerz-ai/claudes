@@ -50,6 +50,15 @@ function section(heading: string, source = readme()): string[] {
 }
 
 /**
+ * The lines of the section that starts at `heading`, up to the next heading of
+ * the same level. A section a reader has to find by hand is a section nobody
+ * checks, so the README guards name their sections and read them here.
+ */
+export function readmeSection(heading: string, source = readme()): string[] {
+  return section(heading, source);
+}
+
+/**
  * The lines of the section whose heading matches `pattern`, up to the next
  * heading of the same level. Throws when no heading matches.
  */

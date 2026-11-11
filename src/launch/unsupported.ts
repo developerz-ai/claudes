@@ -1,7 +1,8 @@
 /**
  * Features the router cannot serve yet, turned off only in claudes sessions.
- * Each row names the router issue that will remove it, so the table can be
- * emptied as the router catches up.
+ * Each row names the router issue that will remove it — or records that the
+ * router has no open tracker for it — so the table can be emptied as the
+ * router catches up.
  */
 export type RemovedBy =
   | { readonly kind: "deny"; readonly rule: string }
@@ -14,22 +15,30 @@ export interface UnsupportedFeature {
   readonly reason: string;
   /** How a claudes session turns the feature off. */
   readonly removedBy: RemovedBy;
-  /** The router issue whose fix removes this row. */
-  readonly issue: string;
+  /**
+   * The router issue whose fix removes this row, in `owner/repo#number` form.
+   *
+   * `null` when the router has no open tracker for the gap: the epic that
+   * recorded it is closed and nothing else is open, so the README says "None"
+   * rather than pointing at a closed issue as if the gap were still tracked.
+   */
+  readonly issue: string | null;
 }
 
 export const UNSUPPORTED_FEATURES: readonly UnsupportedFeature[] = [
   {
     feature: "WebSearch",
-    reason: "the router's subscription path rejects server tools with HTTP 400",
+    reason:
+      "the router's subscription path carries no server tools: the claude-sdk provider has no web_search or server-tool handling (router v2.57.0)",
     removedBy: { kind: "deny", rule: "WebSearch" },
-    issue: "developerz-ai/multi-ai-router#210",
+    issue: null,
   },
   {
     feature: "advisor",
-    reason: "the advisor is a server tool the router rejects on every turn",
+    reason:
+      "the advisor is a server tool, and the router's subscription path carries no server tools either (router v2.57.0)",
     removedBy: { kind: "env", name: "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", value: "1" },
-    issue: "developerz-ai/multi-ai-router#210",
+    issue: null,
   },
 ];
 

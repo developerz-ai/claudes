@@ -1,11 +1,18 @@
 # claudes
 
-`claudes` is a thin launcher that runs Claude Code (`claude`) against your
-team's self-hosted, Anthropic-compatible router using your own per-person key.
-It never falls back silently: if the wiring is wrong, it fails loudly instead
-of quietly sending traffic somewhere else.
+`claudes` is a thin launcher that runs Claude Code (`claude`) against a
+[multi-ai-router](https://github.com/developerz-ai/multi-ai-router) instance,
+using your own per-person `mar_live_` key. It cannot talk to the Anthropic
+API directly: the key it holds is a router key, and Claude Code is always
+launched against the router's base URL. It never falls back silently: if the
+wiring is wrong, it fails loudly instead of quietly sending traffic somewhere
+else.
 
 ## Install
+
+The npm package is not published yet. It lands as v0.1.0 with
+[#7](https://github.com/developerz-ai/claudes/issues/7); until then, build it
+from source (below). Once it is:
 
 ```sh
 npm i -g @developerz.ai/claudes
@@ -14,6 +21,26 @@ claudes login --url <your router URL>
 
 Never `npm i -g claudes`. The unscoped name `claudes` is an unrelated
 third-party package; this tool is published only as `@developerz.ai/claudes`.
+
+## Build from source
+
+Requirements: Node 22 or newer, Bun (the version `.bun-version` pins) and git.
+
+```sh
+git clone https://github.com/developerz-ai/claudes.git
+cd claudes
+bin/setup
+bin/check
+npm i -g .
+claudes --version
+```
+
+`bin/setup` installs the pinned devDependencies (`bun.lock` is the source of
+truth for every version). `bin/check` is the repository's gate — it runs the
+tests, builds `dist/claudes.js` and checks that the built CLI runs — so the
+build the install needs is already there when it passes. `npm i -g .` then
+installs the checkout itself: the `claudes` it puts on your PATH is
+`dist/claudes.js`. `claudes --version` prints the package version.
 
 `claudes login` reads the router key from a `Router key: ` prompt with echo
 off, or from the first line of stdin when piped:
@@ -97,24 +124,25 @@ exactly this reason.
 
 ## Known gaps through Claude subscriptions
 
-The canonical verdict on these gaps is
-[developerz-ai/multi-ai-router#213](https://github.com/developerz-ai/multi-ai-router/issues/213),
-from the spike
-([developerz-ai/multi-ai-router#211](https://github.com/developerz-ai/multi-ai-router/issues/211)),
-linked here as the source. The gaps were observed with Claude Code 2.25.8: a
-newer Claude Code may behave differently. The table may shrink as the router
-catches up.
+The gaps below were observed with Claude Code 2.25.8, from the spike
+([developerz-ai/multi-ai-router#211](https://github.com/developerz-ai/multi-ai-router/issues/211))
+and its verdict
+([developerz-ai/multi-ai-router#213](https://github.com/developerz-ai/multi-ai-router/issues/213)).
+A newer Claude Code may behave differently. Every row was re-checked against
+router v2.57.0 on 2026-11-11: the "Router issue" column names the tracker,
+or says that the router has none open — a gap the router has not fixed and
+nobody is tracking is a gap, not a gap with a link.
 
-| What                    | Status in a claudes session                                                                                                                                                                                   | Router issue                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| WebSearch               | Disabled (`permissions.deny` in the generated settings): by design — the subscription path cannot serve server tools                                                                                          | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
-| Advisor tool            | Disabled (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the generated settings): it rides every main turn and the subscription path rejects it                                                                      | [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |
-| PDFs / document blocks  | Confirmed live: the model sees only a "PDF file read" line, never the content                                                                                                                                 | [#298](https://github.com/developerz-ai/multi-ai-router/issues/298) |
-| `count_tokens`          | Refused on a subscription-only pool. Interactive `/context` does call it: one `/context` made 50 calls, all refused, and `/context` then shows a wrong message-token figure. `claude -p` runs did not call it | [#299](https://github.com/developerz-ai/multi-ai-router/issues/299) |
-| `anthropic-beta` header | Not forwarded on the subscription path                                                                                                                                                                        | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
-| Request duration        | A single request is capped at 10 minutes, queue time included                                                                                                                                                 | [#213](https://github.com/developerz-ai/multi-ai-router/issues/213) |
-| Working directory       | The router-side working directory is visible to the model, so it may try to read paths that do not exist on your machine                                                                                      | [#296](https://github.com/developerz-ai/multi-ai-router/issues/296) |
-| Tool-call relay         | Informational: the model may mention that its tool calls "look declined" before the results arrive. That is how the router relays tool calls; the tools still run on your machine                             | None                                                                |
+| What                    | Status in a claudes session                                                                                                                                                                                                                                                  | Router issue                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| WebSearch               | Disabled (`permissions.deny` in the generated settings): by design — the router's subscription path carries no server tools (the claude-sdk provider has no `web_search` or server-tool handling in router v2.57.0)                                                       | None                                                                |
+| Advisor tool            | Disabled (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in the generated settings): it rides every main turn, and the router's subscription path carries no server tools either (router v2.57.0)                                                                                                                                | None                                                                |
+| PDFs / document blocks  | Fixed in the router: document blocks are forwarded to the SDK instead of being rendered as text (router v2.39.18, PR #303), so the model reads the PDF itself                                                                                                                                   | [#298](https://github.com/developerz-ai/multi-ai-router/issues/298) (closed) |
+| `count_tokens`          | Fixed in the router: a subscription-only scope is answered with a labelled local estimate (`estimated: true`) instead of a 503 (router v2.44.0, PR #333), so `/context` shows an estimate rather than a wrong figure                                  | [#299](https://github.com/developerz-ai/multi-ai-router/issues/299) (closed) |
+| `anthropic-beta` header | Still dropped on the subscription path: the router forwards `anthropic-beta` only on its direct HTTP (fast mode) transport, and the SDK invocation never inherits the client's headers (`SdkInvocation.clientHeaders` is "never inherited by query()", router v2.57.0) | None                                                                |
+| Request duration        | Still capped: `UPSTREAM_TIMEOUT_MS` (default 600000 ms) bounds an SDK attempt whole (router v2.57.0)                                                                                                                                                                          | None                                                                |
+| Working directory       | Fixed in the router: SDK subprocesses run in a neutral workspace instead of the Account's config dir (router v2.39.19, PR #301), so the model is no longer told a router-side path                                                                                                                           | [#296](https://github.com/developerz-ai/multi-ai-router/issues/296) (closed) |
+| Tool-call relay         | Informational: the model may mention that its tool calls "look declined" before the results arrive. That is how the router relays tool calls; the tools still run on your machine                                                                                                                             | None                                                                |
 
 ## Router is down
 

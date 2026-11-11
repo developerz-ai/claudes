@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DOCTOR_FLAGS, type DoctorDeps, runDoctor } from "./commands/doctor";
@@ -17,6 +17,7 @@ import {
   readmeKnownGapRows,
   readmeNetworkNotes,
   readmeRefusalRows,
+  readmeSection,
 } from "./test-support/readme-table";
 import { assertNoKeyFragment } from "./test-support/redact";
 
@@ -432,7 +433,9 @@ function assertDisabledGaps(source: string, features = UNSUPPORTED_FEATURES): vo
     .map((row) => {
       const feature = row.what === "Advisor tool" ? "advisor" : row.what;
       const status = row.status.match(/^Disabled \(`([^`]+)` in the generated settings\): .+$/);
-      const issue = row.issue.match(/^\[#[0-9]+\]\((https:\/\/github\.com\/[^)]+)\)$/);
+      // The tracker cell is either "None" — the router has no open issue for
+      // this gap, and a closed issue is not a tracker — or the issue's link.
+      const issue = row.issue.match(/^(None|\[#[0-9]+\]\(https:\/\/github\.com\/[^)]+\))$/);
       if (status === null || issue === null) {
         throw new Error(`README disabled gap has malformed mechanism or issue: ${row.what}`);
       }
@@ -451,6 +454,13 @@ function assertDisabledGaps(source: string, features = UNSUPPORTED_FEATURES): vo
     .sort();
   const expected = features
     .map((feature) => {
+      if (feature.issue === null) {
+        return JSON.stringify({
+          feature: feature.feature,
+          removedBy: feature.removedBy,
+          issue: "None",
+        });
+      }
       const issue = feature.issue.match(/^([^#]+)#([0-9]+)$/);
       if (issue === null) {
         throw new Error(`Unsupported feature has malformed issue: ${feature.issue}`);
@@ -458,7 +468,7 @@ function assertDisabledGaps(source: string, features = UNSUPPORTED_FEATURES): vo
       return JSON.stringify({
         feature: feature.feature,
         removedBy: feature.removedBy,
-        issue: `https://github.com/${issue[1]}/issues/${issue[2]}`,
+        issue: `[#${issue[2]}](https://github.com/${issue[1]}/issues/${issue[2]})`,
       });
     })
     .sort();
@@ -482,6 +492,75 @@ function assertNetworkNotes(
   expect(readmeNetworkNotes(source).sort()).toEqual(messages.sort());
 }
 
+describe("README install section", () => {
+  // The README is hard-wrapped, so a sentence can straddle a line break: the
+  // prose is compared as one line, the way a reader reads it.
+  const oneLine = (text: string): string => text.replace(/\s+/g, " ");
+  /**
+   * A section's prose as one line. Read inside the test that needs it, so a
+   * missing section fails that one test with its own message instead of
+   * taking the whole file's collection down with it.
+   */
+  const sectionText = (heading: string): string =>
+    oneLine(readmeSection(heading, readmeSource).join("\n"));
+  /** Everything before the Install heading: the README's opening paragraphs. */
+  const openingText = (): string =>
+    oneLine(readmeSource.slice(0, readmeSource.indexOf("\n## Install")));
+
+  test("the opening says what claudes needs: a router and a per-person key", () => {
+    const opening = openingText();
+    expect(opening).toContain("multi-ai-router");
+    expect(opening).toContain("mar_live_");
+    expect(opening).toContain("cannot talk to the Anthropic API directly");
+  });
+
+  test("the npm line is marked as not published yet, and names the issue that publishes it", () => {
+    const install = sectionText("## Install");
+    expect(install).toContain("npm i -g @developerz.ai/claudes");
+    expect(install).toContain("not published yet");
+    expect(install).toContain("issues/7");
+  });
+
+  test("the source section names its requirements and its steps, in order", () => {
+    const fromSource = sectionText("## Build from source");
+    expect(fromSource).toMatch(/Node 22/);
+    expect(fromSource).toMatch(/\bBun\b/);
+    expect(fromSource).toMatch(/\bgit\b/);
+    const steps = [
+      "git clone https://github.com/developerz-ai/claudes.git",
+      "cd claudes",
+      "bin/setup",
+      "bin/check",
+      "npm i -g .",
+      "claudes --version",
+    ];
+    let previous = -1;
+    for (const step of steps) {
+      const at = fromSource.indexOf(step);
+      expect(at).toBeGreaterThan(previous);
+      previous = at;
+    }
+  });
+
+  test("the steps install the CLI the package declares", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      bin: Record<string, string>;
+      files: string[];
+      engines: { node: string };
+    };
+    // `npm i -g .` puts `claudes` on the PATH, and it is the bundle
+    // `bin/check` builds — so the steps only work if these two agree. The
+    // steps need `bin/setup` first: a fresh clone has no devDependencies, and
+    // `bin/check` refuses to grade a tree it cannot lint.
+    expect(pkg.bin.claudes).toBe("dist/claudes.js");
+    expect(pkg.files).toContain("dist/claudes.js");
+    expect(pkg.engines.node).toBe(">=22");
+    expect(existsSync(new URL("../bin/setup", import.meta.url))).toBe(true);
+    expect(existsSync(new URL("../bin/check", import.meta.url))).toBe(true);
+    expect(existsSync(new URL("../scripts/build.ts", import.meta.url))).toBe(true);
+  });
+});
+
 describe("README disabled-feature guard", () => {
   test("Disabled rows match production bijectively, leaving informational gaps alone", () => {
     assertDisabledGaps(readmeSource);
@@ -489,15 +568,25 @@ describe("README disabled-feature guard", () => {
 
   const disabledRows = readmeSource.split("\n").filter((line) => line.includes("| Disabled ("));
   for (const row of disabledRows) {
-    for (const [label, replacement] of Object.entries({
+    // A row that names no tracker has no URL to corrupt, so it gets the other
+    // mutation instead: claiming one — the closed epic included.
+    const mutations: Record<string, string> = {
       removed: "",
       duplicated: `${row}\n${row}`,
       added: `${row}\n${row.replace(/^\| [^|]+ \|/, "| New feature |")}`,
       "changed feature": row.replace(/^\| [^|]+ \|/, "| Renamed feature |"),
       "changed mechanism": row.replace(/`[^`]+`/, "`WRONG_SWITCH=1`"),
-      "changed issue URL": row.replace(/issues\/\d+/, "issues/999"),
       "no longer Disabled": row.replace("Disabled", "Informational"),
-    })) {
+    };
+    if (/issues\/\d+/.test(row)) {
+      mutations["changed issue URL"] = row.replace(/issues\/\d+/, "issues/999");
+    } else {
+      mutations["claims a tracker"] = row.replace(
+        /\|\s*None\s*\|/,
+        "| [#210](https://github.com/developerz-ai/multi-ai-router/issues/210) |",
+      );
+    }
+    for (const [label, replacement] of Object.entries(mutations)) {
       test(`rejects ${label}: ${row.split("|")[1]?.trim()}`, () => {
         const source =
           label === "removed"
