@@ -1,11 +1,17 @@
 # claudes
 
 `claudes` is a thin launcher that runs Claude Code (`claude`) against your
-team's self-hosted, Anthropic-compatible router using your own per-person key.
+team's self-hosted, Anthropic-compatible router. It requires
+[multi-ai-router](https://github.com/developerz-ai/multi-ai-router) and your own
+per-person `mar_live_` key; it cannot talk to the Anthropic API directly.
 It never falls back silently: if the wiring is wrong, it fails loudly instead
 of quietly sending traffic somewhere else.
 
 ## Install
+
+The registry install below is available once v0.1.0 is published
+([#7](https://github.com/developerz-ai/claudes/issues/7)). To install from a
+checkout instead, see [Build from source](#build-from-source).
 
 ```sh
 npm i -g @developerz.ai/claudes
@@ -33,6 +39,27 @@ a 0600 file in a 0700 directory. Override the tier pins with `--opus`,
 
 `claudes login --help` prints the login usage and exits 0; the flags it names
 are `--url`, `--opus`, `--sonnet` and `--haiku`.
+
+## Build from source
+
+Prerequisites: Node 22+, npm (bundled with Node), git, and Bun matching
+`.bun-version` in the checkout (currently 1.4.4). Use a writable npm global
+prefix and put its executable directory on your `PATH`.
+
+```sh
+git clone https://github.com/developerz-ai/claudes.git
+cd claudes
+bin/setup
+bin/check
+npm i -g .
+claudes --version
+```
+
+`bin/setup` installs the pinned dependencies; `bin/check` checks the project
+and builds the executable before the local global install. The final command
+exits 0 and prints the version in `package.json` (currently 0.1.0).
+Then run `claudes login --url <your router URL>` as described above; Claude
+Code (`claude`) must also be installed and on `PATH` to launch sessions.
 
 ## Daily use
 
