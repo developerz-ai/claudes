@@ -1,7 +1,6 @@
 # AI-first scorecard
 
 > Written by the developerz.ai maintainer agent — established by dz-runner setup mode. Each onboarding run rewrites this file whole; the latest run wins, and the same card is stored on the platform.
-- Run: `run_b33c520043944ab5bb6fcf4724521682`
 - Computed: 2026-10-14T21:29:17.152Z
 - Proof: **proved with gaps** — `bin/check` ran green at head; the head commands that did not are named below.
 - Score: 12 of 15 items ok
