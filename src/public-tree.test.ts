@@ -26,14 +26,45 @@ const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 /** Hosts on our own domain that a public file may name. */
 const PERMITTED_OWN_HOSTS = new Set(["developerz.ai", "www.developerz.ai"]);
 
-/** Any `<name>.developerz.ai` is on our own domain. */
+/**
+ * Any `<name>.developerz.ai` is on our own domain. The `g` flag is required by
+ * `matchAll`, which reads the flag but never advances this regex's own
+ * `lastIndex` — so a matchAll loop over many files stays stateless.
+ */
 const OWN_HOST = /\b(?:[a-z0-9-]+\.)*developerz\.ai\b/g;
 
-/** The platform's own identifiers: run, plan, task and review-thread ids. */
-const INTERNAL_ID = /\b(?:run|rtk|rvo|tsk|PRRT)_[A-Za-z0-9]{12,}\b/g;
+/**
+ * The platform's own identifiers: run, plan, task and review-thread ids.
+ * No `g` flag: this one is used with `test()`, and a global regex keeps its
+ * `lastIndex` between calls — so one match would leave the offset pointing
+ * into the next file, and a later file whose id sits before that offset would
+ * be passed in silence. The guard must not be able to pass by accident.
+ */
+const INTERNAL_ID = /\b(?:run|rtk|rvo|tsk|PRRT)_[A-Za-z0-9]{12,}\b/;
 
-/** An env key that names a credential rather than a setting. */
-const CREDENTIAL_NAME = /(?:_TOKEN|_KEY|_SECRET|_PASSWORD|_PASSWD|_CREDENTIALS?)$/;
+/**
+ * The settings the tracked config may carry: the public tools' own, and
+ * nothing else. An allowlist, so a name that would describe one of our
+ * services cannot slip in by being added here without a review of this file.
+ */
+const PERMITTED_ENV_KEYS = new Set([
+  "DO_NOT_TRACK",
+  "CODEGRAPH_TELEMETRY",
+  "CODEGRAPH_NO_UPDATE_CHECK",
+]);
+
+/**
+ * No tracked server may carry a header today. A public server that needs one
+ * adds it here deliberately, with the same review as any other change.
+ */
+const PERMITTED_HEADER_KEYS = new Set<string>();
+
+/**
+ * A tracked config may not reference one of our own variables at all. A
+ * `${...}` placeholder is how a tracked file names a thing it does not write
+ * down — a credential, a host — so it is the shape the rule exists to stop.
+ */
+const VARIABLE_REFERENCE = /\$\{[^}]*\}/;
 
 /**
  * `.dz/` is the platform's own working directory: the maintainer agent writes
@@ -112,14 +143,34 @@ describe("the public tree", () => {
     const text = readText(".mcp.json");
     expect(text).not.toBeNull();
     const config = JSON.parse(text ?? "{}") as {
-      mcpServers?: Record<string, { url?: unknown; env?: Record<string, unknown> }>;
+      mcpServers?: Record<
+        string,
+        { url?: unknown; env?: Record<string, unknown>; headers?: Record<string, unknown> }
+      >;
     };
     for (const [name, server] of Object.entries(config.mcpServers ?? {})) {
-      for (const key of Object.keys(server.env ?? {})) {
+      // `env` and `headers` are scanned the same way: a credential reaches a
+      // tracked config in either block, and the shape this file used to carry
+      // put one in a header.
+      for (const [key, value] of Object.entries(server.env ?? {})) {
         expect(
-          CREDENTIAL_NAME.test(key),
-          `.mcp.json names a credential (${name}.${key}); a tracked config must never hold one`,
-        ).toBe(false);
+          PERMITTED_ENV_KEYS.has(key),
+          `.mcp.json names a setting that is not one of the public tools' own (${name}.${key})`,
+        ).toBe(true);
+        expect(
+          typeof value === "string" && !VARIABLE_REFERENCE.test(value),
+          `.mcp.json references one of our own variables (${name}.${key})`,
+        ).toBe(true);
+      }
+      for (const [key, value] of Object.entries(server.headers ?? {})) {
+        expect(
+          PERMITTED_HEADER_KEYS.has(key),
+          `.mcp.json carries a header the tracked config may not (${name}.${key})`,
+        ).toBe(true);
+        expect(
+          typeof value === "string" && !VARIABLE_REFERENCE.test(value),
+          `.mcp.json references one of our own variables (${name}.${key})`,
+        ).toBe(true);
       }
       if (typeof server.url === "string") {
         for (const match of server.url.matchAll(OWN_HOST)) {
