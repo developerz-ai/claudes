@@ -18,5 +18,13 @@
         "noExplicitAny": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": [".dz/**"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ]
 }
