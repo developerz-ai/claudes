@@ -135,15 +135,15 @@ Structure coverage: every regular file under `src/` and `bin/` must have an exac
 
 Run for real on a dev box, against the real Claude Code binary, the tarball this repository builds (`bun run build` → `npm pack` → `npm i -g` into a scratch prefix), and the README's local router stack on 127.0.0.1 — the stack that compares every request's credential against the drill key and refuses anything else with a 401. The HOME was a scratch directory, so the run could not touch the box's own `~/.claude`. Versions: Linux x86_64, Node v24.22.1, npm 11.19.1, Bun 1.4.4, Claude Code 2.1.306 (2026-11-04).
 
-| Step | Result |
-|---|---|
-| 1. baseline | `~/.claude/settings.json` — absent on a fresh HOME; `1c4e6085b06883f78f3705682ec2c2181ad6a09e90c463dca4934c00b86c4afe` on a HOME that already held Claude Code's own `{"model":"opus"}` |
-| 2. install | `claudes --version` → exit 0, `0.1.0` — the packed tarball, whose contents are `dist/claudes.js`, `package.json`, `README.md` and `LICENSE` |
-| 3. login | exit 0 — `logged in to http://127.0.0.1:<port> (router version 1.4.2)`; the config landed 0600 in a 0700 directory |
-| 4. session | `claudes -p "hello"` → exit 0, `pong`; the stack logged `POST /v1/messages credential=match` — the credential was compared against the drill key and matched, and no fragment of the key reached any output file |
-| 5. uninstall | `claudes` gone from PATH, the config directory gone |
-| 6. checksum | absent before the install and absent after the uninstall on the fresh HOME — MATCH · the warmed HOME: `1c4e6085b06883f78f3705682ec2c2181ad6a09e90c463dca4934c00b86c4afe` before and after both warmed passes — MATCH |
-| 7. plain claude | `claude --version` → exit 0, `2.1.306 (Claude Code)` |
+| Step            | Result                                                                                                                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. baseline     | `~/.claude/settings.json` — absent on a fresh HOME; `1c4e6085b06883f78f3705682ec2c2181ad6a09e90c463dca4934c00b86c4afe` on a HOME that already held Claude Code's own `{"model":"opus"}`                              |
+| 2. install      | `claudes --version` → exit 0, `0.1.0` — the packed tarball, whose contents are `dist/claudes.js`, `package.json`, `README.md` and `LICENSE`                                                                          |
+| 3. login        | exit 0 — `logged in to http://127.0.0.1:<port> (router version 1.4.2)`; the config landed 0600 in a 0700 directory                                                                                                   |
+| 4. session      | `claudes -p "hello"` → exit 0, `pong`; the stack logged `POST /v1/messages credential=match` — the credential was compared against the drill key and matched, and no fragment of the key reached any output file     |
+| 5. uninstall    | `claudes` gone from PATH, the config directory gone                                                                                                                                                                  |
+| 6. checksum     | absent before the install and absent after the uninstall on the fresh HOME — MATCH · the warmed HOME: `1c4e6085b06883f78f3705682ec2c2181ad6a09e90c463dca4934c00b86c4afe` before and after both warmed passes — MATCH |
+| 7. plain claude | `claude --version` → exit 0, `2.1.306 (Claude Code)`                                                                                                                                                                 |
 
 The warmed HOME is where the one difference that is Claude Code's, not `claudes`', CAN show up: on an earlier run of the same recipe (Node 24.13.0, npm 11.6.2, Claude Code 2.1.306), its first session on a warmed HOME rewrote the model alias (`"model": "opus"` → `"model": "opus[1m]"`), so that pass's checksum differed — `b088a8c086d859e1d7b6acf281928b3adba26d82c8c86328a35c0d80a936c9cd` — and the second pass on the same, warmed HOME matched its baseline exactly. This run's warmed HOME came back byte-identical on both passes instead. Either way the comparison is about `claudes`' own writes, and the README says so.
 
