@@ -906,19 +906,22 @@ describe("the uninstall drill record", () => {
 
   test("rejects a record that drops a step", () => {
     const record = section(brainSource, RECORD_HEADING);
-    const dropped = record.replace(/^\| 4\. session \|[^\n]*\n/m, "");
+    const dropped = record.replace(/^\|\s*4\. session\s*\|[^\n]*\n/m, "");
     expect(() => assertDrillRecord(dropped)).toThrow("4. session: no row in the record");
   });
 
   test("rejects a record whose result is empty", () => {
     const record = section(brainSource, RECORD_HEADING);
-    const emptied = record.replace(/^\| 2\. install \|[^\n]*$/m, "| 2. install |  |");
+    const emptied = record.replace(/^\|\s*2\. install\s*\|[^\n]*$/m, "| 2. install     |  |");
     expect(() => assertDrillRecord(emptied)).toThrow("2. install: the row carries no result");
   });
 
   test("rejects a checksum row that carries no digest and does not say absent", () => {
     const record = section(brainSource, RECORD_HEADING);
-    const blind = record.replace(/^\| 6\. checksum \|[^\n]*$/m, "| 6. checksum | unchanged |");
+    const blind = record.replace(
+      /^\|\s*6\. checksum\s*\|[^\n]*$/m,
+      "| 6. checksum     | unchanged |",
+    );
     expect(() => assertDrillRecord(blind)).toThrow(
       '6. checksum: the row carries no checksum and does not say "absent"',
     );
