@@ -1,0 +1,17 @@
+plan: 101-wrap-profiles-dynamic-models
+title: Wrap correctly, profiles, dynamic models
+status: planned
+owner: unassigned
+percent: 0
+current_focus: 06-doctor (B14 leaves a key on disk), then 01-gate
+slices:
+  01-gate: planned
+  02-wrap-passthrough: planned
+  03-profiles: planned
+  04-dynamic-models: planned
+  05-settings-file-lifetime: planned
+  06-doctor: planned
+evidence:
+  commits: []
+  prs: []
+last_updated: 2026-11-24
