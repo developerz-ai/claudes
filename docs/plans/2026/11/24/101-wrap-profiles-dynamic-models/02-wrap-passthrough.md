@@ -12,7 +12,9 @@ Depends on: 01. Fixes B1, B2, B3, B21, B23.
 
 ## Design
 
-`classify` looks at the first argument only, because that is what Claude Code does:
+Two steps, in order. First an off-router scan over every argument before `--`, so `-p hi --cloud x` is
+refused too. Then `classify` on the first argument only, because that is what Claude Code does. The scan
+must not mistake an option's value for a flag; where it cannot tell, refuse.
 
 | Class     | First argument or flag                                                                                                                    | Behaviour                                                                                                     |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -33,8 +35,9 @@ Depends on: 01. Fixes B1, B2, B3, B21, B23.
 
 1. `classify` with table-driven tests.
 2. Wire argv and run. Keep `execClaude` the only spawn.
-3. Verify live against a stub, for every word in the table: `claudes <word> --help` prints the same first
-   line as `claude <word> --help`, and no `POST /v1/messages` reaches the stub.
+3. Verify live against a stub, for every **manage and dispatch** word: `claudes <word> --help` prints the same
+   first line as `claude <word> --help`, and no `POST /v1/messages` reaches the stub. For offRouter: exit 64
+   and nothing spawned, `claudes ultrareview --help` included.
    Do this in a scratch `HOME`; do not run `purge`, `install`, `update` or `rm` beyond `--help`.
 4. `remote-control`: 2.1.331 refuses `--settings` before the word and accepts it after (2.1.321+). Confirm.
 5. Check whether 2.1.331 has a `--managed-settings` flag. It would outrank the generated file; if it
@@ -42,7 +45,7 @@ Depends on: 01. Fixes B1, B2, B3, B21, B23.
 
 ## Tests
 
-- `src/launch/subcommands.test.ts` — every row; a prompt that merely contains a word ("stop the server"
+- `src/launch/subcommands.test.ts` — every row; an off-router flag after other arguments is refused; a prompt that merely contains a word ("stop the server"
   as one argument) stays a session; `--` ends flag scanning.
 - `src/launch/run.test.ts` — manage: no config, dead router, still spawns the exact argv, writes no file.
 - `src/launch/run.e2e.test.ts` — a fake `claude` records argv for one word of each class.

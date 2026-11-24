@@ -31,7 +31,10 @@ newest first, then the rest alphabetically. Drop an alias whose `resolvedModel` 
 `displayName`, or the id; description is the known sizes ("128K context · 16K output"). With zero usable
 ids, emit no `modelPicker`.
 
-**Tiers.** Per family: pin → newest served → stored snapshot → `DEFAULT_TIERS`. The last two print a note.
+**Tiers.** Catalog live: pin → newest served → the strongest other family that is served (opus, sonnet, haiku
+order), with a note. Never the snapshot: a live list that dropped an id is the truth. If no Claude family is
+served, every family and the session model use the first picker row, with a note. Catalog unavailable:
+pin → snapshot → `DEFAULT_TIERS`, with a note.
 
 **Session model.** Read the `model` key from the user's settings file (`CLAUDE_CONFIG_DIR` or `~/.claude`),
 read-only. If it is a tier alias or a served id, leave it alone so a `/model` pick sticks. If it is not
@@ -41,8 +44,10 @@ model. `--model` with an unserved id: note, then pass it through, because router
 
 **Windows.** An explicit `maxContextTokens` wins. Otherwise, with W the router's window for the launch model:
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW=W` and `CLAUDE_CODE_MAX_CONTEXT_TOKENS=W`. When the launch model is a
-Claude tier id, use for the latter the smallest known window among the non-tier ids, so a mid-session switch
-cannot overflow. W unknown → emit neither. A value already in the user's shell wins, except that a claudes
+Claude tier id, use for the latter the smallest known window among the non-tier ids.
+No overflow guarantee is made across `/model`: these are session-wide, and a switch to a recognised model whose
+router window is below both W and Claude Code's own figure can overflow. Verify what Claude Code does then
+(step 3), and show the real window in each picker row. W unknown → emit neither. A value already in the user's shell wins, except that a claudes
 session nested in another must not inherit the outer one's values: mark the generated ones and drop them
 in `buildChildEnv`. Both are session-wide; document that after `/model` the window is the launch model's.
 
@@ -53,7 +58,7 @@ in `buildChildEnv`. Both are session-wide; document that after `/model` the wind
 1. Client parsing and its tests, both dialects.
 2. `catalog.ts`.
 3. Verify live: the empty-value questions above; `AUTO_COMPACT_WINDOW` at 64000, 128000 and 1000000 on a
-   recognised id; picker rows with 300 ids; a row with a `/` in the id.
+   recognised id; a switch from a 1M model to one the stub limits to 200k; picker rows with 300 ids; a row with a `/` in the id.
 4. Settings, pre-flight, run, login, README.
 5. Raise `MIN_CLAUDE_VERSION` (`src/doctor/claude-version.ts:16`) to 2.1.325 and the README's two mentions;
    older versions ignore the window for unrecognised `claude-*` ids.
@@ -66,6 +71,7 @@ in `buildChildEnv`. Both are session-wide; document that after `/model` the wind
 - Saved `model`: served, unserved, alias, `opus[1m]`, unreadable file, invalid JSON.
 - Window table: explicit, tier launch, non-tier launch, unknown, shell-set, nested.
 - Settings payload never contains a key fragment.
+- A live list that lost the opus id: neither tier nor session model uses the stored one.
 - A router that changes its list between two launches changes the second picker with no login.
 
 ## Done when

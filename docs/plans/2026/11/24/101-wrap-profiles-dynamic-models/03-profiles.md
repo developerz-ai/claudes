@@ -14,6 +14,7 @@ claudes doctor --profile work
 
 Selection: leading `--profile` → `CLAUDES_PROFILE` → the stored active profile → `default`. A named
 profile that does not exist is exit 78 and lists the names that do. It never falls through to the next rule.
+The one exception is `login --profile <name> --url <router>`, which creates it.
 
 ## Files
 
@@ -24,12 +25,17 @@ profile that does not exist is exit 78 and lists the names that do. It never fal
   never echoed, because it is where a pasted key lands. `mar_live_` contains `_`, so it cannot match.
 - `src/config/load.ts:19` — takes the profile; keeps "no HOME" apart from "no config" (B22).
 - `src/config/schema.ts:84` — optional `pins` (per family). `tiers` becomes the last resolved snapshot,
-  used only when the catalog is unavailable. `version` stays 1: the change is additive.
+  used only when the catalog is unavailable. `version` stays 1: the change is additive. A file with **no `pins`
+  key** predates it and cannot say which tiers were overrides, so all its `tiers` act as pins: an upgrade changes
+  nothing. Launch prints one note that `claudes login` switches the profile to following the router. That login
+  writes `pins` (from its flags, or empty) and prints each tier that changed with the flag that keeps the old id.
 - `src/commands/login.ts:57`, `src/commands/login-args.ts:33` — `--profile`; `--url` optional when the profile
   already has one; carry `subagentModel`, `maxContextTokens` and `pins` over; `--opus/--sonnet/--haiku`
   set pins; the value `auto` clears one.
 - `src/commands/profile.ts` (new) — `list` (name, active mark, origin; never the key), `use`, `remove`.
-- `src/commands/key.ts:26` — accept exactly `--profile <name>`, refuse anything else as today, and keep the
+- `src/commands/key.ts:26` — accept no argument (always `default`, whatever the active profile or environment
+  says, so helpers of sessions started before the upgrade still work) or exactly `--profile <name>`. Refuse
+  anything else as today, and keep the
   order: argument refusal → TTY → provider switch → config. The origin check stays.
 - `src/launch/settings.ts:28` — the helper always names its profile, `default` included, so a session keeps
   its own router whatever later logins or `profile use` do.
@@ -53,7 +59,10 @@ fail closed; say so in README.
 ## Tests
 
 - Names: traversal (`../x`), uppercase, empty, 33 characters, a key; none is echoed (`assertNoKeyFragment`).
-- A v1 `config.json` with no `pins` loads as `default` with identical behaviour.
+- A v1 `config.json` with no `pins` loads as `default`; with a live catalog offering newer ids, the launch still
+  uses its stored tiers. After a re-login it follows the catalog, and the output names each changed tier.
+- The old argument-free helper serves the `default` key, with another profile active and `CLAUDES_PROFILE` set.
+- First `login --profile work --url …` on an empty install creates it; without `--url` it is the usage error.
 - Re-login preserves the three optional fields; `auto` clears a pin.
 - Two profiles: each helper command names its own; `key --profile a` refuses when `ANTHROPIC_BASE_URL` is b's.
 - `key --profile` with a missing, invalid or extra argument: exit 64, config never read.

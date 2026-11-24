@@ -13,22 +13,22 @@ Depends on: 04. Fixes B13.
 
 Name: `settings.<profile>.<first 16 hex of SHA-256 of the payload>.json`. Equal content is the same file, so
 a second launch reuses it and never changes it under a running session. Different content is a different
-file, so pid namespaces cannot collide. `writePrivateFile` already replaces atomically; on reuse, rewrite it
-so the mtime marks use.
+file, so pid namespaces cannot collide. `writePrivateFile` already replaces atomically.
 
-Sweep by age: remove a settings file not used for 30 days, plus temp siblings older than a day. Keep the rule
-that a symlinked directory is not swept. Remove the old `settings.<pid>.json` form only when the pid is dead,
-for one release.
+**No automatic sweep of settings files, in either naming form.** Neither age nor a dead launcher pid shows that a
+detached session no longer needs its file, and no portable check does. Growth is bounded by distinct payloads, a
+few KB each. Only temp siblings older than a day are removed; a symlinked directory is still not swept.
 
-The file can hold a proxy URL with credentials, as today, and now lives longer: say so in README, and have
-`profile remove` delete that profile's settings files.
+The file can hold a proxy URL with credentials, as today, and now stays until it is removed: say so in README.
+`profile remove` deletes that profile's settings files and the uninstall removes all of them; both are explicit
+user actions.
 
 ## Tests
 
 - Same payload → same path; a changed tier, proxy or profile → a new path and the old file untouched.
 - A launch does not remove another session's file, whatever its pid.
-- Age sweep at 29 and 31 days; temp siblings; symlinked directory; foreign names untouched.
-- Old pid-named files: live kept, dead removed.
+- A settings file 60 days old and a pid-named file with a dead pid both survive a launch.
+- Temp siblings: 23 hours kept, 25 hours removed; symlinked directory and foreign names untouched.
 
 ## Done when
 
