@@ -92,9 +92,13 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+
 # Bare "login" (no --url) must exit 64: that is the usage error.
 rc=0
-./dist/claudes.js login 2>/dev/null || rc=$?
+env -i HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" PATH="$PATH" \
+  ./dist/claudes.js login 2>/dev/null || rc=$?
 if [ "$rc" -ne 64 ]; then
   echo "bin/check: ./dist/claudes.js login exited $rc, expected 64" >&2
   exit 1
@@ -102,9 +106,6 @@ fi
 
 # A passthrough with no config behind an empty HOME must exit 78 (EX_CONFIG)
 # with the exact remedy, newline-terminated — without touching the network.
-scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
-
 # "doctor" with no config behind an empty HOME: a real run now, so it must
 # exit non-zero and print a FAIL line — in the same env -i isolation as the key
 # checks below (no ambient env leaks in). The key-leak guard lives further
@@ -142,7 +143,8 @@ fi
 
 # The usage error on stderr must end with a newline (byte 10), or the shell
 # prompt would land on the error's last line.
-last_byte="$(./dist/claudes.js login 2>&1 >/dev/null | tail -c 1 | od -An -tu1 | tr -d ' \n')"
+last_byte="$(env -i HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/xdg" PATH="$PATH" \
+  ./dist/claudes.js login 2>&1 >/dev/null | tail -c 1 | od -An -tu1 | tr -d ' \n')"
 if [ "$last_byte" != "10" ]; then
   echo "bin/check: ./dist/claudes.js login stderr does not end with a newline (last byte: '$last_byte')" >&2
   exit 1
