@@ -145,3 +145,15 @@ describe("createRouterStub", () => {
     }
   });
 });
+
+test("an empty key and a bare Bearer are recorded as missing credentials", async () => {
+  const stub = await createRouterStub();
+  try {
+    for (const authorization of ["Bearer", "Bearer ", "bearer"]) {
+      expect(await postRaw(stub.baseUrl, { authorization, "x-api-key": "" }, "{}")).toBe(200);
+    }
+    expect(stub.requests().map(({ credentials }) => credentials)).toEqual([[], [], []]);
+  } finally {
+    await stub.close();
+  }
+});

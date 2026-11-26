@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { checkConflicts } from "./conflicts";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { checkConflicts, defaultReadFile, readSettingsWithinLimit } from "./conflicts";
 
 const HOME = "/home/dev";
 const CWD = "/repo";
@@ -226,4 +229,99 @@ describe("checkConflicts: saved claude.ai login", () => {
     expect(results[3]?.status).toBe("INFO");
     expect(results[3]?.title).toContain("a start-up auth warning is expected");
   });
+});
+
+test("doctor reads the custom Claude settings and credentials directory", () => {
+  const custom = "/custom/claude";
+  const results = checkConflicts(
+    deps({
+      env: { HOME, CLAUDE_CONFIG_DIR: custom },
+      readFile: files({
+        [`${custom}/settings.json`]: '{"env":{"ANTHROPIC_AUTH_TOKEN":"redacted-fixture"}}',
+        [`${custom}/.credentials.json`]: "{}",
+      }),
+    }),
+  );
+  expect(
+    results.some(
+      ({ status, title }) => status === "WARN" && title.includes(`${custom}/settings.json`),
+    ),
+  ).toBe(true);
+  expect(
+    results.some(
+      ({ status, title }) => status === "INFO" && title.includes("a saved claude.ai login exists"),
+    ),
+  ).toBe(true);
+});
+
+test("managed drop-ins are checked in order and hidden files are ignored", () => {
+  const dir = "/etc/claude-code/managed-settings.d";
+  const seen: string[] = [];
+  const results = checkConflicts(
+    deps({
+      listDirectory: (path) => {
+        expect(path).toBe(dir);
+        return [
+          "20-invalid.json",
+          "10-keys.json",
+          ".decoy.json",
+          "30-unreadable.json",
+          "other.txt",
+        ];
+      },
+      readFile: (path) => {
+        if (!path.startsWith(dir)) return undefined;
+        seen.push(path);
+        if (path.endsWith("30-unreadable.json")) throw new Error("permission denied");
+        return path.endsWith("10-keys.json") ? '{"apiKeyHelper":"fixture"}' : "{";
+      },
+    }),
+  );
+  expect(seen).toEqual([
+    `${dir}/10-keys.json`,
+    `${dir}/20-invalid.json`,
+    `${dir}/30-unreadable.json`,
+  ]);
+  const rejected = results.filter(({ status }) => status === "FAIL");
+  expect(rejected.map(({ title }) => title)).toEqual([
+    expect.stringContaining("set apiKeyHelper"),
+    expect.stringContaining("could not be parsed as JSON"),
+    expect.stringContaining("could not be read"),
+  ]);
+});
+
+test("an oversized managed drop-in fails without reading its contents", () => {
+  const dir = mkdtempSync(join(tmpdir(), "claudes-managed-"));
+  try {
+    const file = join(dir, "large.json");
+    writeFileSync(file, "{}");
+    truncateSync(file, 2 ** 20 + 1);
+    const results = checkConflicts(
+      deps({
+        listDirectory: () => ["large.json"],
+        readFile: (path) => (path.endsWith("/large.json") ? defaultReadFile(file) : undefined),
+      }),
+    );
+    expect(results.find(({ title }) => title.includes("large.json"))).toMatchObject({
+      status: "FAIL",
+      title: expect.stringContaining("could not be read"),
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("reading a growing managed file stops after one byte beyond the limit", () => {
+  const limit = 2 ** 20;
+  let supplied = 0;
+  expect(() =>
+    readSettingsWithinLimit(1, (view) => {
+      expect(view.length).toBe(limit + 1 - supplied);
+      const chunk = Math.min(view.length, 128 * 1024);
+      view.fill(0x20, 0, chunk);
+      supplied += chunk;
+      return chunk;
+    }),
+  ).toThrow("settings file is too large");
+  expect(supplied).toBe(limit + 1);
 });

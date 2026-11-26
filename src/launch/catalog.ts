@@ -15,6 +15,7 @@ export interface PickerOption {
 }
 
 export interface Catalog {
+  readonly available: boolean;
   readonly tiers: Config["tiers"];
   readonly picker: readonly PickerOption[];
   readonly entries: ReadonlyMap<string, ModelEntry>;
@@ -67,6 +68,7 @@ export function resolveCatalog(config: Config, rows?: readonly ModelEntry[]): Ca
   if (entries.size === 0) {
     notes.push("the model list is not live; using the stored tier snapshot");
     return {
+      available: rows !== undefined,
       entries,
       picker: [],
       notes,
@@ -120,5 +122,5 @@ export function resolveCatalog(config: Config, rows?: readonly ModelEntry[]): Ca
     haiku: familyModel("haiku"),
     ...(byFamily.has("fable") ? { fable: byFamily.get("fable") } : {}),
   };
-  return { entries, picker, tiers, notes };
+  return { available: true, entries, picker, tiers, notes };
 }

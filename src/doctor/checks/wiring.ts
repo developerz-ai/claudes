@@ -1,11 +1,14 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { configDir, type Env } from "../../config/paths";
+import { ConfigError } from "../../config/errors";
+import { configDir, type Env, profileFile } from "../../config/paths";
 import { writePrivateFile } from "../../config/private-file";
-import type { Config } from "../../config/schema";
+import { type Config, keyFragmentOffset } from "../../config/schema";
 import { writeConfig } from "../../config/store";
 import { buildArgv } from "../../launch/argv";
+import type { Catalog } from "../../launch/catalog";
 import { buildChildEnv } from "../../launch/env";
+import { readSavedModel, type SessionModel } from "../../launch/session-model";
 import { buildSettings } from "../../launch/settings";
 import type { CheckResult } from "../results";
 import type { ProcResult, RunProc } from "../run-proc";
@@ -58,6 +61,11 @@ export interface ProbeSignalWiring {
 
 export interface WiringDeps {
   readonly profile?: string;
+  readonly launch?: {
+    readonly catalog: Catalog;
+    readonly model: SessionModel;
+    readonly savedModel?: string;
+  };
   readonly env: Env;
   /** Where the running claudes lives, for the settings' apiKeyHelper. */
   readonly nodePath: string;
@@ -276,24 +284,39 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
 
     // The probe config: the real key and tiers, the stub's base URL.
     const probeConfig: Config = { ...config, baseUrl: stub.baseUrl };
+    const launch = deps.launch;
+    const savedModel = launch === undefined ? readSavedModel(deps.env) : launch.savedModel;
+    const profile = deps.profile ?? "default";
+    const settings = buildSettings(probeConfig, deps, deps.env, profile, launch);
+    const payload = `${JSON.stringify(settings, null, 2)}\n`;
+    if (keyFragmentOffset(payload, config.key) !== undefined) {
+      throw new ConfigError("generated wiring probe settings contain router key material");
+    }
     const settingsDir = join(probeRoot, "settings");
     const settingsPath = join(settingsDir, "settings.json");
-    writePrivateFile(
-      settingsPath,
-      `${JSON.stringify(buildSettings(probeConfig, deps, deps.env), null, 2)}\n`,
-      {
-        noun: "wiring-probe settings",
-        remedy: "re-run `claudes doctor`",
-      },
-    );
+    writePrivateFile(settingsPath, payload, {
+      noun: "wiring-probe settings",
+      remedy: "re-run `claudes doctor`",
+    });
     // The child's XDG_CONFIG_HOME: a throwaway tree inside the probe's own
     // tree, holding the key's only disk copy.
     const probeXdg = join(probeRoot, "xdg");
     createPrivateDir(probeXdg, "probe directory");
-    keyCopy = join(probeXdg, "claudes", "config.json");
+    keyCopy = profileFile(join(probeXdg, "claudes"), profile);
     writeConfig(keyCopy, probeConfig);
     const probeHome = join(probeRoot, "home");
     createPrivateDir(probeHome, "probe directory");
+
+    if (launch !== undefined && launch.model.model === undefined && savedModel !== undefined) {
+      const saved = JSON.stringify({ model: savedModel });
+      if (keyFragmentOffset(saved, config.key) !== undefined) {
+        throw new ConfigError("saved wiring probe model contains router key material");
+      }
+      writePrivateFile(join(probeHome, ".claude", "settings.json"), saved, {
+        noun: "wiring-probe user settings",
+        remedy: "re-run `claudes doctor`",
+      });
+    }
 
     const argv = (deps.buildArgv ?? buildArgv)([...WIRING_ARGS], settingsPath);
     if (!argv.ok) {
@@ -317,7 +340,15 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
       });
       // The child is gone: the key's only disk copy goes with it.
       removeKeyCopy();
-      outcome = evaluate(stub, config, proc, deps.timeoutMs ?? WIRING_TIMEOUT_MS, deps.profile);
+      outcome = evaluate(
+        stub,
+        config,
+        proc,
+        deps.timeoutMs ?? WIRING_TIMEOUT_MS,
+        deps.profile,
+        deps.launch,
+        savedModel,
+      );
     }
   } catch (err) {
     if (isSymlinkedPathError(err)) {
@@ -436,6 +467,8 @@ function evaluate(
   proc: ProcResult,
   timeoutMs: number,
   profile = "default",
+  launch?: WiringDeps["launch"],
+  savedModel?: string,
 ): CheckResult {
   const expected = credentialHash(config.key);
   const requests = stub.requests();
@@ -449,12 +482,19 @@ function evaluate(
       fix: "remove the competing credential (see the conflicts check above) and re-run `claudes doctor`",
     };
   }
-  const hits = requests.filter(
-    (request) =>
-      request.method === "POST" &&
-      request.pathname === "/v1/messages" &&
-      request.credentials.some((c) => c.hash === expected),
+  const messages = requests.filter(
+    (request) => request.method === "POST" && request.pathname === "/v1/messages",
   );
+  const hits = messages.filter((request) =>
+    request.credentials.some((credential) => credential.hash === expected),
+  );
+  if (messages.some(({ credentials }) => credentials.length === 0)) {
+    return {
+      status: "FAIL",
+      title: "wiring probe: Claude Code sent a request without a usable credential",
+      fix: "check that the isolated settings file and its key helper can be read and executed",
+    };
+  }
   if (hits.length === 0) {
     if (proc.timedOut) {
       return {
@@ -469,18 +509,33 @@ function evaluate(
       fix: "the generated settings file must exist and be readable for the whole run — re-run `claudes doctor` and check the conflicts above",
     };
   }
-  const tierIds = new Set<string>([config.tiers.opus, config.tiers.sonnet, config.tiers.haiku]);
-  if (config.subagentModel !== undefined) {
-    tierIds.add(config.subagentModel);
-  }
+  const tierIds = new Set<string>(Object.values(launch?.catalog.tiers ?? config.tiers));
+  if (config.subagentModel !== undefined) tierIds.add(config.subagentModel);
+  const selected = launch?.model.launchId;
   const hit = hits.find(
-    (candidate) => candidate.model !== undefined && tierIds.has(candidate.model),
+    ({ model }) =>
+      model !== undefined && (selected === undefined ? tierIds.has(model) : model === selected),
   );
   if (hit === undefined) {
     const model = hits.at(0)?.model;
+    if (
+      savedModel !== undefined &&
+      !tierIds.has(savedModel) &&
+      (launch === undefined || launch.model.model !== undefined)
+    ) {
+      return {
+        status: "FAIL",
+        title:
+          "wiring probe: Claude Code used an unexpected model and the saved model is outside this profile",
+        fix: "select a model served by the profile and check for a model override in Claude Code settings",
+      };
+    }
     return {
       status: "FAIL",
-      title: `wiring probe: the request's model (${model ?? "unreadable"}) is not a configured tier`,
+      title:
+        selected === undefined
+          ? `wiring probe: the request's model (${model ?? "unreadable"}) is not a configured tier`
+          : "wiring probe: the request used a different model than the launcher resolved",
       fix: `run \`claudes login --profile ${profile}\` so the pinned tiers match what the router serves`,
     };
   }

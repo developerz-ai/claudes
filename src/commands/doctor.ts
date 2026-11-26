@@ -4,8 +4,14 @@ import type { Env } from "../config/paths";
 import { validProfileName } from "../config/profile";
 import { keyFragmentOffset } from "../config/schema";
 import { checkConfig } from "../doctor/checks/config";
-import { checkConflicts, defaultReadFile, type ReadText } from "../doctor/checks/conflicts";
+import {
+  checkConflicts,
+  defaultReadFile,
+  type ListDirectory,
+  type ReadText,
+} from "../doctor/checks/conflicts";
 import { checkEffectiveModel } from "../doctor/checks/effective-model";
+import { checkLaunchGate } from "../doctor/checks/launch-gate";
 import { checkLive, type PostFetch } from "../doctor/checks/live";
 import { checkRouter } from "../doctor/checks/router";
 import { checkRuntime } from "../doctor/checks/runtime";
@@ -13,9 +19,11 @@ import { checkWiring, type ProbeSignalWiring } from "../doctor/checks/wiring";
 import { anyFailed, type CheckResult } from "../doctor/results";
 import { type RunProc, realRunProc } from "../doctor/run-proc";
 import type { RouterStub } from "../doctor/stub-server";
+import { resolveCatalog } from "../launch/catalog";
 import { isTruthyToggle } from "../launch/provider-switches";
 import { resolveExecutable, runningScriptPath } from "../launch/run";
-import type { FetchLike } from "../router/client";
+import { readSavedModel, sessionModel } from "../launch/session-model";
+import type { FetchLike, ModelEntry } from "../router/client";
 import { scrub } from "../router/errors";
 import { VERSION } from "../version";
 
@@ -40,6 +48,7 @@ export interface DoctorDeps {
   readonly resolveExecutable?: (name: string, env: Env) => string | undefined;
   readonly load?: (env: Env) => LoadResult;
   readonly readFile?: ReadText;
+  readonly listDirectory?: ListDirectory;
   /**
    * Creates the wiring probe's throwaway tree under the config directory.
    * Defaults to the probe's own `createProbeDir`; the seam exists so the
@@ -127,7 +136,7 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
   key = configCheck.config?.key;
   report(configCheck.results);
 
-  let modelIds: string[] | undefined;
+  let modelEntries: readonly ModelEntry[] | undefined;
   if (configCheck.config !== undefined) {
     const routerCheck = await checkRouter({
       config: configCheck.config,
@@ -135,7 +144,7 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
       fetch: deps.fetch,
     });
     report(routerCheck.results);
-    modelIds = routerCheck.modelIds;
+    modelEntries = routerCheck.modelEntries;
   }
 
   report(
@@ -144,8 +153,12 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
       platform: deps.platform,
       cwd: deps.cwd,
       readFile: deps.readFile,
+      listDirectory: deps.listDirectory,
     }),
   );
+
+  const launchGate = checkLaunchGate(deps.env);
+  if (launchGate !== undefined) report([launchGate]);
 
   if (configCheck.config === undefined) {
     report([
@@ -160,33 +173,45 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
     return anyFailed(results) ? 1 : 0;
   }
 
-  report([
-    await checkWiring(
-      {
-        env: deps.env,
-        profile: configCheck.profile,
-        nodePath: deps.nodePath,
-        scriptPath: deps.scriptPath,
-        claudePath,
-        runProc: deps.runProc,
-        probeDir: deps.probeDir,
-        rm: deps.rm,
-        signals: deps.signals,
-        createStub: deps.createStub,
-      },
-      configCheck.config,
-    ),
-  ]);
-  if (live) {
-    report([await checkLive({ config: configCheck.config, fetch: deps.postFetch })]);
-  }
-  if (modelIds !== undefined) {
-    report(
-      checkEffectiveModel({ config: configCheck.config, profile: configCheck.profile, modelIds }),
-    );
+  const catalog = resolveCatalog(configCheck.config, modelEntries);
+  const savedModel = readSavedModel(deps.env);
+  const model = sessionModel(configCheck.config, catalog, deps.env, savedModel, undefined);
+  if (launchGate === undefined) {
+    report([
+      await checkWiring(
+        {
+          env: deps.env,
+          profile: configCheck.profile,
+          launch: { catalog, model, savedModel },
+          nodePath: deps.nodePath,
+          scriptPath: deps.scriptPath,
+          claudePath,
+          runProc: deps.runProc,
+          probeDir: deps.probeDir,
+          rm: deps.rm,
+          signals: deps.signals,
+          createStub: deps.createStub,
+        },
+        configCheck.config,
+      ),
+    ]);
   } else {
-    report([{ status: "INFO", title: "effective models skipped — /v1/models did not answer" }]);
+    report([
+      {
+        status: "INFO",
+        title: "wiring probe skipped because the launcher would refuse this environment",
+      },
+    ]);
   }
+  if (live) {
+    report([
+      await checkLive({
+        config: { ...configCheck.config, tiers: catalog.tiers },
+        fetch: deps.postFetch,
+      }),
+    ]);
+  }
+  report(checkEffectiveModel(configCheck.config, catalog, model, configCheck.profile));
   return anyFailed(results) ? 1 : 0;
 }
 

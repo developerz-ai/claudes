@@ -71,6 +71,11 @@ export function explicitModel(args: readonly string[]): string | undefined {
 
 export interface SessionModel {
   readonly model?: string;
+  readonly launchId?: string;
+  readonly window?: {
+    readonly tokens: number;
+    readonly source: "shell" | "profile override" | "router catalog";
+  };
   readonly env: Readonly<Record<string, string>>;
   readonly notes: readonly string[];
 }
@@ -91,7 +96,10 @@ export function sessionModel(
     notes.push("the saved model is not served; starting on the opus tier");
   if (explicit !== undefined && live && explicitId === undefined)
     notes.push("the requested --model is not in the live catalog; passing it through");
-  const launchId = explicit !== undefined ? explicitId : (savedId ?? catalog.tiers.opus);
+  const launchId =
+    explicit !== undefined
+      ? (explicitId ?? explicit)
+      : (savedId ?? (live ? undefined : saved) ?? catalog.tiers.opus);
   const entry = launchId === undefined ? undefined : catalog.entries.get(launchId);
   const target =
     entry?.resolvedModel === undefined ? undefined : catalog.entries.get(entry.resolvedModel);
@@ -124,5 +132,19 @@ export function sessionModel(
     }
   }
   env[WINDOW_MARKER] = generated.join(",");
-  return { model: explicit === undefined && invalidSaved ? "opus" : undefined, env, notes };
+  const windowName =
+    launchId !== undefined && parseTierId(launchId) !== undefined ? WINDOW_VARS[0] : WINDOW_VARS[1];
+  const tokens = Number(env[windowName]);
+  const source = !generated.includes(windowName)
+    ? "shell"
+    : config.maxContextTokens === undefined
+      ? "router catalog"
+      : "profile override";
+  return {
+    model: explicit === undefined && invalidSaved ? "opus" : undefined,
+    launchId,
+    window: Number.isSafeInteger(tokens) && tokens > 0 ? { tokens, source } : undefined,
+    env,
+    notes,
+  };
 }

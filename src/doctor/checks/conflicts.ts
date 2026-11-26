@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Env } from "../../config/paths";
 import { isStripped } from "../../launch/env";
 import type { CheckResult } from "../results";
@@ -10,18 +11,21 @@ import type { CheckResult } from "../results";
  */
 export type ReadText = (path: string) => string | undefined;
 
+export type ListDirectory = (path: string) => readonly string[];
+
 export interface ConflictsDeps {
   readonly env: Env;
   readonly platform: string;
   readonly cwd: string;
   readonly readFile?: ReadText;
+  readonly listDirectory?: ListDirectory;
 }
 
 /** The settings keys that would fight the generated --settings file, by name. */
 const CONFLICTING_SETTINGS_KEYS = ["apiKeyHelper", "forceLoginMethod"] as const;
 
 /** Where Claude Code keeps a claude.ai login on Linux/BSD-style systems. */
-const CREDENTIALS_RELATIVE = ".claude/.credentials.json";
+const CREDENTIALS_RELATIVE = ".credentials.json";
 
 /** The managed-settings path per platform; undefined where doctor does not know it. */
 function managedSettingsPath(platform: string): string | undefined {
@@ -34,20 +38,48 @@ function managedSettingsPath(platform: string): string | undefined {
   return undefined;
 }
 
+const MAX_SETTINGS_BYTES = 2 ** 20;
+
+/** Bound the actual read as well as the size observed when opening the file. */
+export function readSettingsWithinLimit(
+  size: number,
+  readInto: (buffer: Uint8Array) => number,
+): string {
+  if (size > MAX_SETTINGS_BYTES) throw new Error("settings file is too large");
+  const bytes = Buffer.alloc(MAX_SETTINGS_BYTES + 1);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const count = readInto(bytes.subarray(offset));
+    if (count === 0) break;
+    offset += count;
+  }
+  if (offset > MAX_SETTINGS_BYTES) throw new Error("settings file is too large");
+  return bytes.toString("utf8", 0, offset);
+}
+
 /**
  * The real ReadText: ENOENT/ENOTDIR read as absent; any other failure throws,
  * so an existing-but-unreadable file (mode 000, a directory at the path) can
  * never pass for a missing one.
  */
 export const defaultReadFile: ReadText = (path) => {
+  let fd: number | undefined;
   try {
-    return readFileSync(path, "utf8");
+    const descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    fd = descriptor;
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile()) throw new Error("settings path is not a regular file");
+    return readSettingsWithinLimit(stat.size, (bytes) =>
+      readSync(descriptor, bytes, 0, bytes.length, null),
+    );
   } catch (err) {
     const code = (err as { readonly code?: unknown }).code;
     if (code === "ENOENT" || code === "ENOTDIR") {
       return undefined;
     }
     throw err;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 };
 
@@ -61,18 +93,18 @@ export const defaultReadFile: ReadText = (path) => {
  */
 export function checkConflicts(deps: ConflictsDeps): CheckResult[] {
   const readFile = deps.readFile ?? defaultReadFile;
-  const home = absoluteHome(deps.env);
+  const userDir = claudeConfigDir(deps.env);
   return [
     shellEnvResult(deps.env),
-    settingsResult(home, deps.cwd, readFile),
-    managedResult(deps.platform, readFile),
-    claudeLoginResult(home, deps.platform, readFile),
+    settingsResult(userDir, deps.cwd, readFile),
+    ...managedResults(deps.platform, readFile, deps.listDirectory ?? listManagedDirectory),
+    claudeLoginResult(userDir, deps.platform, readFile),
   ];
 }
 
-function absoluteHome(env: Env): string | undefined {
-  const home = env.HOME;
-  return home?.startsWith("/") ? home : undefined;
+function claudeConfigDir(env: Env): string | undefined {
+  if (env.CLAUDE_CONFIG_DIR?.startsWith("/")) return env.CLAUDE_CONFIG_DIR;
+  return env.HOME?.startsWith("/") ? `${env.HOME}/.claude` : undefined;
 }
 
 /** Shell env, presence only: claudes strips these; plain `claude` would use them. */
@@ -97,7 +129,7 @@ interface SettingsSource {
 /** User, project and local settings, as Claude Code itself orders them. */
 function settingsSources(home: string | undefined, cwd: string): SettingsSource[] {
   return [
-    { label: "user settings", path: under(home, ".claude/settings.json") },
+    { label: "user settings", path: under(home, "settings.json") },
     { label: "project settings", path: `${cwd}/.claude/settings.json` },
     { label: "local settings", path: `${cwd}/.claude/settings.local.json` },
   ];
@@ -177,14 +209,45 @@ function conflictingKeys(text: string): string[] | undefined {
   return [...names].sort();
 }
 
-function managedResult(platform: string, readFile: ReadText): CheckResult {
+const listManagedDirectory: ListDirectory = (path) => {
+  try {
+    return readdirSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+};
+
+function managedResults(platform: string, readFile: ReadText, list: ListDirectory): CheckResult[] {
   const path = managedSettingsPath(platform);
   if (path === undefined) {
-    return {
-      status: "INFO",
-      title: `the managed-settings location is not known on ${platform}; skipped`,
-    };
+    return [
+      {
+        status: "INFO",
+        title: `the managed-settings location is not known on ${platform}; skipped`,
+      },
+    ];
   }
+  const results = [managedResult(path, readFile)];
+  const directory = join(dirname(path), "managed-settings.d");
+  try {
+    const paths = list(directory)
+      .filter((name) => !name.startsWith(".") && !name.includes("/") && name.endsWith(".json"))
+      .sort();
+    for (const name of paths) {
+      results.push(managedResult(join(directory, name), readFile));
+    }
+  } catch {
+    results.push({
+      status: "FAIL",
+      title: `managed settings directory ${directory} could not be read`,
+      fix: "make the managed settings directory readable",
+    });
+  }
+  return results;
+}
+
+function managedResult(path: string, readFile: ReadText): CheckResult {
   let text: string | undefined;
   try {
     text = readFile(path);

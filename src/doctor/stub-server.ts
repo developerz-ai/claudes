@@ -175,14 +175,13 @@ function credentialsOf(req: IncomingMessage): RecordedCredential[] {
     credentials.push({ header: "x-api-key", hash: credentialHash(xKey) });
   }
   const auth = req.headers.authorization;
-  if (typeof auth === "string" && auth !== "") {
-    if (auth.startsWith("Bearer ")) {
-      const bearer = auth.slice("Bearer ".length);
-      if (bearer !== "") {
-        credentials.push({ header: "authorization", hash: credentialHash(bearer) });
-      }
-    } else {
-      credentials.push({ header: "authorization", hash: credentialHash(auth) });
+  if (typeof auth === "string" && auth.trim() !== "") {
+    const credential = auth
+      .trim()
+      .replace(/^Bearer(?:\s+|$)/i, "")
+      .trim();
+    if (credential !== "") {
+      credentials.push({ header: "authorization", hash: credentialHash(credential) });
     }
   }
   const proxyAuth = req.headers["proxy-authorization"];
