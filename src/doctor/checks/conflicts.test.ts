@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkConflicts, defaultReadFile } from "./conflicts";
+import { checkConflicts, defaultReadFile, readSettingsWithinLimit } from "./conflicts";
 
 const HOME = "/home/dev";
 const CWD = "/repo";
@@ -309,4 +309,19 @@ test("an oversized managed drop-in fails without reading its contents", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("reading a growing managed file stops after one byte beyond the limit", () => {
+  const limit = 2 ** 20;
+  let supplied = 0;
+  expect(() =>
+    readSettingsWithinLimit(1, (view) => {
+      expect(view.length).toBe(limit + 1 - supplied);
+      const chunk = Math.min(view.length, 128 * 1024);
+      view.fill(0x20, 0, chunk);
+      supplied += chunk;
+      return chunk;
+    }),
+  ).toThrow("settings file is too large");
+  expect(supplied).toBe(limit + 1);
 });

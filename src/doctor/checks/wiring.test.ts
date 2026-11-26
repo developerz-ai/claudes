@@ -760,29 +760,38 @@ test("an unexpected probe model and a foreign saved model get a separate verdict
   }
 });
 
-test("a good model request cannot mask another request with a missing key", async () => {
-  const s = scratch();
-  try {
-    const fake = fakeClaudeProc();
-    const result = await checkWiring(
-      deps(s, async (command, argv, options) => {
-        const path = argv[argv.indexOf("--settings") + 1];
-        if (path === undefined) throw new Error("missing probe settings");
-        const settings = JSON.parse(readFileSync(path, "utf8"));
-        const bad = await fetch(`${settings.env.ANTHROPIC_BASE_URL}/v1/messages`, {
-          method: "POST",
-          headers: { authorization: "Bearer" },
-          body: "{}",
-        });
-        await bad.text();
-        return fake.runProc(command, argv, options);
-      }),
-      sampleConfig(),
-    );
-    expect(result.status).toBe("FAIL");
-    expect(result.title).toContain("without a usable credential");
-    assertNoKeyFragment(result.title + result.fix, KEY);
-  } finally {
-    cleanup(s);
-  }
-});
+for (const order of ["good first", "missing key first"]) {
+  test(`a good model request cannot mask a missing key (${order})`, async () => {
+    const s = scratch();
+    try {
+      const config = sampleConfig();
+      const model = config.tiers.sonnet;
+      const fake = fakeClaudeProc({ model });
+      const result = await checkWiring(
+        deps(s, async (command, argv, options) => {
+          const path = argv[argv.indexOf("--settings") + 1];
+          if (path === undefined) throw new Error("missing probe settings");
+          const settings = JSON.parse(readFileSync(path, "utf8"));
+          const postMissingKey = async (): Promise<void> => {
+            const bad = await fetch(`${settings.env.ANTHROPIC_BASE_URL}/v1/messages`, {
+              method: "POST",
+              headers: { authorization: "Bearer" },
+              body: JSON.stringify({ model }),
+            });
+            await bad.text();
+          };
+          if (order === "missing key first") await postMissingKey();
+          const outcome = await fake.runProc(command, argv, options);
+          if (order === "good first") await postMissingKey();
+          return outcome;
+        }),
+        config,
+      );
+      expect(result.status).toBe("FAIL");
+      expect(result.title).toContain("without a usable credential");
+      assertNoKeyFragment(result.title + result.fix, KEY);
+    } finally {
+      cleanup(s);
+    }
+  });
+}
