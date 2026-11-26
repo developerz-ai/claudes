@@ -140,8 +140,8 @@ export async function models(
     entries.set(row.id, {
       id: row.id,
       displayName: displayLabel(row.display_name, key),
-      contextTokens: positiveSize(row.max_input_tokens ?? row.context_length),
-      maxOutputTokens: positiveSize(row.max_tokens ?? row.max_completion_tokens),
+      contextTokens: positiveSize(row.max_input_tokens) ?? positiveSize(row.context_length),
+      maxOutputTokens: positiveSize(row.max_tokens) ?? positiveSize(row.max_completion_tokens),
       resolvedModel: safeId(row.resolved_model, key) ? row.resolved_model : undefined,
     });
   }

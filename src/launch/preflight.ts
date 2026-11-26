@@ -116,12 +116,16 @@ export async function preflightCatalog(
   fetchImpl: FetchLike,
   timeoutMs: number,
 ): Promise<{ readonly rows?: readonly ModelEntry[]; readonly rejected: boolean }> {
-  const catalog = models(config.baseUrl, config.key, fetchImpl, timeoutMs).then(
-    (rows) => ({ rows, rejected: false }),
-    (error: unknown) => ({
-      rejected: error instanceof RouterError && (error.status === 401 || error.status === 403),
-    }),
-  );
+  // A listener on the saved address must first answer the router health check.
   await preflight(config.baseUrl, fetchImpl, timeoutMs);
-  return await catalog;
+  try {
+    return {
+      rows: await models(config.baseUrl, config.key, fetchImpl, timeoutMs),
+      rejected: false,
+    };
+  } catch (error) {
+    return {
+      rejected: error instanceof RouterError && (error.status === 401 || error.status === 403),
+    };
+  }
 }

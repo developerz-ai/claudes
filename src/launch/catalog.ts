@@ -83,7 +83,7 @@ export function resolveCatalog(config: Config, rows?: readonly ModelEntry[]): Ca
   );
   const candidates = visible.length === 0 ? ordered : visible;
   const byFamily = new Map<ModelFamily, string>();
-  for (const entry of candidates) {
+  for (const entry of ordered) {
     const family = parseTierId(entry.id)?.family;
     if (family !== undefined && !byFamily.has(family)) byFamily.set(family, entry.id);
   }

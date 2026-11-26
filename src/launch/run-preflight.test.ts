@@ -415,3 +415,16 @@ describe("launch catalog preflight", () => {
     });
   }
 });
+
+test("health failure prevents any authenticated catalog request", async () => {
+  const requestPaths: string[] = [];
+  const fetch: FetchLike = async (url, init) => {
+    requestPaths.push(new URL(url).pathname);
+    expect(init.headers.Authorization === undefined).toBe(true);
+    return new Response(null, { status: 404 });
+  };
+  expect(await h.drive(["-p", "hello"], { fetch })).toBe(69);
+  expect(requestPaths).toEqual(["/healthz"]);
+  expect(h.spawnCalls).toEqual([]);
+  assertNoKeyFragment(errText(), KEY);
+});

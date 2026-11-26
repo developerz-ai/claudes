@@ -738,8 +738,9 @@ test("models parses both size dialects and withholds hostile catalog fields", as
         {
           id: "fixture/model",
           display_name: "Fixture\nmodel",
-          max_input_tokens: null,
+          max_input_tokens: 0,
           context_length: 128000,
+          max_tokens: "16000",
           max_completion_tokens: 16000,
         },
         { id: "anthropic", max_input_tokens: 200000, max_tokens: 32000 },

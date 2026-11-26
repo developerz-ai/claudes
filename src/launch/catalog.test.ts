@@ -54,3 +54,14 @@ test("the catalog can route non-Claude models and falls back on listing failure"
   expect(offline.tiers).toEqual(config.tiers);
   expect(offline.notes).toContain("the model list is not live; using the stored tier snapshot");
 });
+
+test("a served family alias remains a tier candidate even when hidden from the picker", () => {
+  const config = sampleConfig({ pins: {} });
+  const catalog = resolveCatalog(config, [
+    { id: "claude-opus-5-5" },
+    { id: "claude-sonnet-4-6", resolvedModel: "provider/model" },
+    { id: "provider/model" },
+  ]);
+  expect(catalog.tiers.sonnet).toBe("claude-sonnet-4-6");
+  expect(catalog.picker.map(({ model }) => model)).toEqual(["claude-opus-5-5", "provider/model"]);
+});
