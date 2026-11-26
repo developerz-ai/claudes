@@ -2,6 +2,7 @@ import { rmSync } from "node:fs";
 import type { LoadResult } from "../config/load";
 import type { Env } from "../config/paths";
 import { validProfileName } from "../config/profile";
+import { keyFragmentOffset } from "../config/schema";
 import { checkConfig } from "../doctor/checks/config";
 import { checkConflicts, defaultReadFile, type ReadText } from "../doctor/checks/conflicts";
 import { checkEffectiveModel } from "../doctor/checks/effective-model";
@@ -91,12 +92,17 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
   }
 
   const results: CheckResult[] = [];
+  let key: string | undefined;
+  const safeText = (text: string): string =>
+    key !== undefined && keyFragmentOffset(text, key) !== undefined
+      ? "(details withheld)"
+      : scrub(text);
   const report = (incoming: readonly CheckResult[]) => {
     for (const result of incoming) {
       results.push(result);
-      deps.stdout(scrub(`[${result.status}] ${result.title}\n`));
+      deps.stdout(`[${result.status}] ${safeText(result.title)}\n`);
       if (result.fix !== undefined) {
-        deps.stdout(scrub(`       fix: ${result.fix}\n`));
+        deps.stdout(`       fix: ${safeText(result.fix)}\n`);
       }
     }
   };
@@ -118,6 +124,7 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
     env: { ...deps.env, ...(profile === undefined ? {} : { CLAUDES_PROFILE: profile }) },
     load: deps.load,
   });
+  key = configCheck.config?.key;
   report(configCheck.results);
 
   let modelIds: string[] | undefined;

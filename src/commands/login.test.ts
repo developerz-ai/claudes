@@ -227,14 +227,15 @@ test("re-login without a URL preserves profile settings and can clear a pin", as
   expect((await login(["--profile", "work", "--url", ROUTER], h.deps)).ok).toBe(true);
   writeConfig(path, {
     ...readConfig(path),
-    pins: { opus: "claude-opus-4-6", haiku: "claude-haiku-4-5" },
+    pins: { opus: "claude-opus-1", haiku: "claude-haiku-1" },
     subagentModel: "claude-sonnet-4-6",
     maxContextTokens: 150000,
   });
   expect((await login(["--profile", "work", "--haiku", "auto"], h.deps)).ok).toBe(true);
   expect(readConfig(path)).toMatchObject({
     baseUrl: ROUTER,
-    pins: { opus: "claude-opus-4-6" },
+    pins: { opus: "claude-opus-1" },
+    tiers: { opus: "claude-opus-1", haiku: "claude-haiku-4-5" },
     subagentModel: "claude-sonnet-4-6",
     maxContextTokens: 150000,
   });
@@ -253,4 +254,24 @@ test("concurrent logins to different profiles preserve both configs", async () =
   for (const name of ["work", "personal"]) {
     expect(readConfig(profileFile(dir, name)).baseUrl).toBe(ROUTER);
   }
+});
+
+test("legacy migration reports no fragment of the replaced credential", async () => {
+  const previousKey = `mar_live_${"w".repeat(32)}`;
+  writeConfig(configPath(home), {
+    version: 1,
+    baseUrl: ROUTER,
+    key: previousKey,
+    tiers: {
+      opus: `claude-opus-${previousKey.slice(-8)}`,
+      sonnet: "claude-sonnet-1",
+      haiku: "claude-haiku-1",
+    },
+  });
+  const h = harness(home, { realStore: true, stdin: KEY });
+  expect((await login([], h.deps)).ok).toBe(true);
+  const output = h.stdout.join("\n");
+  expect(output).toContain("(details withheld)");
+  assertNoKeyFragment(output, previousKey);
+  assertNoKeyFragment(output, KEY);
 });

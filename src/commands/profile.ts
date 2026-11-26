@@ -1,4 +1,4 @@
-import { lstatSync, unlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { loadConfig } from "../config/load";
 import { activeProfileFile, configDir, type Env, profileFile } from "../config/paths";
 import { writePrivateFile } from "../config/private-file";
@@ -42,34 +42,49 @@ export function runProfile(
       return 0;
     }
     if (name === undefined) return fail(64, USAGE);
-    if (command === "use") {
-      const loaded = loadConfig(env, name);
-      if (!loaded.ok) return fail(loaded.exitCode, loaded.message);
-      writePrivateFile(activeProfileFile(dir), `${name}\n`, {
-        noun: "active profile",
-        remedy: "check the config directory and run claudes profile use again",
-      });
-      out(`active profile: ${name}`);
-      return 0;
-    }
-    if (activeProfile(dir) === name) return fail(64, "cannot remove the active profile");
     const directory = lstatSync(dir);
-    const path = profileFile(dir, name);
-    const file = lstatSync(path);
     const uid = process.getuid?.();
     if (
       !directory.isDirectory() ||
-      !file.isFile() ||
-      (uid !== undefined && (directory.uid !== uid || file.uid !== uid))
+      (uid !== undefined && directory.uid !== uid) ||
+      (directory.mode & 0o077) !== 0
     ) {
-      return fail(
-        78,
-        "refusing to remove a profile outside the caller-owned config directory or a non-regular file",
-      );
+      return fail(78, "profile changes require a private, caller-owned config directory");
     }
-    unlinkSync(path);
-    out(`removed profile: ${name}`);
-    return 0;
+    const lock = `${dir}/.profile-lock`;
+    try {
+      mkdirSync(lock, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return fail(75, "another profile change is in progress; retry once it exits");
+    }
+    try {
+      if (command === "use") {
+        const loaded = loadConfig(env, name);
+        if (!loaded.ok) return fail(loaded.exitCode, loaded.message);
+        writePrivateFile(activeProfileFile(dir), `${name}\n`, {
+          noun: "active profile",
+          remedy: "check the config directory and run claudes profile use again",
+        });
+        out(
+          keyFragmentOffset(name, loaded.config.key) === undefined
+            ? `active profile: ${name}`
+            : "active profile updated",
+        );
+        return 0;
+      }
+      if (activeProfile(dir) === name) return fail(64, "cannot remove the active profile");
+      const path = profileFile(dir, name);
+      const file = lstatSync(path);
+      if (!file.isFile() || (uid !== undefined && file.uid !== uid)) {
+        return fail(78, "refusing to remove a profile that is not a caller-owned regular file");
+      }
+      unlinkSync(path);
+      out("profile removed");
+      return 0;
+    } finally {
+      rmdirSync(lock);
+    }
   } catch (error) {
     return fail(78, error instanceof Error ? error.message : "could not access the profile");
   }

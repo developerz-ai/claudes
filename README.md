@@ -110,7 +110,10 @@ Named profiles use separate `config.<name>.json` files.
 
 `claudes profile list` shows names and router origins and marks the active
 profile. `claudes profile remove work` refuses the active profile. A
-session whose profile is removed fails its next credential lookup.
+session whose profile is removed fails its next credential lookup. Profile
+changes share a lock. If a forcibly terminated command leaves an empty
+`.profile-lock` directory inside the private config directory, remove the
+lock directory after confirming no profile changes are running.
 
 ## What it does and doesn't do
 

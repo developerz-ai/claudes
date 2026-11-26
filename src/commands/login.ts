@@ -180,7 +180,10 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
   }
 
   const report = (text: string): void => {
-    deps.stdout(keyFragmentOffset(text, key) === undefined ? scrub(text) : "(details withheld)");
+    const carriesKey =
+      keyFragmentOffset(text, key) !== undefined ||
+      (prior !== undefined && keyFragmentOffset(text, prior.key) !== undefined);
+    deps.stdout(carriesKey ? "(details withheld)" : scrub(text));
   };
   report(`logged in to ${url} (router version ${routerVersion})`);
   deps.stdout(`key ${REDACTED_KEY}`);

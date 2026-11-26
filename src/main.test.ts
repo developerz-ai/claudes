@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -110,6 +111,12 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
         tiers: { opus: "claude-opus-4-6", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5" },
       });
     }
+    const lock = join(dir, ".profile-lock");
+    mkdirSync(lock);
+    expect(runMain(["profile", "use", "work"]).status).toBe(75);
+    expect(runMain(["profile", "remove", "work"]).status).toBe(75);
+    expect(existsSync(profileFile(dir, "work"))).toBe(true);
+    rmdirSync(lock);
     expect(runMain(["profile", "use", "work"]).status).toBe(0);
     const listed = runMain(["profile", "list"]);
     expect(listed.status).toBe(0);
@@ -306,13 +313,13 @@ interface RouterStack {
 /** The model ids the stack advertises: one per tier family, each a parsable id. */
 const STACK_MODEL_IDS = ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"];
 
-async function startRouterStack(): Promise<RouterStack> {
+async function startRouterStack(beforeMessage?: () => Promise<void>): Promise<RouterStack> {
   const requests: StackRequest[] = [];
   const server = createServer((req, res) => {
     req.on("data", () => {
       // The body is not read: the drill only cares about the headers.
     });
-    req.on("end", () => {
+    req.on("end", async () => {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const credentials: string[] = [];
       const apiKey = req.headers["x-api-key"];
@@ -337,6 +344,7 @@ async function startRouterStack(): Promise<RouterStack> {
         return;
       }
       if (pathname === "/v1/messages") {
+        if (beforeMessage !== undefined) await beforeMessage();
         answerJson(res, 200, {
           id: "msg_drill",
           type: "message",
@@ -779,12 +787,30 @@ describe("the uninstall drill", () => {
 test(
   "two simultaneous profiles send only their own key to each router",
   async () => {
-    const stacks = await Promise.all([startRouterStack(), startRouterStack()]);
-    const fixtures = [
-      { name: "work", key: KEY, stack: stacks[0] },
-      { name: "personal", key: `mar_live_${"p".repeat(32)}`, stack: stacks[1] },
-    ] as const;
+    let messages = 0;
+    let release = () => {};
+    const repliesReady = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let expired = false;
+    const deadline = setTimeout(() => {
+      expired = true;
+      release();
+    }, 5000);
+    const beforeMessage = async (): Promise<void> => {
+      if (++messages === 2) release();
+      await repliesReady;
+    };
+    const started: RouterStack[] = [];
     try {
+      const work = await startRouterStack(beforeMessage);
+      started.push(work);
+      const personal = await startRouterStack(beforeMessage);
+      started.push(personal);
+      const fixtures = [
+        { name: "work", key: KEY, stack: work },
+        { name: "personal", key: `mar_live_${"p".repeat(32)}`, stack: personal },
+      ] as const;
       const node = Bun.which("node");
       if (node === null) throw new Error("the profile e2e requires Node");
       symlinkSync(node, join(scratch, "bin", "node"));
@@ -813,12 +839,16 @@ test(
         }),
       ]);
       expect(sessions.map(({ status }) => status)).toEqual([0, 0]);
+      expect(expired).toBe(false);
       for (const { key, stack } of fixtures) {
         for (const { stdout, stderr } of [...logins, ...sessions]) {
           assertNoKeyFragment(stdout + stderr, key);
         }
         const requests = stack.requests();
-        expect(requests.filter(({ pathname }) => pathname === "/v1/messages")).toHaveLength(1);
+        const requestsWithMessages = requests.filter(({ pathname }) => pathname === "/v1/messages");
+        expect(requestsWithMessages.map(({ credentials }) => credentials)).toEqual([
+          [credentialHash(key)],
+        ]);
         expect(
           requests
             .flatMap(({ credentials }) => credentials)
@@ -826,7 +856,8 @@ test(
         ).toBe(true);
       }
     } finally {
-      await Promise.all(stacks.map((stack) => stack.close()));
+      clearTimeout(deadline);
+      await Promise.all(started.map((stack) => stack.close()));
     }
   },
   DRILL_TIMEOUT_MS,
