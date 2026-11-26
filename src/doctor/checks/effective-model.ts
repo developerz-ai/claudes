@@ -4,6 +4,7 @@ import type { CheckResult } from "../results";
 
 export interface EffectiveModelDeps {
   readonly config: Config;
+  readonly profile?: string;
   /** What GET /v1/models served for this key; the router check's output. */
   readonly modelIds: readonly string[];
 }
@@ -32,7 +33,7 @@ export function checkEffectiveModel(deps: EffectiveModelDeps): CheckResult[] {
       {
         status: "WARN",
         title: `the router does not serve ${missing.map((entry) => `${entry.role}=${scrub(entry.id)}`).join(", ")}`,
-        fix: "re-run `claudes login` (or pass a --sonnet/--haiku override) so every effective model is served",
+        fix: `run \`claudes login --profile ${deps.profile ?? "default"}\` (or pass a --sonnet/--haiku override) so every effective model is served`,
       },
     ];
   }

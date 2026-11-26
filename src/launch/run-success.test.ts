@@ -170,7 +170,7 @@ describe("run success path: the settings payload", () => {
     const { payload } = writtenSettings(h);
     expect(Object.keys(payload.env).sort()).toEqual(expectedEnvKeys([]).sort());
     // The helper the key is served through, quoted for /bin/sh.
-    expect(payload.apiKeyHelper).toBe(`'${NODE}' '${SCRIPT}' key`);
+    expect(payload.apiKeyHelper).toBe(`'${NODE}' '${SCRIPT}' key --profile 'default'`);
   });
 
   test("pins every provider switch and both credential vars to empty", async () => {

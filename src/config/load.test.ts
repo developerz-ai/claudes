@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { KEY, ROUTER } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { loadConfig, MISSING_CONFIG_MESSAGE } from "./load";
-import { configDir, configFile } from "./paths";
+import { activeProfileFile, configDir, configFile, profileFile } from "./paths";
+import { writePrivateFile } from "./private-file";
 import type { Config } from "./schema";
 import { writeConfig } from "./store";
 
@@ -46,12 +47,12 @@ describe("loadConfig", () => {
     }
   });
 
-  test("no usable HOME or XDG_CONFIG_HOME is also just a missing config", () => {
+  test("no usable HOME or XDG_CONFIG_HOME reports a broken environment", () => {
     for (const env of [{}, { HOME: "relative" }, { XDG_CONFIG_HOME: "relative" }] as const) {
       expect(loadConfig(env)).toEqual({
         ok: false,
         exitCode: 78,
-        message: MISSING_CONFIG_MESSAGE,
+        message: "cannot locate claudes config: set HOME or XDG_CONFIG_HOME to an absolute path",
       });
     }
   });
@@ -104,7 +105,12 @@ describe("loadConfig", () => {
 
   test("a healthy config: ok with the parsed config and its directory", () => {
     writeConfig(path, sampleConfig());
-    expect(loadConfig({ HOME: home })).toEqual({ ok: true, config: sampleConfig(), dir });
+    expect(loadConfig({ HOME: home })).toEqual({
+      ok: true,
+      config: sampleConfig(),
+      dir,
+      profile: "default",
+    });
   });
 
   test("XDG_CONFIG_HOME wins over HOME", () => {
@@ -121,4 +127,33 @@ describe("loadConfig", () => {
       rmSync(xdg, { recursive: true, force: true });
     }
   });
+});
+
+test("selects an explicit profile before the environment and the active marker", () => {
+  for (const name of ["active", "env", "explicit"]) {
+    writeConfig(profileFile(dir, name), sampleConfig());
+  }
+  writePrivateFile(activeProfileFile(dir), "active\n", {
+    noun: "active profile",
+    remedy: "try again",
+  });
+  expect(loadConfig({ HOME: home })).toMatchObject({ ok: true, profile: "active" });
+  expect(loadConfig({ HOME: home, CLAUDES_PROFILE: "env" })).toMatchObject({
+    ok: true,
+    profile: "env",
+  });
+  expect(loadConfig({ HOME: home, CLAUDES_PROFILE: "env" }, "explicit")).toMatchObject({
+    ok: true,
+    profile: "explicit",
+  });
+  expect(loadConfig({ HOME: home, CLAUDES_PROFILE: "env" }, "missing")).toMatchObject({
+    ok: false,
+    exitCode: 78,
+    message: "no claudes config for profile missing; available profiles: active, env, explicit",
+  });
+  for (const invalid of ["", "../active", "UPPER", "x".repeat(33), KEY]) {
+    const result = loadConfig({ HOME: home, CLAUDES_PROFILE: invalid });
+    expect(result).toEqual({ ok: false, exitCode: 78, message: "invalid CLAUDES_PROFILE" });
+    if (!result.ok) assertNoKeyFragment(result.message, KEY);
+  }
 });

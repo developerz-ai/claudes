@@ -1,4 +1,5 @@
 import type { Env } from "../config/paths";
+import { DEFAULT_PROFILE } from "../config/profile";
 import type { Config } from "../config/schema";
 import { PROVIDER_SWITCHES } from "./provider-switches";
 import { denyRules, disabledEnv } from "./unsupported";
@@ -25,8 +26,8 @@ export function shellQuote(word: string): string {
  * `'<node>' '<claudes>' key`. Both paths are quoted so a claudes installed
  * under a path with spaces or quotes still resolves.
  */
-export function buildKeyHelper(self: SelfPaths): string {
-  return `${shellQuote(self.nodePath)} ${shellQuote(self.scriptPath)} key`;
+export function buildKeyHelper(self: SelfPaths, profile = DEFAULT_PROFILE): string {
+  return `${shellQuote(self.nodePath)} ${shellQuote(self.scriptPath)} key --profile ${shellQuote(profile)}`;
 }
 
 /** The value pinned for NO_PROXY/no_proxy when the router is on loopback. */
@@ -195,7 +196,12 @@ function mergedNoProxy(parentEnv: Env, loopbackHost: string | undefined): string
  * always pinned, so background work never runs on Opus), and the deny list
  * turns off what the router cannot serve.
  */
-export function buildSettings(config: Config, self: SelfPaths, parentEnv: Env): Settings {
+export function buildSettings(
+  config: Config,
+  self: SelfPaths,
+  parentEnv: Env,
+  profile = DEFAULT_PROFILE,
+): Settings {
   const loopbackHost = loopbackHostname(config.baseUrl);
   const env: Record<string, string> = {
     ANTHROPIC_BASE_URL: config.baseUrl,
@@ -233,7 +239,7 @@ export function buildSettings(config: Config, self: SelfPaths, parentEnv: Env): 
     env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
   }
   return {
-    apiKeyHelper: buildKeyHelper(self),
+    apiKeyHelper: buildKeyHelper(self, profile),
     permissions: { deny: denyRules() },
     env,
   };

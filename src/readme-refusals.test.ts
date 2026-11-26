@@ -333,7 +333,7 @@ function scenarios(): Scenario[] {
       // A usage refusal: the argument scan exits before any check runs, so
       // the same no-config fixture serves — and the text is stderr, not the
       // FAIL lines stdout carries.
-      when: "`claudes doctor` got an argument",
+      when: "`claudes doctor` got an unsupported argument",
       run: async () => {
         const out: string[] = [];
         const err: string[] = [];
@@ -346,9 +346,10 @@ function scenarios(): Scenario[] {
       // Missing `--url`: the parser refuses before stdin or fetch are
       // touched, so an unreadable stdin and a dead fetch prove the order.
       when: "`claudes login` ran without `--url`",
-      run: async () => {
+      run: async (h) => {
         const err: string[] = [];
         const code = await runLogin([], {
+          env: { HOME: join(h.home, "empty") },
           err: (text) => err.push(text),
           stdin: new EventEmitter() as unknown as StdinLike,
           fetch: deadFetch,

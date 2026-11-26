@@ -331,7 +331,7 @@ describe("run e2e: the happy path", () => {
       expect(statSync(dir).mode & 0o777).toBe(0o700);
       const settings = JSON.parse(record.settings.text as string);
       expect(settings.apiKeyHelper).toBe(
-        `'${process.execPath}' '${join(home, "my claudes/claudes.js")}' key`,
+        `'${process.execPath}' '${join(home, "my claudes/claudes.js")}' key --profile 'default'`,
       );
       assertNoKeyFragment(record.settings.text as string, KEY);
     },

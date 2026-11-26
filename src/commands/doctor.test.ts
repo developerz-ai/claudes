@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { loadConfig } from "../config/load";
-import { configDir, configFile, type Env } from "../config/paths";
+import { configDir, configFile, type Env, profileFile } from "../config/paths";
 import { writeConfig } from "../config/store";
 import type { PostFetch } from "../doctor/checks/live";
 import { createProbeDir } from "../doctor/checks/wiring";
@@ -193,7 +193,7 @@ describe("runDoctor", () => {
       expect(await runDoctor(["--nonsense"], h.deps)).toBe(64);
       expect(h.out.join("")).toBe("");
       expect(h.err.join("")).toBe(
-        "claudes doctor: unknown argument #1\nusage: claudes doctor [--live]\n",
+        "claudes doctor: unknown argument #1\nusage: claudes doctor [--live] [--profile <name>]\n",
       );
       assertNoKeyFragment(h.err.join(""), KEY);
       expect(h.calls).toEqual({
@@ -375,7 +375,7 @@ describe("runDoctor", () => {
           expect(h.out.join("")).toBe("");
           const text = h.err.join("");
           expect(text).toBe(
-            `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live]\n`,
+            `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live] [--profile <name>]\n`,
           );
           expect(text).not.toContain(value);
           for (const byte of [0, 7, 8, 9, 13, 27, 127]) {
@@ -434,4 +434,32 @@ describe("runDoctor", () => {
       rmSync(d.home, { recursive: true, force: true });
     }
   });
+});
+
+test("doctor's explicit profile wins and its re-login remedy targets that profile", async () => {
+  const d = drive();
+  try {
+    const work = { ...sampleConfig(), baseUrl: "https://work.invalid" };
+    writeConfig(profileFile(configDir(d.env), "work"), work);
+    const fake = fakeClaudeProc();
+    const h = deps(d, { runProc: fake.runProc });
+    const endpoints: string[] = [];
+    const code = await runDoctor(["--profile", "work"], {
+      ...h.deps,
+      env: { ...d.env, CLAUDES_PROFILE: "default" },
+      fetch: async (url, init) => {
+        endpoints.push(url);
+        return url.endsWith("/v1/models")
+          ? new Response(null, { status: 401 })
+          : healthyRouter(url, init);
+      },
+    });
+    expect(code).toBe(1);
+    expect(endpoints).toEqual(["https://work.invalid/healthz", "https://work.invalid/v1/models"]);
+    const output = h.out.join("") + h.err.join("");
+    expect(output).toContain("claudes login --profile work");
+    assertNoKeyFragment(output, KEY);
+  } finally {
+    rmSync(d.home, { recursive: true, force: true });
+  }
 });

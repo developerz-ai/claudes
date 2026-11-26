@@ -1,12 +1,13 @@
 import { lstatSync } from "node:fs";
-import { configDir, configFile, type Env } from "./paths";
+import { configDir, type Env, profileFile } from "./paths";
+import { DEFAULT_PROFILE, profileNames, selectProfile } from "./profile";
 import type { Config } from "./schema";
 import { ConfigError, readConfig } from "./store";
 
 export const MISSING_CONFIG_MESSAGE = "no claudes config: run `claudes login --url <router>`";
 
 export type LoadResult =
-  | { readonly ok: true; readonly config: Config; readonly dir: string }
+  | { readonly ok: true; readonly config: Config; readonly dir: string; readonly profile?: string }
   | { readonly ok: false; readonly exitCode: 78; readonly message: string };
 
 /**
@@ -16,20 +17,39 @@ export type LoadResult =
  * message, so insecure permissions are refused here exactly as they are at
  * login time.
  */
-export function loadConfig(env: Env): LoadResult {
+export function loadConfig(env: Env, selected?: string): LoadResult {
   let dir: string;
   try {
     dir = configDir(env);
   } catch {
-    // No usable HOME or XDG_CONFIG_HOME: there is no config to find.
-    return missing();
+    return {
+      ok: false,
+      exitCode: 78,
+      message: "cannot locate claudes config: set HOME or XDG_CONFIG_HOME to an absolute path",
+    };
   }
-  const path = configFile(dir);
+  let profile: string;
+  try {
+    profile = selectProfile(dir, env, selected);
+  } catch (error) {
+    return {
+      ok: false,
+      exitCode: 78,
+      message: error instanceof Error ? error.message : "could not select a profile",
+    };
+  }
+  const path = profileFile(dir, profile);
   if (!configExists(path)) {
-    return missing();
+    const names = profileNames(dir);
+    if (profile === DEFAULT_PROFILE && names.length === 0) return missing();
+    return {
+      ok: false,
+      exitCode: 78,
+      message: `no claudes config for profile ${profile}; available profiles: ${names.join(", ") || "(none)"}`,
+    };
   }
   try {
-    return { ok: true, config: readConfig(path), dir };
+    return { ok: true, config: readConfig(path), dir, profile };
   } catch (err) {
     if (err instanceof ConfigError) {
       return { ok: false, exitCode: 78, message: err.message };

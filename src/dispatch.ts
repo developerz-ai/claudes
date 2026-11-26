@@ -1,5 +1,5 @@
 /** Subcommands the launcher will own itself; everything else is passed through to `claude`. */
-const RESERVED_WORDS = ["login", "doctor", "key"] as const;
+const RESERVED_WORDS = ["login", "doctor", "key", "profile"] as const;
 
 export const VERSION_FLAGS = ["--version", "-v"] as const;
 
@@ -33,6 +33,7 @@ const COMMAND_HELP_SCOPES: Readonly<Record<ReservedWord, HelpScope | undefined>>
   login: "login",
   doctor: "doctor",
   key: undefined,
+  profile: undefined,
 };
 
 /** Pure routing of argv (everything after the program name) to a decision. */

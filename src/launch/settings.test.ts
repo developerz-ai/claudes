@@ -27,7 +27,9 @@ function config(overrides: Partial<Config> = {}): Config {
 
 describe("buildKeyHelper", () => {
   test("is a /bin/sh command quoting both paths, then the key subcommand", () => {
-    expect(buildKeyHelper(SELF)).toBe("'/usr/local/bin/node' '/opt/claudes/bin/claudes.js' key");
+    expect(buildKeyHelper(SELF)).toBe(
+      "'/usr/local/bin/node' '/opt/claudes/bin/claudes.js' key --profile 'default'",
+    );
   });
 
   test("single-quotes embedded single quotes the sh way", () => {
@@ -59,7 +61,7 @@ describe("buildSettings", () => {
         {},
       ),
     ).toEqual({
-      apiKeyHelper: "'/usr/local/bin/node' '/opt/claudes/bin/claudes.js' key",
+      apiKeyHelper: "'/usr/local/bin/node' '/opt/claudes/bin/claudes.js' key --profile 'default'",
       permissions: { deny: ["WebSearch"] },
       env: {
         ANTHROPIC_BASE_URL: "https://router.example.test",

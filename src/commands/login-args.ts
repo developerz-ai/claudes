@@ -1,16 +1,18 @@
+import { validProfileName } from "../config/profile";
 import { ROUTER_KEY_PREFIX } from "../config/schema";
 import { parseTierId, type TierName } from "../tiers";
 
 /** The one usage text: every usage error ends with it, and the help output reuses it. */
-export const USAGE = `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]
+export const USAGE = `usage: claudes login [--profile <name>] [--url <router-url>] [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]
 
 The router key is read from the "Router key: " prompt, or from the first line of
 stdin when it is piped; it is never accepted as a command-line argument.`;
 
-export const LOGIN_FLAGS = ["--url", "--opus", "--sonnet", "--haiku"] as const;
+export const LOGIN_FLAGS = ["--url", "--opus", "--sonnet", "--haiku", "--profile"] as const;
 
 export interface ParsedArgs {
-  url: string;
+  url?: string;
+  profile?: string;
   overrides: Partial<Record<TierName, string>>;
 }
 
@@ -30,9 +32,10 @@ export type ArgsResult =
  * prefix scan before anything else, and other rejections name the position, not
  * the value.
  */
-export function parseLoginArgs(argv: readonly string[]): ArgsResult {
+export function parseLoginArgs(argv: readonly string[], allowSavedUrl = false): ArgsResult {
   const overrides: Partial<Record<TierName, string>> = {};
   let url: string | undefined;
+  let profile: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? "";
     // The scan runs on the whole token so --url VALUE, --opus=VALUE and
@@ -68,7 +71,15 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
           return usageError("claudes login: --url may only be given once");
         }
         url = value;
-      } else if (MODEL_ID_PATTERN.test(value) && parseTierId(value) !== undefined) {
+      } else if (name === "--profile") {
+        if (profile !== undefined || !validProfileName(value)) {
+          return usageError("claudes login: invalid or repeated --profile");
+        }
+        profile = value;
+      } else if (
+        value === "auto" ||
+        (MODEL_ID_PATTERN.test(value) && parseTierId(value) !== undefined)
+      ) {
         overrides[name.slice(2) as TierName] = value;
       } else {
         // Names the flag, never the value: a model id slot is exactly where a
@@ -84,10 +95,10 @@ export function parseLoginArgs(argv: readonly string[]): ArgsResult {
     }
     return usageError(`claudes login: unexpected argument #${i + 1}`);
   }
-  if (url === undefined) {
+  if (url === undefined && !allowSavedUrl) {
     return usageError();
   }
-  return { ok: true, args: { url, overrides } };
+  return { ok: true, args: { url, overrides, ...(profile === undefined ? {} : { profile }) } };
 }
 
 function usageError(message?: string): { ok: false; exitCode: number; message: string } {

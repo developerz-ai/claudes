@@ -97,12 +97,12 @@ describe("README refusals table", () => {
 
   test("the doctor usage row parses its escaped newlines back into the two lines", () => {
     const row = rows.find((candidate) =>
-      candidate.when.includes("`claudes doctor` got an argument"),
+      candidate.when.includes("`claudes doctor` got an unsupported argument"),
     );
     expect(row).toBeDefined();
     expect(row?.exit).toBe(64);
     expect(row?.message).toBe(
-      "claudes doctor: unknown argument #1\nusage: claudes doctor [--live]",
+      "claudes doctor: unknown argument #1\nusage: claudes doctor [--live] [--profile <name>]",
     );
   });
 
@@ -113,7 +113,7 @@ describe("README refusals table", () => {
     expect(row).toBeDefined();
     expect(row?.exit).toBe(64);
     expect(row?.message).toBe(
-      'usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.',
+      'usage: claudes login [--profile <name>] [--url <router-url>] [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.',
     );
   });
 });
@@ -541,6 +541,7 @@ const ENV_NAMES_OUTSIDE_THE_LISTS: ReadonlyArray<{
   { name: "HOME", file: "src/config/paths.ts", owned: /env\.HOME\b/ },
   { name: "XDG_CONFIG_HOME", file: "src/config/paths.ts", owned: /env\.XDG_CONFIG_HOME\b/ },
   { name: "PATH", file: "src/launch/run.ts", owned: /env\.PATH\b/ },
+  { name: "CLAUDES_PROFILE", file: "src/config/profile.ts", owned: /env\.CLAUDES_PROFILE\b/ },
   {
     name: "CLAUDES_PREFLIGHT_TIMEOUT_MS",
     file: "src/launch/preflight.ts",

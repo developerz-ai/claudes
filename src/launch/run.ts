@@ -54,6 +54,7 @@ export type SpawnFn = (command: string, argv: readonly string[], options: SpawnO
 
 export interface RunDeps {
   readonly env: Env;
+  readonly profile?: string;
   readonly fetch: FetchLike;
   readonly stderr: (text: string) => void;
   readonly nodePath: string;
@@ -96,7 +97,7 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     return typeof claude === "number" ? claude : await execClaude(claude, userArgs, deps);
   }
 
-  const loaded = loadConfig(deps.env);
+  const loaded = loadConfig(deps.env, deps.profile);
   if (!loaded.ok) {
     return fail(deps, loaded.exitCode, loaded.message);
   }
@@ -164,7 +165,7 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
   const claudePath = resolveClaude(deps);
   if (typeof claudePath === "number") return claudePath;
 
-  const settings = buildSettings(loaded.config, deps, deps.env);
+  const settings = buildSettings(loaded.config, deps, deps.env, loaded.profile);
   try {
     writePrivateFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
       noun: "settings",

@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -17,6 +18,8 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
+import { configDir, profileFile } from "./config/paths";
+import { writeConfig } from "./config/store";
 import { credentialHash } from "./doctor/stub-server";
 import { helpText } from "./help";
 import { shellQuote } from "./launch/settings";
@@ -98,6 +101,58 @@ function expectNoKeyMaterial(text: string): void {
 }
 
 describe("claudes main through a real process (bun src/main.ts)", () => {
+  test("lists, activates and removes named profiles through the CLI", () => {
+    const dir = configDir(childEnv);
+    for (const name of ["default", "work"]) {
+      writeConfig(profileFile(dir, name), {
+        version: 1,
+        baseUrl: `https://${name}.invalid`,
+        key: KEY,
+        tiers: { opus: "claude-opus-4-6", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5" },
+      });
+    }
+    const lock = join(dir, ".profile-lock");
+    mkdirSync(lock);
+    expect(runMain(["profile", "use", "work"]).status).toBe(75);
+    expect(runMain(["profile", "remove", "work"]).status).toBe(75);
+    expect(existsSync(profileFile(dir, "work"))).toBe(true);
+    rmdirSync(lock);
+    expect(runMain(["profile", "use", "work"]).status).toBe(0);
+    const listed = runMain(["profile", "list"]);
+    expect(listed.status).toBe(0);
+    expect(listed.stdout).toContain("* work https://work.invalid");
+    assertNoKeyFragment(listed.stdout + listed.stderr, KEY);
+    expect(runMain(["profile", "remove", "work"]).status).toBe(64);
+    expect(runMain(["profile", "remove", "default"]).status).toBe(0);
+    expect(existsSync(profileFile(dir, "default"))).toBe(false);
+    expect(existsSync(profileFile(dir, "work"))).toBe(true);
+    const missing = runMain(["--profile", "missing", "-p", "hello"]);
+    expect(missing.status).toBe(78);
+    expect(missing.stderr).toContain("available profiles: work");
+  });
+
+  test("a profile lock failure leaves paths out of diagnostics", () => {
+    childEnv.XDG_CONFIG_HOME = join(scratch, KEY.slice(-8));
+    const dir = configDir(childEnv);
+    writeConfig(profileFile(dir, "work"), {
+      version: 1,
+      baseUrl: "https://work.invalid",
+      key: KEY,
+      tiers: { opus: "claude-opus-4-6", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5" },
+    });
+    chmodSync(dir, 0o500);
+    try {
+      const result = runMain(["profile", "use", "work"]);
+      if (process.getuid?.() !== 0) {
+        expect(result.status).toBe(78);
+        expect(result.stderr).toContain("could not create the profile lock");
+      }
+      assertNoKeyFragment(result.stdout + result.stderr, KEY);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
   test("--version: VERSION on stdout, exit 0", () => {
     const res = runMain(["--version"]);
     expect(res.status).toBe(0);
@@ -148,7 +203,7 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
         expect(res.status).toBe(64);
         // Positions exclude the command word; #2 also proves --live was accepted.
         expect(res.stderr).toBe(
-          `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live]\n`,
+          `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live] [--profile <name>]\n`,
         );
         expect(res.stdout).toBe("");
         expect(res.stderr).not.toContain(value);
@@ -183,7 +238,7 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expect(res.status).toBe(0);
     expect(res.stderr).toBe("");
     expect(res.stdout).toBe(`${helpText("login")}\n`);
-    expect(res.stdout).toContain("usage: claudes login --url <router-url>");
+    expect(res.stdout).toContain("usage: claudes login [--profile <name>] [--url <router-url>]");
     expectNoKeyMaterial(res.stdout);
   });
 
@@ -192,7 +247,7 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expect(res.status).toBe(0);
     expect(res.stderr).toBe("");
     expect(res.stdout).toBe(`${helpText("doctor")}\n`);
-    expect(res.stdout).toContain("usage: claudes doctor [--live]");
+    expect(res.stdout).toContain("usage: claudes doctor [--live] [--profile <name>]");
     expectNoKeyMaterial(res.stdout);
   });
 
@@ -280,13 +335,13 @@ interface RouterStack {
 /** The model ids the stack advertises: one per tier family, each a parsable id. */
 const STACK_MODEL_IDS = ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"];
 
-async function startRouterStack(): Promise<RouterStack> {
+async function startRouterStack(beforeMessage?: () => Promise<void>): Promise<RouterStack> {
   const requests: StackRequest[] = [];
   const server = createServer((req, res) => {
     req.on("data", () => {
       // The body is not read: the drill only cares about the headers.
     });
-    req.on("end", () => {
+    req.on("end", async () => {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const credentials: string[] = [];
       const apiKey = req.headers["x-api-key"];
@@ -311,6 +366,7 @@ async function startRouterStack(): Promise<RouterStack> {
         return;
       }
       if (pathname === "/v1/messages") {
+        if (beforeMessage !== undefined) await beforeMessage();
         answerJson(res, 200, {
           id: "msg_drill",
           type: "message",
@@ -749,3 +805,86 @@ describe("the uninstall drill", () => {
     expect(checksum(same)).not.toBe(checksum(other));
   });
 });
+
+test(
+  "two simultaneous profiles send only their own key to each router",
+  async () => {
+    let messages = 0;
+    let release = () => {};
+    const repliesReady = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let expired = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const beforeMessage = async (): Promise<void> => {
+      if (++messages === 2) {
+        clearTimeout(deadline);
+        release();
+      }
+      await repliesReady;
+    };
+    const started: RouterStack[] = [];
+    try {
+      const work = await startRouterStack(beforeMessage);
+      started.push(work);
+      const personal = await startRouterStack(beforeMessage);
+      started.push(personal);
+      const fixtures = [
+        { name: "work", key: KEY, stack: work },
+        { name: "personal", key: `mar_live_${"p".repeat(32)}`, stack: personal },
+      ] as const;
+      const node = Bun.which("node");
+      if (node === null) throw new Error("the profile e2e requires Node");
+      symlinkSync(node, join(scratch, "bin", "node"));
+      writeFileSync(join(scratch, "bin", "claude"), FAKE_CLAUDE, { mode: 0o755 });
+      const logins = await Promise.all(
+        fixtures.map(({ name, key, stack }) =>
+          runCli(
+            process.execPath,
+            [MAIN, "login", "--profile", name, "--url", stack.baseUrl],
+            childEnv,
+            `${key}\n`,
+          ),
+        ),
+      );
+      expect(logins.map(({ status }) => status)).toEqual([0, 0]);
+      expect(runMain(["profile", "use", "work"]).status).toBe(0);
+
+      deadline = setTimeout(() => {
+        expired = true;
+        release();
+      }, 5000);
+      const sessions = await Promise.all([
+        runCli(process.execPath, [MAIN, "-p", "ping"], {
+          ...childEnv,
+          CLAUDES_PROFILE: "personal",
+        }),
+        runCli(process.execPath, [MAIN, "--profile", "work", "-p", "ping"], {
+          ...childEnv,
+          CLAUDES_PROFILE: "personal",
+        }),
+      ]);
+      expect(sessions.map(({ status }) => status)).toEqual([0, 0]);
+      expect(expired).toBe(false);
+      for (const { key, stack } of fixtures) {
+        for (const { stdout, stderr } of [...logins, ...sessions]) {
+          assertNoKeyFragment(stdout + stderr, key);
+        }
+        const requests = stack.requests();
+        const requestsWithMessages = requests.filter(({ pathname }) => pathname === "/v1/messages");
+        expect(requestsWithMessages.map(({ credentials }) => credentials)).toEqual([
+          [credentialHash(key)],
+        ]);
+        expect(
+          requests
+            .flatMap(({ credentials }) => credentials)
+            .every((hash) => hash === credentialHash(key)),
+        ).toBe(true);
+      }
+    } finally {
+      clearTimeout(deadline);
+      await Promise.all(started.map((stack) => stack.close()));
+    }
+  },
+  DRILL_TIMEOUT_MS,
+);

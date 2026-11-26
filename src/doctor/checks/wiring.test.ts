@@ -168,7 +168,7 @@ describe("checkWiring", () => {
         readonly env: Record<string, string>;
       };
       // The launcher's key helper, verbatim.
-      expect(settings.apiKeyHelper).toBe(`'${NODE}' '${SCRIPT}' key`);
+      expect(settings.apiKeyHelper).toBe(`'${NODE}' '${SCRIPT}' key --profile 'default'`);
       // The base URL points at the stub, and the key never enters the file.
       expect(settings.env.ANTHROPIC_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(TIERS.sonnet);

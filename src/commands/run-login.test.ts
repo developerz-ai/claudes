@@ -318,7 +318,7 @@ describe("runLogin (real wiring, injected writers)", () => {
   test("the usage error (no --url) ends with a newline, usage and all", async () => {
     const driven = await drive([], pipedStdin(KEY), stubFetch());
     expect(driven.code).toBe(64);
-    expect(driven.err).toContain("usage: claudes login --url");
+    expect(driven.err).toContain("usage: claudes login [--profile <name>] [--url");
     expectEndsWithNewline(driven);
     expect(driven.err).not.toContain(KEY);
   });

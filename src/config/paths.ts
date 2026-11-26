@@ -37,6 +37,15 @@ export function configFile(dir: string): string {
   return `${dir}/config.json`;
 }
 
+/** Named profiles share the private config directory with the legacy file. */
+export function profileFile(dir: string, name: string): string {
+  return name === "default" ? configFile(dir) : `${dir}/config.${name}.json`;
+}
+
+export function activeProfileFile(dir: string): string {
+  return `${dir}/active-profile`;
+}
+
 /**
  * The per-launch settings file the launcher writes: `${dir}/settings.<pid>.json`.
  * One file per launch (named by the launcher's pid). It can carry the shell's

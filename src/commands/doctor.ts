@@ -1,6 +1,8 @@
 import { rmSync } from "node:fs";
 import type { LoadResult } from "../config/load";
 import type { Env } from "../config/paths";
+import { validProfileName } from "../config/profile";
+import { keyFragmentOffset } from "../config/schema";
 import { checkConfig } from "../doctor/checks/config";
 import { checkConflicts, defaultReadFile, type ReadText } from "../doctor/checks/conflicts";
 import { checkEffectiveModel } from "../doctor/checks/effective-model";
@@ -18,9 +20,9 @@ import { scrub } from "../router/errors";
 import { VERSION } from "../version";
 
 /** The one usage text: the refusal quotes it, and the help output reuses it. */
-export const USAGE = "usage: claudes doctor [--live]";
+export const USAGE = "usage: claudes doctor [--live] [--profile <name>]";
 
-export const DOCTOR_FLAGS = ["--live"] as const;
+export const DOCTOR_FLAGS = ["--live", "--profile"] as const;
 
 export interface DoctorDeps {
   readonly env: Env;
@@ -61,10 +63,20 @@ export interface DoctorDeps {
  */
 export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Promise<number> {
   let live = false;
-  for (const [index, arg] of argv.entries()) {
-    if ((DOCTOR_FLAGS as readonly string[]).includes(arg)) {
+  let profile: string | undefined;
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === "--live") {
       live = true;
       continue;
+    }
+    if (arg === "--profile") {
+      const value = argv[index + 1];
+      if (profile === undefined && validProfileName(value)) {
+        profile = value;
+        index++;
+        continue;
+      }
     }
     deps.stderr(scrub(`claudes doctor: unknown argument #${index + 1}\n${USAGE}\n`));
     return 64;
@@ -80,12 +92,17 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
   }
 
   const results: CheckResult[] = [];
+  let key: string | undefined;
+  const safeText = (text: string): string =>
+    key !== undefined && keyFragmentOffset(text, key) !== undefined
+      ? "(details withheld)"
+      : scrub(text);
   const report = (incoming: readonly CheckResult[]) => {
     for (const result of incoming) {
       results.push(result);
-      deps.stdout(scrub(`[${result.status}] ${result.title}\n`));
+      deps.stdout(`[${result.status}] ${safeText(result.title)}\n`);
       if (result.fix !== undefined) {
-        deps.stdout(scrub(`       fix: ${result.fix}\n`));
+        deps.stdout(`       fix: ${safeText(result.fix)}\n`);
       }
     }
   };
@@ -103,12 +120,20 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
     }),
   );
 
-  const configCheck = checkConfig({ env: deps.env, load: deps.load });
+  const configCheck = checkConfig({
+    env: { ...deps.env, ...(profile === undefined ? {} : { CLAUDES_PROFILE: profile }) },
+    load: deps.load,
+  });
+  key = configCheck.config?.key;
   report(configCheck.results);
 
   let modelIds: string[] | undefined;
   if (configCheck.config !== undefined) {
-    const routerCheck = await checkRouter({ config: configCheck.config, fetch: deps.fetch });
+    const routerCheck = await checkRouter({
+      config: configCheck.config,
+      profile: configCheck.profile,
+      fetch: deps.fetch,
+    });
     report(routerCheck.results);
     modelIds = routerCheck.modelIds;
   }
@@ -139,6 +164,7 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
     await checkWiring(
       {
         env: deps.env,
+        profile: configCheck.profile,
         nodePath: deps.nodePath,
         scriptPath: deps.scriptPath,
         claudePath,
@@ -155,7 +181,9 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
     report([await checkLive({ config: configCheck.config, fetch: deps.postFetch })]);
   }
   if (modelIds !== undefined) {
-    report(checkEffectiveModel({ config: configCheck.config, modelIds }));
+    report(
+      checkEffectiveModel({ config: configCheck.config, profile: configCheck.profile, modelIds }),
+    );
   } else {
     report([{ status: "INFO", title: "effective models skipped — /v1/models did not answer" }]);
   }

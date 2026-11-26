@@ -29,3 +29,7 @@ You are an elite software engineer and the pilot of this task: own the outcome, 
   path-based (`statSync(dir)`) and run before the file is opened.
 - All ownership and mode guards (`(mode & 0o077) !== 0`, foreign uid) raise `InsecureConfigError`, not generic `ConfigError`; the message tells the user the exact `chmod` fix.
 - Schema lives ONLY in `src/config/schema.ts`: `ROUTER_KEY_PREFIX`, `ROUTER_KEY_PATTERN`, `baseUrlSchema`, `configSchema`, `keySchema`. Never hardcode the prefix or pattern elsewhere; `formatZodIssues` is the single-line error formatter — `path: message`, root issues drop the leading `:`.
+
+- Profiles share the private config directory. Use `config.json` for `default`,
+  `config.<name>.json` for named profiles, and `active-profile` for the selection
+  marker. Validate each name before using it as a path component.

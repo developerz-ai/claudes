@@ -187,6 +187,12 @@ const CLAUDES_FLAG_CHECKS: Readonly<Record<string, () => Promise<void>>> = {
     expect(dispatch(["-h"])).toEqual({ kind: "passthrough", args: ["-h"] });
     expect(classify(["-h"])).toBe("manage");
   },
+  "--profile": async () => {
+    expect(parseLoginArgs(["--profile", "work", "--url", LOGIN_URL])).toMatchObject({
+      ok: true,
+      args: { profile: "work" },
+    });
+  },
   "--url": async () => {
     expect(parseLoginArgs(["--url", LOGIN_URL]).ok).toBe(true);
   },

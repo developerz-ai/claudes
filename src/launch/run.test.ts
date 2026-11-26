@@ -90,10 +90,12 @@ describe("run: config gate", () => {
     expect(h.spawnCalls).toEqual([]);
   });
 
-  test("no usable HOME: same missing-config refusal", async () => {
+  test("no usable HOME: environment remedy", async () => {
     const code = await h.drive(["-p", "hi"], { env: { PATH: "/bin", HOME: undefined } });
     expect(code).toBe(78);
-    expect(errText()).toBe(`${MISSING_CONFIG_MESSAGE}\n`);
+    expect(errText()).toBe(
+      "cannot locate claudes config: set HOME or XDG_CONFIG_HOME to an absolute path\n",
+    );
   });
 
   test("a base URL but no key (schema-invalid): exit 78, the store's message", async () => {
@@ -293,7 +295,7 @@ describe("run: settings file", () => {
     expect(seen.mode).toBe(0o600);
     expect(seen.dirMode).toBe(0o700);
     const payload = JSON.parse(seen.text);
-    expect(payload.apiKeyHelper).toBe(`'${NODE}' '${SCRIPT}' key`);
+    expect(payload.apiKeyHelper).toBe(`'${NODE}' '${SCRIPT}' key --profile 'default'`);
     expect(payload.permissions).toEqual({ deny: ["WebSearch"] });
     expect(payload.env.ANTHROPIC_BASE_URL).toBe(ROUTER);
     expect(payload.env.ANTHROPIC_AUTH_TOKEN).toBe("");
