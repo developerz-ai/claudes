@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import type { Config } from "../config/schema";
+import { readSavedModel } from "../launch/session-model";
 import { KEY, ROUTER } from "../test-support/fixtures";
 import type { RunProc } from "./run-proc";
 
@@ -121,7 +122,13 @@ export function fakeClaudeProc(options: FakeClaudeOptions = {}): {
         readonly model?: string;
       };
       const base = settings.env.ANTHROPIC_BASE_URL;
-      const model = options.model ?? settings.model ?? TIERS.sonnet;
+      const saved = readSavedModel(procOptions.env ?? {});
+      const choice = settings.model ?? saved;
+      const fallback =
+        settings.env.ANTHROPIC_MODEL === undefined
+          ? TIERS.sonnet
+          : (settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? TIERS.opus);
+      const model = options.model ?? (choice === "opus" ? fallback : choice) ?? fallback;
       await fetch(`${base}/v1/messages`, {
         method: "POST",
         headers: {

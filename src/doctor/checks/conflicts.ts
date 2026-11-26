@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Env } from "../../config/paths";
 import { isStripped } from "../../launch/env";
@@ -38,6 +38,8 @@ function managedSettingsPath(platform: string): string | undefined {
   return undefined;
 }
 
+const MAX_SETTINGS_BYTES = 2 ** 20;
+
 /**
  * The real ReadText: ENOENT/ENOTDIR read as absent; any other failure throws,
  * so an existing-but-unreadable file (mode 000, a directory at the path) can
@@ -47,8 +49,18 @@ export const defaultReadFile: ReadText = (path) => {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-    if (!fstatSync(fd).isFile()) throw new Error("settings path is not a regular file");
-    return readFileSync(fd, "utf8");
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error("settings path is not a regular file");
+    if (stat.size > MAX_SETTINGS_BYTES) throw new Error("settings file is too large");
+    const bytes = Buffer.alloc(MAX_SETTINGS_BYTES + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(fd, bytes, offset, bytes.length - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    if (offset > MAX_SETTINGS_BYTES) throw new Error("settings file is too large");
+    return bytes.toString("utf8", 0, offset);
   } catch (err) {
     const code = (err as { readonly code?: unknown }).code;
     if (code === "ENOENT" || code === "ENOTDIR") {

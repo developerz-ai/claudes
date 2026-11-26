@@ -759,3 +759,30 @@ test("an unexpected probe model and a foreign saved model get a separate verdict
     cleanup(s);
   }
 });
+
+test("a good model request cannot mask another request with a missing key", async () => {
+  const s = scratch();
+  try {
+    const fake = fakeClaudeProc();
+    const result = await checkWiring(
+      deps(s, async (command, argv, options) => {
+        const path = argv[argv.indexOf("--settings") + 1];
+        if (path === undefined) throw new Error("missing probe settings");
+        const settings = JSON.parse(readFileSync(path, "utf8"));
+        const bad = await fetch(`${settings.env.ANTHROPIC_BASE_URL}/v1/messages`, {
+          method: "POST",
+          headers: { authorization: "Bearer" },
+          body: "{}",
+        });
+        await bad.text();
+        return fake.runProc(command, argv, options);
+      }),
+      sampleConfig(),
+    );
+    expect(result.status).toBe("FAIL");
+    expect(result.title).toContain("without a usable credential");
+    assertNoKeyFragment(result.title + result.fix, KEY);
+  } finally {
+    cleanup(s);
+  }
+});

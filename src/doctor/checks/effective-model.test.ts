@@ -54,3 +54,13 @@ test("doctor warns for an unserved subagent without disclosing credential fragme
   assertNoKeyFragment(JSON.stringify(results), KEY);
   expect(config).toEqual(snapshot);
 });
+
+test("an empty successful catalog is different from an unavailable catalog", () => {
+  const config = sampleConfig({ subagentModel: TIERS.haiku });
+  for (const rows of [[], undefined]) {
+    const catalog = resolveCatalog(config, rows);
+    const model = sessionModel(config, catalog, {}, undefined, undefined);
+    const results = checkEffectiveModel(config, catalog, model);
+    expect(results.some(({ status }) => status === "WARN")).toBe(rows !== undefined);
+  }
+});

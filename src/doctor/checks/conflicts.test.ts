@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { checkConflicts } from "./conflicts";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { checkConflicts, defaultReadFile } from "./conflicts";
 
 const HOME = "/home/dev";
 const CWD = "/repo";
@@ -285,4 +288,25 @@ test("managed drop-ins are checked in order and hidden files are ignored", () =>
     expect.stringContaining("could not be parsed as JSON"),
     expect.stringContaining("could not be read"),
   ]);
+});
+
+test("an oversized managed drop-in fails without reading its contents", () => {
+  const dir = mkdtempSync(join(tmpdir(), "claudes-managed-"));
+  try {
+    const file = join(dir, "large.json");
+    writeFileSync(file, "{}");
+    truncateSync(file, 2 ** 20 + 1);
+    const results = checkConflicts(
+      deps({
+        listDirectory: () => ["large.json"],
+        readFile: (path) => (path.endsWith("/large.json") ? defaultReadFile(file) : undefined),
+      }),
+    );
+    expect(results.find(({ title }) => title.includes("large.json"))).toMatchObject({
+      status: "FAIL",
+      title: expect.stringContaining("could not be read"),
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

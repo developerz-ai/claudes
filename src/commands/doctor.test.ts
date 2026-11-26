@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { loadConfig } from "../config/load";
@@ -482,6 +482,44 @@ test("doctor names each refused launcher environment and skips wiring", async ()
       expect(h.probeDirs).toHaveLength(0);
       assertNoKeyFragment(output, KEY);
     }
+  } finally {
+    rmSync(d.home, { recursive: true, force: true });
+  }
+});
+
+test("doctor replays a served saved model through scratch user settings", async () => {
+  const d = drive();
+  try {
+    const custom = join(d.home, "custom-claude");
+    mkdirSync(custom);
+    const model = TIERS.sonnet;
+    const text = JSON.stringify({ model, unrelated: "do not copy" });
+    const userFile = join(custom, "settings.json");
+    writeFileSync(userFile, text);
+    const fake = fakeClaudeProc();
+    const h = deps(d);
+    let calls = 0;
+    const code = await runDoctor([], {
+      ...h.deps,
+      env: { ...d.env, CLAUDE_CONFIG_DIR: custom },
+      runProc: async (command, argv, options) => {
+        const path = argv[argv.indexOf("--settings") + 1];
+        if (argv.includes("--settings") && path !== undefined) {
+          calls++;
+          expect(options.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+          expect(JSON.parse(readFileSync(path, "utf8")).model).toBeUndefined();
+          const isolated = options.env?.HOME;
+          if (isolated === undefined) throw new Error("missing probe HOME");
+          const copied = readFileSync(join(isolated, ".claude", "settings.json"), "utf8");
+          expect(JSON.parse(copied)).toEqual({ model });
+        }
+        return fake.runProc(command, argv, options);
+      },
+    });
+    expect(code).toBe(0);
+    expect(calls).toBe(1);
+    expect(h.out.join("")).toContain(`nothing else (model ${model})`);
+    expect(readFileSync(userFile, "utf8")).toBe(text);
   } finally {
     rmSync(d.home, { recursive: true, force: true });
   }

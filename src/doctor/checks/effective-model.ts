@@ -26,7 +26,7 @@ export function checkEffectiveModel(
   ];
   if (
     config.subagentModel !== undefined &&
-    catalog.entries.size > 0 &&
+    catalog.available &&
     !catalog.entries.has(config.subagentModel)
   ) {
     results.push({

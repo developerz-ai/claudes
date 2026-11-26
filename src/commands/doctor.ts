@@ -174,20 +174,15 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
   }
 
   const catalog = resolveCatalog(configCheck.config, modelEntries);
-  const model = sessionModel(
-    configCheck.config,
-    catalog,
-    deps.env,
-    readSavedModel(deps.env),
-    undefined,
-  );
+  const savedModel = readSavedModel(deps.env);
+  const model = sessionModel(configCheck.config, catalog, deps.env, savedModel, undefined);
   if (launchGate === undefined) {
     report([
       await checkWiring(
         {
           env: deps.env,
           profile: configCheck.profile,
-          launch: { catalog, model },
+          launch: { catalog, model, savedModel },
           nodePath: deps.nodePath,
           scriptPath: deps.scriptPath,
           claudePath,

@@ -61,7 +61,11 @@ export interface ProbeSignalWiring {
 
 export interface WiringDeps {
   readonly profile?: string;
-  readonly launch?: { readonly catalog: Catalog; readonly model: SessionModel };
+  readonly launch?: {
+    readonly catalog: Catalog;
+    readonly model: SessionModel;
+    readonly savedModel?: string;
+  };
   readonly env: Env;
   /** Where the running claudes lives, for the settings' apiKeyHelper. */
   readonly nodePath: string;
@@ -280,13 +284,8 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
 
     // The probe config: the real key and tiers, the stub's base URL.
     const probeConfig: Config = { ...config, baseUrl: stub.baseUrl };
-    const launch =
-      deps.launch === undefined
-        ? undefined
-        : {
-            catalog: deps.launch.catalog,
-            model: { ...deps.launch.model, model: deps.launch.model.launchId },
-          };
+    const launch = deps.launch;
+    const savedModel = launch === undefined ? readSavedModel(deps.env) : launch.savedModel;
     const profile = deps.profile ?? "default";
     const settings = buildSettings(probeConfig, deps, deps.env, profile, launch);
     const payload = `${JSON.stringify(settings, null, 2)}\n`;
@@ -307,6 +306,17 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
     writeConfig(keyCopy, probeConfig);
     const probeHome = join(probeRoot, "home");
     createPrivateDir(probeHome, "probe directory");
+
+    if (launch !== undefined && launch.model.model === undefined && savedModel !== undefined) {
+      const saved = JSON.stringify({ model: savedModel });
+      if (keyFragmentOffset(saved, config.key) !== undefined) {
+        throw new ConfigError("saved wiring probe model contains router key material");
+      }
+      writePrivateFile(join(probeHome, ".claude", "settings.json"), saved, {
+        noun: "wiring-probe user settings",
+        remedy: "re-run `claudes doctor`",
+      });
+    }
 
     const argv = (deps.buildArgv ?? buildArgv)([...WIRING_ARGS], settingsPath);
     if (!argv.ok) {
@@ -337,7 +347,7 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
         deps.timeoutMs ?? WIRING_TIMEOUT_MS,
         deps.profile,
         deps.launch,
-        readSavedModel(deps.env),
+        savedModel,
       );
     }
   } catch (err) {
@@ -478,14 +488,14 @@ function evaluate(
   const hits = messages.filter((request) =>
     request.credentials.some((credential) => credential.hash === expected),
   );
+  if (messages.some(({ credentials }) => credentials.length === 0)) {
+    return {
+      status: "FAIL",
+      title: "wiring probe: Claude Code sent a request without a usable credential",
+      fix: "check that the isolated settings file and its key helper can be read and executed",
+    };
+  }
   if (hits.length === 0) {
-    if (messages.length > 0) {
-      return {
-        status: "FAIL",
-        title: "wiring probe: Claude Code sent a request without a usable credential",
-        fix: "check that the isolated settings file and its key helper can be read and executed",
-      };
-    }
     if (proc.timedOut) {
       return {
         status: "FAIL",
