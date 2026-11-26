@@ -2,15 +2,15 @@ plan: 101-wrap-profiles-dynamic-models
 title: Wrap correctly, profiles, dynamic models
 status: in_progress
 owner: unassigned
-percent: 83
-current_focus: 06-doctor
+percent: 95
+current_focus: authenticate the developerz.ai workspace deployment
 slices:
   01-gate: done
   02-wrap-passthrough: done
   03-profiles: done
   04-dynamic-models: done
   05-settings-file-lifetime: done
-  06-doctor: in_progress
+  06-doctor: done
 evidence:
   commits:
     [
@@ -18,7 +18,8 @@ evidence:
       aa535caad4aa69ab11de7a580d4b96ef8d12f2a9,
       bcb4f9ca2db7efa69996758ca6a1a9ac4d311065,
       e538089fabe015b4c03c19d09dfbe9f78edc32d3,
+      add1ff16470e3d9ab5dd95758fdde7dd9e53ac42,
       56144cbbcff248f7515f1fe3ebb11d62f7fd3963,
     ]
-  prs: [118, 119, 120, 121, 122]
+  prs: [118, 119, 120, 121, 122, 123]
 last_updated: 2026-11-25

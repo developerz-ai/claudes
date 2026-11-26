@@ -128,6 +128,10 @@ credential. Another launch reflected a changed catalog without re-login.
 The same run checked the context windows and rejected a revoked key in
 under two seconds.
 
+The merged revision `add1ff16470e3d9ab5dd95758fdde7dd9e53ac42` passed
+`heavy bin/check` on Linux with 1,238 tests. The doctor PR passed CI on
+Linux and macOS with Node 22 and 24.
+
 ### Workspace deployment
 
 The installed `claudes` executable in both infrastructure workspaces links
