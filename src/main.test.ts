@@ -131,6 +131,28 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expect(missing.stderr).toContain("available profiles: work");
   });
 
+  test("a profile lock failure leaves paths out of diagnostics", () => {
+    childEnv.XDG_CONFIG_HOME = join(scratch, KEY.slice(-8));
+    const dir = configDir(childEnv);
+    writeConfig(profileFile(dir, "work"), {
+      version: 1,
+      baseUrl: "https://work.invalid",
+      key: KEY,
+      tiers: { opus: "claude-opus-4-6", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5" },
+    });
+    chmodSync(dir, 0o500);
+    try {
+      const result = runMain(["profile", "use", "work"]);
+      if (process.getuid?.() !== 0) {
+        expect(result.status).toBe(78);
+        expect(result.stderr).toContain("could not create the profile lock");
+      }
+      assertNoKeyFragment(result.stdout + result.stderr, KEY);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
   test("--version: VERSION on stdout, exit 0", () => {
     const res = runMain(["--version"]);
     expect(res.status).toBe(0);
@@ -793,12 +815,12 @@ test(
       release = resolve;
     });
     let expired = false;
-    const deadline = setTimeout(() => {
-      expired = true;
-      release();
-    }, 5000);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const beforeMessage = async (): Promise<void> => {
-      if (++messages === 2) release();
+      if (++messages === 2) {
+        clearTimeout(deadline);
+        release();
+      }
       await repliesReady;
     };
     const started: RouterStack[] = [];
@@ -828,6 +850,10 @@ test(
       expect(logins.map(({ status }) => status)).toEqual([0, 0]);
       expect(runMain(["profile", "use", "work"]).status).toBe(0);
 
+      deadline = setTimeout(() => {
+        expired = true;
+        release();
+      }, 5000);
       const sessions = await Promise.all([
         runCli(process.execPath, [MAIN, "-p", "ping"], {
           ...childEnv,

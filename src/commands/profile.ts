@@ -55,7 +55,9 @@ export function runProfile(
     try {
       mkdirSync(lock, { mode: 0o700 });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        return fail(78, "could not create the profile lock; check config directory permissions");
+      }
       return fail(75, "another profile change is in progress; retry once it exits");
     }
     try {
@@ -85,7 +87,7 @@ export function runProfile(
     } finally {
       rmdirSync(lock);
     }
-  } catch (error) {
-    return fail(78, error instanceof Error ? error.message : "could not access the profile");
+  } catch {
+    return fail(78, "could not access or update the profile; check the private config directory");
   }
 }
