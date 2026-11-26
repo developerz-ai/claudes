@@ -107,7 +107,36 @@ its own README rows, help text, `CLAUDE.md` Structure rows and the guards that b
 
 - Claude Code's first-argument subcommands are not a documented contract. 02 keeps the list in one table
   with a live check and fails visibly for a name it does not know.
-- `CLAUDE_CODE_AUTO_COMPACT_WINDOW` below 100k was not tested; the `--autocompact` flag documents a 100k floor.
-- The meaning of an empty `ANTHROPIC_MODEL`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and
-  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in settings `env` is unverified. 04 verifies each before relying on it.
+- Claude Code 2.1.331 floored a 64k auto-compact setting at 100k on a recognized model. The same test on an unrecognized model honored 64k through its maximum-context setting.
+- A scratch Claude Code 2.1.331 session confirmed that empty generated model and window variables neutralize the corresponding values planted in user settings.
 - A router can list hundreds of ids; 04 orders them and caps the body at the client's existing 1 MiB.
+
+## Verification
+
+| Defects         | Evidence                                                                                                                                                                                                                                                                                                                            |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B14, B15, B20   | The gate ignores machine-local settings and isolates its login smokes. The probe clears the custom Claude directory and its SIGHUP handler removes the scratch credential. [PR #118](https://github.com/developerz-ai/claudes/pull/118)                                                                                             |
+| B1–B3, B21, B23 | Real Claude Code 2.1.331 matched the wrapper help matrix and management exits with no router config. The stub saw zero model requests for management help. Refusal tests exercise off-router modes and executable self-reference. [PR #119](https://github.com/developerz-ai/claudes/pull/119)                                      |
+| B4–B6, B22      | Re-login preserves options and pins, doctors name the selected profile, and the legacy helper still uses default. The concurrent session test checks each Messages request's credential hash at its own router. [PR #120](https://github.com/developerz-ai/claudes/pull/120)                                                        |
+| B7–B12          | An authenticated catalog refresh updates the picker, context sizes and served tiers without re-login. The rejected-key case exits 77 and the health HTTP case reports the status. Real Claude Code showed 128k on a recognized model and 96k on a slash-containing ID. [PR #121](https://github.com/developerz-ai/claudes/pull/121) |
+| B13             | A real background session kept its settings after its launcher exited and another launch ran. Respawn succeeded. Unit tests cover file reuse, proxy changes, legacy retention and age-based temporary cleanup. [PR #122](https://github.com/developerz-ai/claudes/pull/122)                                                         |
+| B15–B19         | Doctor checks local and managed settings, skips wiring for refused environments, and reports the actual launch model. A real probe preserved the custom config, replayed a saved model in scratch settings, and removed the key copy on SIGHUP. [PR #123](https://github.com/developerz-ai/claudes/pull/123)                        |
+
+A single live run held two Claude Code 2.1.331 interactive sessions open.
+Each displayed its own loopback router's picker and used only that router's
+credential. Another launch reflected a changed catalog without re-login.
+The same run checked the context windows and rejected a revoked key in
+under two seconds.
+
+### Workspace deployment
+
+The installed `claudes` executable in both infrastructure workspaces links
+to the local build. Both production routers report version 2.78.1. The
+named `tesote` profile loaded 12 models and resolved a 272k context window
+from the Tesote infrastructure workspace. The wiring probe matched the
+launch model and the single live request returned HTTP 200. Creating the
+named profile preserved the existing default config byte for byte.
+
+An authenticated check from the developerz.ai infrastructure workspace
+needs an existing key scoped to that router. The public health check passed.
+Selecting the missing `developerz` profile exited 78.
