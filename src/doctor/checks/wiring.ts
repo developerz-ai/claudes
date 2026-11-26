@@ -57,6 +57,7 @@ export interface ProbeSignalWiring {
 }
 
 export interface WiringDeps {
+  readonly profile?: string;
   readonly env: Env;
   /** Where the running claudes lives, for the settings' apiKeyHelper. */
   readonly nodePath: string;
@@ -316,7 +317,7 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
       });
       // The child is gone: the key's only disk copy goes with it.
       removeKeyCopy();
-      outcome = evaluate(stub, config, proc, deps.timeoutMs ?? WIRING_TIMEOUT_MS);
+      outcome = evaluate(stub, config, proc, deps.timeoutMs ?? WIRING_TIMEOUT_MS, deps.profile);
     }
   } catch (err) {
     if (isSymlinkedPathError(err)) {
@@ -434,6 +435,7 @@ function evaluate(
   config: Config,
   proc: ProcResult,
   timeoutMs: number,
+  profile = "default",
 ): CheckResult {
   const expected = credentialHash(config.key);
   const requests = stub.requests();
@@ -479,7 +481,7 @@ function evaluate(
     return {
       status: "FAIL",
       title: `wiring probe: the request's model (${model ?? "unreadable"}) is not a configured tier`,
-      fix: "re-run `claudes login` so the pinned tiers match what the router serves",
+      fix: `run \`claudes login --profile ${profile}\` so the pinned tiers match what the router serves`,
     };
   }
   if (proc.timedOut || proc.code === null || proc.code !== 0) {

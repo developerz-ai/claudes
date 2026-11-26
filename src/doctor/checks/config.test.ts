@@ -35,7 +35,7 @@ describe("checkConfig", () => {
         expect(results).toHaveLength(1);
         expect(results[0]?.status).toBe("PASS");
         expect(title).toBe(
-          `config /home/dev/.config/claudes/config.json (key mar_live_…, tiers ${displayed.opus} / ${displayed.sonnet} / ${displayed.haiku})`,
+          `config /home/dev/.config/claudes/config.json (profile default, key mar_live_…, tiers ${displayed.opus} / ${displayed.sonnet} / ${displayed.haiku})`,
         );
         expect(config).toBe(original);
         expect(config).toEqual(snapshot);

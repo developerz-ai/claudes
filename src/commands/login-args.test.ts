@@ -22,7 +22,9 @@ describe("login argument handling", () => {
     const h = harness(home);
     const result = await login([], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 64 });
-    expect(result.ok === false && result.message).toContain("usage: claudes login --url");
+    expect(result.ok === false && result.message).toContain(
+      "usage: claudes login [--profile <name>] [--url",
+    );
     expect(existsSync(configPath(home))).toBe(false);
   });
 

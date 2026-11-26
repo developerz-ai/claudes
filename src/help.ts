@@ -17,7 +17,7 @@ import { HELP_FLAG, type HelpScope, VERSION_FLAGS } from "./dispatch";
 export const PASSTHROUGH_FLAGS = ["--model", "-p", "-h"] as const;
 
 /** The flags the top-level help names: claudes' own, plus the passthrough ones. */
-export const HELP_FLAGS = [...VERSION_FLAGS, HELP_FLAG, ...PASSTHROUGH_FLAGS] as const;
+export const HELP_FLAGS = [...VERSION_FLAGS, HELP_FLAG, ...PASSTHROUGH_FLAGS, "--profile"] as const;
 
 /** The flags each help output names — the inventory its own text must match. */
 export const HELP_SCOPE_FLAGS: Readonly<Record<HelpScope, readonly string[]>> = {
@@ -37,6 +37,7 @@ modes are refused, as are arguments shaped like a router key.
 Options:
   --version, -v    print claudes' version and exit
   --help           print this help and exit
+  --profile <name> select a router profile for the session
 
 Claude Code's own flags, passed through:
   --model <tier>   choose the tier: opus, sonnet or haiku
@@ -47,6 +48,7 @@ Commands:
   login            store your router key and the router's model tiers
   doctor           check the runtime, config, router, conflicts and wiring
   key              print the router key for Claude Code's apiKeyHelper
+  profile          list, use or remove a router profile
 
 claudes login --help and claudes doctor --help print a command's own help.`;
 

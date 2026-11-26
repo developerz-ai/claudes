@@ -6,8 +6,6 @@ import type { CheckResult } from "../results";
 /** The same budget login's probes get; a healthy router answers far faster. */
 const ROUTER_TIMEOUT_MS = 10_000;
 
-const RELOGIN_FIX = "re-run `claudes login`";
-
 /** What a title prints instead of a version that carried key material. */
 const WITHHELD_VERSION = "withheld: the router echoed key material";
 
@@ -22,6 +20,7 @@ export interface RouterCheck {
 
 export interface RouterDeps {
   readonly config: Config;
+  readonly profile?: string;
   readonly fetch: FetchLike;
   readonly timeoutMs?: number;
 }
@@ -35,6 +34,7 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
   const timeoutMs = deps.timeoutMs ?? ROUTER_TIMEOUT_MS;
   const base = deps.config.baseUrl;
   const key = deps.config.key;
+  const reloginFix = `run \`claudes login --profile ${deps.profile ?? "default"}\``;
   let version: string;
   try {
     version = await health(base, deps.fetch, timeoutMs);
@@ -66,7 +66,7 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
       results.push({
         status: "FAIL",
         title: `the router rejected the key (HTTP ${err.status})`,
-        fix: RELOGIN_FIX,
+        fix: reloginFix,
       });
     } else {
       results.push({
@@ -87,7 +87,7 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
       title: `pinned ${pluralTiers(missing)} not served by the router: ${missing
         .map((family) => `${family}=${deps.config.tiers[family]}`)
         .join(", ")}`,
-      fix: RELOGIN_FIX,
+      fix: reloginFix,
     });
   } else {
     results.push({ status: "PASS", title: "every pinned tier is served by the router" });

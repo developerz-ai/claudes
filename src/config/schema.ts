@@ -90,6 +90,13 @@ export const configSchema = z.object({
     sonnet: z.string().min(1),
     haiku: z.string().min(1),
   }),
+  pins: z
+    .object({
+      opus: z.string().min(1).optional(),
+      sonnet: z.string().min(1).optional(),
+      haiku: z.string().min(1).optional(),
+    })
+    .optional(),
   subagentModel: z.string().min(1).optional(),
   maxContextTokens: z.number().int().positive().optional(),
 });

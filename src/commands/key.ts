@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/load";
 import type { Env } from "../config/paths";
+import { DEFAULT_PROFILE, validProfileName } from "../config/profile";
 import { firstReroutingUseToggle } from "../launch/provider-switches";
 
 const TTY_REFUSAL = "claudes key is for apiKeyHelper only";
@@ -24,14 +25,18 @@ export interface KeyDeps {
  * launch time.
  */
 export function runKey(argv: readonly string[], deps: KeyDeps): number {
-  // First, before anything else: no argument is accepted, so the first one
-  // after `key` is always the first unsupported one. The refusal names that
-  // position and never the token — a pasted key must not be echoed back, so
-  // the message carries no user input at all. The position is kept in the
-  // message so that a future accepted flag does not change its shape.
-  for (const [index] of argv.entries()) {
-    deps.stderr(`claudes key: unknown argument #${index + 1}\n${USAGE}\n`);
-    return 64;
+  let profile = DEFAULT_PROFILE;
+  if (argv.length > 0) {
+    const name = argv[1];
+    if (argv[0] !== "--profile") {
+      deps.stderr(`claudes key: unknown argument #1\n${USAGE}\n`);
+      return 64;
+    }
+    if (!validProfileName(name) || argv.length !== 2) {
+      deps.stderr("claudes key: expected exactly --profile <name>\n");
+      return 64;
+    }
+    profile = name;
   }
   if (deps.stdoutIsTTY) {
     deps.stderr(`${TTY_REFUSAL}\n`);
@@ -50,7 +55,7 @@ export function runKey(argv: readonly string[], deps: KeyDeps): number {
     );
     return 64;
   }
-  const loaded = loadConfig(deps.env);
+  const loaded = loadConfig(deps.env, profile);
   if (!loaded.ok) {
     deps.stderr(`${loaded.message}\n`);
     return loaded.exitCode;

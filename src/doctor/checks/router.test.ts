@@ -97,7 +97,7 @@ describe("checkRouter", () => {
     });
     expect(results[1]?.status).toBe("FAIL");
     expect(results[1]?.title).toContain("rejected the key (HTTP 401)");
-    expect(results[1]?.fix).toContain("re-run `claudes login`");
+    expect(results[1]?.fix).toContain("run `claudes login --profile default`");
   });
 
   test("an unhealthy /v1/models FAILs without leaking the key", async () => {
@@ -235,7 +235,7 @@ describe("checkRouter", () => {
     expect(modelIds).toEqual(served);
     expect(results[2]?.status).toBe("WARN");
     expect(results[2]?.title).toContain(`sonnet=${TIERS.sonnet}`);
-    expect(results[2]?.fix).toContain("re-run `claudes login`");
+    expect(results[2]?.fix).toContain("run `claudes login --profile default`");
   });
 
   test("a RouterError's scrubbed message survives into the title", async () => {

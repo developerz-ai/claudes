@@ -193,7 +193,7 @@ describe("runDoctor", () => {
       expect(await runDoctor(["--nonsense"], h.deps)).toBe(64);
       expect(h.out.join("")).toBe("");
       expect(h.err.join("")).toBe(
-        "claudes doctor: unknown argument #1\nusage: claudes doctor [--live]\n",
+        "claudes doctor: unknown argument #1\nusage: claudes doctor [--live] [--profile <name>]\n",
       );
       assertNoKeyFragment(h.err.join(""), KEY);
       expect(h.calls).toEqual({
@@ -375,7 +375,7 @@ describe("runDoctor", () => {
           expect(h.out.join("")).toBe("");
           const text = h.err.join("");
           expect(text).toBe(
-            `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live]\n`,
+            `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live] [--profile <name>]\n`,
           );
           expect(text).not.toContain(value);
           for (const byte of [0, 7, 8, 9, 13, 27, 127]) {

@@ -1,16 +1,18 @@
-import { configDir, configFile, type Env } from "../config/paths";
+import { configDir, type Env, profileFile } from "../config/paths";
+import { selectProfile } from "../config/profile";
 import {
   baseUrlSchema,
   type Config,
   formatZodIssues,
+  keyFragmentOffset,
   ROUTER_KEY_PATTERN,
   ROUTER_KEY_PREFIX,
 } from "../config/schema";
-import { writeConfig } from "../config/store";
+import { readConfig, writeConfig } from "../config/store";
 import { isTruthyToggle } from "../launch/provider-switches";
 import { errorName, type FetchLike, health, isRouterError, models, scrub } from "../router/client";
-import { resolveTiers } from "../tiers";
-import { parseLoginArgs } from "./login-args";
+import { resolveTiers, type TierName } from "../tiers";
+import { parseLoginArgs, USAGE } from "./login-args";
 import {
   InputTooLongError,
   readFirstLine,
@@ -53,34 +55,53 @@ function failure(exitCode: number, message?: string): LoginResult {
   return { ok: false, exitCode, message: message === undefined ? undefined : scrub(message) };
 }
 
+function verboseFetchRefusal(): LoginResult {
+  return failure(
+    64,
+    "claudes login: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed",
+  );
+}
+
 /** Orchestrates `claudes login`. Never touches the process directly: all I/O is injected. */
 export async function login(argv: readonly string[], deps: LoginDeps): Promise<LoginResult> {
-  const parsed = parseLoginArgs(argv);
+  const parsed = parseLoginArgs(argv, true);
   if (!parsed.ok) {
     return { ok: false, exitCode: parsed.exitCode, message: parsed.message };
   }
 
-  if (isTruthyToggle(deps.env.BUN_CONFIG_VERBOSE_FETCH)) {
-    return failure(
-      64,
-      "claudes login: refusing: BUN_CONFIG_VERBOSE_FETCH is set, so the router key would be printed",
-    );
-  }
+  const verboseFetch = isTruthyToggle(deps.env.BUN_CONFIG_VERBOSE_FETCH);
+  if (parsed.args.url !== undefined && verboseFetch) return verboseFetchRefusal();
 
   // Resolve where the config will land before reading the key or touching the
   // network: a broken environment must fail fast, not after the user typed a
   // secret into a prompt that was about to be wasted.
-  let path: string;
+  let dir: string;
   try {
-    path = configFile(configDir(deps.env));
+    dir = configDir(deps.env);
   } catch {
+    if (parsed.args.url === undefined) return failure(64, USAGE);
     return failure(
       78,
       "claudes login: cannot find the config directory — set $HOME or $XDG_CONFIG_HOME to an absolute path",
     );
   }
-
-  const url = resolveBaseUrl(parsed.args.url);
+  let profile: string;
+  try {
+    profile = selectProfile(dir, deps.env, parsed.args.profile);
+  } catch (error) {
+    return failure(78, errorMessage(error));
+  }
+  const path = profileFile(dir, profile);
+  let prior: Config | undefined;
+  try {
+    prior = readConfig(path);
+  } catch {
+    // An explicit URL can repair an unreadable or invalid profile.
+  }
+  const savedUrl = parsed.args.url ?? prior?.baseUrl;
+  if (savedUrl === undefined) return failure(64, USAGE);
+  if (verboseFetch) return verboseFetchRefusal();
+  const url = resolveBaseUrl(savedUrl);
   if (typeof url !== "string") {
     return failure(64, `claudes login: invalid --url (${url.reason})`);
   }
@@ -136,8 +157,21 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
     return failure(1, `claudes login: could not list models: ${describeRouterError(err, url)}`);
   }
 
-  const tiers = resolveTiers(modelIds, parsed.args.overrides);
-  const config: Config = { version: 1, baseUrl: url, key, tiers };
+  const pins = { ...prior?.pins };
+  for (const [name, value] of Object.entries(parsed.args.overrides)) {
+    const tier = name as TierName;
+    if (value === "auto") delete pins[tier];
+    else pins[tier] = value;
+  }
+  const tiers = resolveTiers(modelIds, pins);
+  const config: Config = {
+    ...prior,
+    version: 1,
+    baseUrl: url,
+    key,
+    tiers,
+    pins,
+  };
 
   try {
     (deps.writeConfig ?? writeConfig)(path, config);
@@ -145,12 +179,24 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
     return failure(1, `claudes login: could not save the config to ${path}: ${errorMessage(err)}`);
   }
 
-  deps.stdout(`logged in to ${url} (router version ${routerVersion})`);
+  const report = (text: string): void => {
+    deps.stdout(keyFragmentOffset(text, key) === undefined ? scrub(text) : "(details withheld)");
+  };
+  report(`logged in to ${url} (router version ${routerVersion})`);
   deps.stdout(`key ${REDACTED_KEY}`);
-  deps.stdout(`opus   ${tiers.opus}`);
-  deps.stdout(`sonnet ${tiers.sonnet}`);
-  deps.stdout(`haiku  ${tiers.haiku}`);
-  deps.stdout(`config saved to ${path}`);
+  report(`opus   ${tiers.opus}`);
+  report(`sonnet ${tiers.sonnet}`);
+  report(`haiku  ${tiers.haiku}`);
+  if (prior !== undefined && prior.pins === undefined) {
+    for (const tier of Object.keys(tiers) as TierName[]) {
+      if (tiers[tier] !== prior.tiers[tier]) {
+        report(
+          `${tier} changed from ${prior.tiers[tier]} to ${tiers[tier]}; keep the previous tier with --${tier} <model-id>`,
+        );
+      }
+    }
+  }
+  report(`config saved to ${path}`);
   return { ok: true, configPath: path, config };
 }
 

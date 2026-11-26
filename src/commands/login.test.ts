@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { configDir, profileFile } from "../config/paths";
+import { readConfig, writeConfig } from "../config/store";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { login } from "./login";
 import { configPath, harness, KEY, ROUTER } from "./login-harness";
@@ -93,7 +95,7 @@ describe("login environment", () => {
     const result = await login([], h.deps);
     expect(result).toMatchObject({ ok: false, exitCode: 64 });
     const message = result.ok ? "" : (result.message ?? "");
-    expect(message).toContain("usage: claudes login --url");
+    expect(message).toContain("usage: claudes login [--profile <name>] [--url");
     expect(message).not.toContain("BUN_CONFIG_VERBOSE_FETCH");
     assertNoKeyFragment(`${message}\n${h.stdout.join("\n")}`, KEY);
     expect(h.fetchCalls).toEqual([]);
@@ -215,4 +217,40 @@ describe("login key acquisition", () => {
     expect(h.stdout).toEqual([]);
     expect(existsSync(configPath(home))).toBe(false);
   });
+});
+
+test("re-login without a URL preserves profile settings and can clear a pin", async () => {
+  const dir = configDir({ HOME: home });
+  const path = profileFile(dir, "work");
+  const h = harness(home, { realStore: true, stdin: KEY });
+  expect((await login(["--profile", "work"], h.deps)).ok).toBe(false);
+  expect((await login(["--profile", "work", "--url", ROUTER], h.deps)).ok).toBe(true);
+  writeConfig(path, {
+    ...readConfig(path),
+    pins: { opus: "claude-opus-4-6", haiku: "claude-haiku-4-5" },
+    subagentModel: "claude-sonnet-4-6",
+    maxContextTokens: 150000,
+  });
+  expect((await login(["--profile", "work", "--haiku", "auto"], h.deps)).ok).toBe(true);
+  expect(readConfig(path)).toMatchObject({
+    baseUrl: ROUTER,
+    pins: { opus: "claude-opus-4-6" },
+    subagentModel: "claude-sonnet-4-6",
+    maxContextTokens: 150000,
+  });
+  expect(readConfig(path).pins?.haiku).toBeUndefined();
+  expect(existsSync(configPath(home))).toBe(false);
+  assertNoKeyFragment(h.stdout.join("\n"), KEY);
+});
+
+test("concurrent logins to different profiles preserve both configs", async () => {
+  const h = harness(home, { realStore: true, stdin: KEY });
+  const dir = configDir({ HOME: home });
+  const results = await Promise.all(
+    ["work", "personal"].map((name) => login(["--profile", name, "--url", ROUTER], h.deps)),
+  );
+  expect(results.every((result) => result.ok)).toBe(true);
+  for (const name of ["work", "personal"]) {
+    expect(readConfig(profileFile(dir, name)).baseUrl).toBe(ROUTER);
+  }
 });

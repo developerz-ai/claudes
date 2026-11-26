@@ -30,7 +30,7 @@ describe("checkEffectiveModel", () => {
     expect(results[0]?.status).toBe("WARN");
     expect(results[0]?.title).toContain(`model=${TIERS.sonnet}`);
     expect(results[0]?.title).toContain(`advisorModel=${TIERS.haiku}`);
-    expect(results[0]?.fix).toContain("re-run `claudes login`");
+    expect(results[0]?.fix).toContain("run `claudes login --profile default`");
   });
 
   for (const role of ["model", "advisorModel", "subagentModel"] as const) {
@@ -71,7 +71,7 @@ describe("checkEffectiveModel", () => {
           );
           if (!served) {
             expect(results[0]?.fix).toBe(
-              "re-run `claudes login` (or pass a --sonnet/--haiku override) so every effective model is served",
+              "run `claudes login --profile default` (or pass a --sonnet/--haiku override) so every effective model is served",
             );
           }
           expect(config).toEqual(snapshot);

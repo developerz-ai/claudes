@@ -17,6 +17,8 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
+import { configDir, profileFile } from "./config/paths";
+import { writeConfig } from "./config/store";
 import { credentialHash } from "./doctor/stub-server";
 import { helpText } from "./help";
 import { shellQuote } from "./launch/settings";
@@ -98,6 +100,30 @@ function expectNoKeyMaterial(text: string): void {
 }
 
 describe("claudes main through a real process (bun src/main.ts)", () => {
+  test("lists, activates and removes named profiles through the CLI", () => {
+    const dir = configDir(childEnv);
+    for (const name of ["default", "work"]) {
+      writeConfig(profileFile(dir, name), {
+        version: 1,
+        baseUrl: `https://${name}.invalid`,
+        key: KEY,
+        tiers: { opus: "claude-opus-4-6", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5" },
+      });
+    }
+    expect(runMain(["profile", "use", "work"]).status).toBe(0);
+    const listed = runMain(["profile", "list"]);
+    expect(listed.status).toBe(0);
+    expect(listed.stdout).toContain("* work https://work.invalid");
+    assertNoKeyFragment(listed.stdout + listed.stderr, KEY);
+    expect(runMain(["profile", "remove", "work"]).status).toBe(64);
+    expect(runMain(["profile", "remove", "default"]).status).toBe(0);
+    expect(existsSync(profileFile(dir, "default"))).toBe(false);
+    expect(existsSync(profileFile(dir, "work"))).toBe(true);
+    const missing = runMain(["--profile", "missing", "-p", "hello"]);
+    expect(missing.status).toBe(78);
+    expect(missing.stderr).toContain("available profiles: work");
+  });
+
   test("--version: VERSION on stdout, exit 0", () => {
     const res = runMain(["--version"]);
     expect(res.status).toBe(0);
@@ -148,7 +174,7 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
         expect(res.status).toBe(64);
         // Positions exclude the command word; #2 also proves --live was accepted.
         expect(res.stderr).toBe(
-          `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live]\n`,
+          `claudes doctor: unknown argument #${prefix.length + 1}\nusage: claudes doctor [--live] [--profile <name>]\n`,
         );
         expect(res.stdout).toBe("");
         expect(res.stderr).not.toContain(value);
@@ -183,7 +209,7 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expect(res.status).toBe(0);
     expect(res.stderr).toBe("");
     expect(res.stdout).toBe(`${helpText("login")}\n`);
-    expect(res.stdout).toContain("usage: claudes login --url <router-url>");
+    expect(res.stdout).toContain("usage: claudes login [--profile <name>] [--url <router-url>]");
     expectNoKeyMaterial(res.stdout);
   });
 
@@ -192,7 +218,7 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expect(res.status).toBe(0);
     expect(res.stderr).toBe("");
     expect(res.stdout).toBe(`${helpText("doctor")}\n`);
-    expect(res.stdout).toContain("usage: claudes doctor [--live]");
+    expect(res.stdout).toContain("usage: claudes doctor [--live] [--profile <name>]");
     expectNoKeyMaterial(res.stdout);
   });
 
@@ -749,3 +775,59 @@ describe("the uninstall drill", () => {
     expect(checksum(same)).not.toBe(checksum(other));
   });
 });
+
+test(
+  "two simultaneous profiles send only their own key to each router",
+  async () => {
+    const stacks = await Promise.all([startRouterStack(), startRouterStack()]);
+    const fixtures = [
+      { name: "work", key: KEY, stack: stacks[0] },
+      { name: "personal", key: `mar_live_${"p".repeat(32)}`, stack: stacks[1] },
+    ] as const;
+    try {
+      const node = Bun.which("node");
+      if (node === null) throw new Error("the profile e2e requires Node");
+      symlinkSync(node, join(scratch, "bin", "node"));
+      writeFileSync(join(scratch, "bin", "claude"), FAKE_CLAUDE, { mode: 0o755 });
+      const logins = await Promise.all(
+        fixtures.map(({ name, key, stack }) =>
+          runCli(
+            process.execPath,
+            [MAIN, "login", "--profile", name, "--url", stack.baseUrl],
+            childEnv,
+            `${key}\n`,
+          ),
+        ),
+      );
+      expect(logins.map(({ status }) => status)).toEqual([0, 0]);
+      expect(runMain(["profile", "use", "work"]).status).toBe(0);
+
+      const sessions = await Promise.all([
+        runCli(process.execPath, [MAIN, "-p", "ping"], {
+          ...childEnv,
+          CLAUDES_PROFILE: "personal",
+        }),
+        runCli(process.execPath, [MAIN, "--profile", "work", "-p", "ping"], {
+          ...childEnv,
+          CLAUDES_PROFILE: "personal",
+        }),
+      ]);
+      expect(sessions.map(({ status }) => status)).toEqual([0, 0]);
+      for (const { key, stack } of fixtures) {
+        for (const { stdout, stderr } of [...logins, ...sessions]) {
+          assertNoKeyFragment(stdout + stderr, key);
+        }
+        const requests = stack.requests();
+        expect(requests.filter(({ pathname }) => pathname === "/v1/messages")).toHaveLength(1);
+        expect(
+          requests
+            .flatMap(({ credentials }) => credentials)
+            .every((hash) => hash === credentialHash(key)),
+        ).toBe(true);
+      }
+    } finally {
+      await Promise.all(stacks.map((stack) => stack.close()));
+    }
+  },
+  DRILL_TIMEOUT_MS,
+);

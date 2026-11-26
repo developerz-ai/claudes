@@ -3,7 +3,8 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "../config/load";
-import { configDir, configFile } from "../config/paths";
+import { activeProfileFile, configDir, configFile, profileFile } from "../config/paths";
+import { writePrivateFile } from "../config/private-file";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import { BENIGN_USE_TOGGLES, PROVIDER_SWITCHES } from "../launch/provider-switches";
@@ -281,4 +282,25 @@ describe("runKey", () => {
     drive([KEY], false);
     assertNoKeyFragment(err.join(""), KEY);
   });
+});
+
+test("the legacy helper keeps default and a named helper checks its own origin", () => {
+  const dir = configDir({ HOME: home });
+  const workKey = `mar_live_${"w".repeat(32)}`;
+  const workRouter = "https://work.invalid";
+  writeConfig(configFile(dir), config());
+  writeConfig(profileFile(dir, "work"), { ...config(), baseUrl: workRouter, key: workKey });
+  writePrivateFile(activeProfileFile(dir), "work\n", { noun: "active profile", remedy: "retry" });
+
+  expect(drive([], false, { CLAUDES_PROFILE: "work" })).toBe(0);
+  expect(writes[0] === KEY).toBe(true);
+  expect(drive(["--profile", "work"], false, { ANTHROPIC_BASE_URL: workRouter })).toBe(0);
+  expect(writes[1] === workKey).toBe(true);
+  expect(drive(["--profile", "work"], false, { ANTHROPIC_BASE_URL: ROUTER })).toBe(64);
+  for (const args of [["--profile"], ["--profile", KEY], ["--profile", "work", "extra"]]) {
+    expect(drive(args, false)).toBe(64);
+  }
+  expect(writes).toHaveLength(2);
+  assertNoKeyFragment(err.join(""), KEY);
+  assertNoKeyFragment(err.join(""), workKey);
 });
