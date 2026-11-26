@@ -7,7 +7,7 @@ import type { Env } from "../config/paths";
 import { writePrivateFile } from "../config/private-file";
 import { type FetchLike, RouterError } from "../router/client";
 import { errorName } from "../router/errors";
-import { buildArgv } from "./argv";
+import { buildArgv, hasRouterKey, refusedKey } from "./argv";
 import { buildChildEnv } from "./env";
 import {
   PREFLIGHT_TIMEOUT_NOTE_MESSAGE,
@@ -27,7 +27,12 @@ import {
 import { buildSettings } from "./settings";
 import { launchSettingsPath, settingsWriteError, sweepStaleLaunchSettings } from "./settings-file";
 
+import { classify, offRouterOption } from "./subcommands";
+
 export const CLAUDE_NOT_FOUND_MESSAGE = "claude not found on PATH";
+export const CLAUDE_INSTALL_HINT =
+  "claudes wraps Claude Code. Install Claude Code separately and make it available on PATH.";
+export const SELF_REFERENCE_MESSAGE = "claudes: the claude on PATH is claudes itself";
 
 export const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 export type ForwardedSignal = (typeof FORWARDED_SIGNALS)[number];
@@ -61,7 +66,8 @@ export interface RunDeps {
 }
 
 /**
- * Runs `claude` against the router: load the config (or refuse), build the
+ * Runs Claude Code management commands directly and routes sessions through
+ * the configured router. For a routed session, load the config, build the
  * child argv (or refuse), refuse an env that would reroute the session or
  * print the key, sweep the settings files of dead launches (before any
  * network probe, so it also runs when the router is down), pre-flight the
@@ -75,12 +81,27 @@ export interface RunDeps {
  * Never prints or passes the key.
  */
 export async function run(userArgs: readonly string[], deps: RunDeps): Promise<number> {
+  if (hasRouterKey(userArgs)) {
+    const refusal = refusedKey();
+    return fail(deps, refusal.exitCode, refusal.message);
+  }
+
+  const offRouter = offRouterOption(userArgs);
+  if (offRouter !== undefined) {
+    return fail(deps, 64, `claudes: ${offRouter} is not supported — it runs outside the router`);
+  }
+  const launchClass = classify(userArgs);
+  if (launchClass === "manage") {
+    const claude = resolveClaude(deps);
+    return typeof claude === "number" ? claude : await execClaude(claude, userArgs, deps);
+  }
+
   const loaded = loadConfig(deps.env);
   if (!loaded.ok) {
     return fail(deps, loaded.exitCode, loaded.message);
   }
   const settingsPath = launchSettingsPath(loaded.dir);
-  const argv = buildArgv(userArgs, settingsPath);
+  const argv = buildArgv(userArgs, settingsPath, launchClass);
   if (!argv.ok) {
     return fail(deps, argv.exitCode, argv.message);
   }
@@ -140,10 +161,8 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
 
   // Resolved before the write, so a missing `claude` leaves no settings file
   // behind for a session that never ran.
-  const claudePath = resolveExecutable("claude", deps.env);
-  if (claudePath === undefined) {
-    return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE);
-  }
+  const claudePath = resolveClaude(deps);
+  if (typeof claudePath === "number") return claudePath;
 
   const settings = buildSettings(loaded.config, deps, deps.env);
   try {
@@ -229,6 +248,21 @@ async function execClaude(
 function signalNumberOf(signal: NodeJS.Signals): number {
   const table = osConstants.signals as Record<string, number | undefined>;
   return table[signal] ?? 0;
+}
+
+function resolveClaude(deps: RunDeps): string | number {
+  const candidate = resolveExecutable("claude", deps.env);
+  if (candidate === undefined) {
+    return fail(deps, 127, CLAUDE_NOT_FOUND_MESSAGE, [CLAUDE_INSTALL_HINT]);
+  }
+  try {
+    if (realpathSync(candidate) === deps.scriptPath) {
+      return fail(deps, 127, SELF_REFERENCE_MESSAGE);
+    }
+  } catch {
+    // The candidate may have disappeared. The spawn reports that failure.
+  }
+  return candidate;
 }
 
 /** Finds `name` on the env's PATH; only an executable regular file counts. */

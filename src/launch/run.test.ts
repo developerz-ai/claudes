@@ -14,7 +14,7 @@ import { MISSING_CONFIG_MESSAGE } from "../config/load";
 import { configFile, settingsFile } from "../config/paths";
 import { writeConfig } from "../config/store";
 import { assertNoKeyFragment } from "../test-support/redact";
-import { CLAUDE_NOT_FOUND_MESSAGE } from "./run";
+import { CLAUDE_INSTALL_HINT, CLAUDE_NOT_FOUND_MESSAGE } from "./run";
 import {
   cleanup,
   deadFetch,
@@ -44,6 +44,42 @@ function errText(): string {
 function launchSettings(): string {
   return settingsFile(h.dir, process.pid);
 }
+
+test("a management command works without config and forwards its own settings argument", async () => {
+  rmSync(configFile(h.dir));
+  const args = ["mcp", "list", "--settings", "standalone.json"];
+  const code = await h.drive(args, {
+    fetch: async () => {
+      throw new Error("management must not fetch");
+    },
+    spawnScript: (child) => child.emit("exit", 0, null),
+  });
+  expect(code).toBe(0);
+  expect(h.spawnCalls).toHaveLength(1);
+  expect(h.spawnCalls[0]?.argv).toEqual(args);
+  expect(h.spawnCalls[0]?.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  expect(existsSync(launchSettings())).toBe(false);
+});
+
+test("dispatch commands get settings after the command word", async () => {
+  const code = await h.drive(["remote-control", "--help"], {
+    spawnScript: (child) => child.emit("exit", 0, null),
+  });
+  expect(code).toBe(0);
+  expect(h.spawnCalls[0]?.argv).toEqual([
+    "remote-control",
+    "--settings",
+    launchSettings(),
+    "--help",
+  ]);
+});
+
+test("management checks for a pasted key after the option terminator", async () => {
+  rmSync(configFile(h.dir));
+  expect(await h.drive(["logs", "--", KEY])).toBe(64);
+  expect(h.spawnCalls).toEqual([]);
+  assertNoKeyFragment(errText(), KEY);
+});
 
 describe("run: config gate", () => {
   test("no config at all: exit 78, the exact remedy, nothing spawned", async () => {
@@ -271,7 +307,7 @@ describe("run: settings file", () => {
   test("no settings file is written when claude is missing from PATH", async () => {
     const code = await h.drive(["-p", "hi"], { env: { HOME: h.home, PATH: "/nonexistent" } });
     expect(code).toBe(127);
-    expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n`);
+    expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n${CLAUDE_INSTALL_HINT}\n`);
     // `claude` is resolved before the write, so a launch that can never run a
     // session leaves no file (and no proxy credentials) behind.
     expect(existsSync(launchSettings())).toBe(false);

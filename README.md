@@ -63,8 +63,7 @@ Code (`claude`) must also be installed and on `PATH` to launch sessions.
 
 ## Daily use
 
-Type `claudes` wherever you would type `claude`; every argument passes
-through:
+Use `claudes` to start a Claude Code session through the router.
 
 ```sh
 claudes                  # interactive session
@@ -79,11 +78,17 @@ claudes --help           # what claudes itself accepts
 suffix) are normalised to them.
 
 `claudes` itself owns only five first arguments: `login`, `doctor`, `key`,
-`--version` (`-v`) and `--help`. Everything else goes to `claude`.
+`--version` (`-v`) and `--help`.
+
+Management commands such as `logs`, `attach`, `mcp`, `plugin`, `auth` and `-h`
+run directly in Claude Code and work even when the router is down.
+`agents` and `remote-control` receive the router settings after the command
+word. `ultrareview`, `--cloud`, `--environment` and `--desktop` are refused
+because they can run outside the router.
 
 `claudes --help` prints a help text on stdout and exits 0. It names the flags
-`claudes` owns itself — `--version`, `-v` and `--help` — and the two Claude
-Code flags it accepts: `--model` and `-p`.
+`claudes` owns itself — `--version`, `-v` and `--help` — and the Claude
+Code flags `--model`, `-p` and `-h`.
 
 `claudes key` is the internal helper Claude Code calls to fetch the router
 key; at a terminal it refuses (exit 64). It takes no arguments of its own: any
@@ -173,6 +178,9 @@ use.
 
 | Exit | When                                                                                                                              | Message                                                                                                                                                                                                                                                                |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 64   | Managed settings were passed on argv (`--managed-settings` or `--managed-settings-in-initialize`)                                 | `claudes: <name> is not supported — managed settings could override the router settings`                                                                                                                                                                               |
+| 64   | A command or flag that runs outside the router                                                                                    | `claudes: <name> is not supported — it runs outside the router`                                                                                                                                                                                                        |
+| 127  | `claude` on `PATH` resolves to claudes                                                                                            | `claudes: the claude on PATH is claudes itself`                                                                                                                                                                                                                        |
 | 64   | You passed `--settings`                                                                                                           | `claudes: --settings is not supported — claudes writes its own settings file to point claude at the router`                                                                                                                                                            |
 | 64   | You passed `--key`                                                                                                                | `claudes: --key is not supported — the router key comes from the config written by \`claudes login\``                                                                                                                                                                  |
 | 64   | An argument looks like a router key (in any position, including after the `--` terminator)                                        | `claudes: refusing an argument that looks like a router key — a key on the command line leaks into shell history and process listings`                                                                                                                                 |
@@ -184,7 +192,7 @@ use.
 | 69   | The router did not answer the pre-launch check                                                                                    | (message above)                                                                                                                                                                                                                                                        |
 | 69   | The router answered the pre-launch check without a usable version                                                                 | `router answered the pre-launch check with an invalid version: the configured router URL does not point at a router claudes can use — run \`claudes doctor\``                                                                                                          |
 | 78   | No config, or a config `claudes` refuses to trust                                                                                 | `no claudes config: run \`claudes login --url <router>\``                                                                                                                                                                                                              |
-| 127  | `claude` is not on `PATH`                                                                                                         | `claude not found on PATH`                                                                                                                                                                                                                                             |
+| 127  | `claude` is not on `PATH`                                                                                                         | `claude not found on PATH\nclaudes wraps Claude Code. Install Claude Code separately and make it available on PATH.`                                                                                                                                                   |
 | 1    | `claudes doctor` had at least one FAIL                                                                                            | (the FAIL lines themselves)                                                                                                                                                                                                                                            |
 | 64   | `claudes doctor` got an argument other than `--live`; `--help` is only accepted on its own, where it prints the usage and exits 0 | `claudes doctor: unknown argument #1\nusage: claudes doctor [--live]`                                                                                                                                                                                                  |
 | 64   | `claudes login` ran without `--url`                                                                                               | `usage: claudes login --url <router-url> [--opus <model-id>] [--sonnet <model-id>] [--haiku <model-id>]\n\nThe router key is read from the "Router key: " prompt, or from the first line of\nstdin when it is piped; it is never accepted as a command-line argument.` |

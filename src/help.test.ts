@@ -19,7 +19,7 @@ import { assertNoKeyFragment } from "./test-support/redact";
  * flag fails even when the scope's own inventory shrinks with it.
  */
 const EXPECTED_SCOPE_FLAGS: Readonly<Record<HelpScope, readonly string[]>> = {
-  top: ["--version", "-v", "--help", "--model", "-p"],
+  top: ["--version", "-v", "--help", "--model", "-p", "-h"],
   login: ["--url", "--opus", "--sonnet", "--haiku"],
   doctor: ["--live"],
 };

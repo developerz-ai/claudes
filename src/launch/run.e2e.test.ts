@@ -21,7 +21,14 @@ import type { FetchLike } from "../router/client";
 import { KEY, ROUTER, routerResponse } from "../test-support/fixtures";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { ROUTER_UNREACHABLE_MESSAGE } from "./preflight";
-import { type Child, CLAUDE_NOT_FOUND_MESSAGE, run, type SignalWiring, type SpawnFn } from "./run";
+import {
+  type Child,
+  CLAUDE_INSTALL_HINT,
+  CLAUDE_NOT_FOUND_MESSAGE,
+  run,
+  type SignalWiring,
+  type SpawnFn,
+} from "./run";
 
 /** Explicit timeout for every test that spawns a child; the default is too tight under load. */
 const SPAWN_TEST_TIMEOUT_MS = 30_000;
@@ -288,6 +295,24 @@ describe("run e2e: the happy path", () => {
   );
 
   test(
+    "passes a management command unchanged and puts dispatch settings after its command",
+    async () => {
+      expect(await drive(["mcp", "list"])).toBe(7);
+      expect((await readRecord()).argv.slice(2)).toEqual(["mcp", "list"]);
+      expect(existsSync(settingsFile(dir, process.pid))).toBe(false);
+
+      expect(await drive(["agents", "--help"])).toBe(7);
+      expect((await readRecord()).argv.slice(2)).toEqual([
+        "agents",
+        "--settings",
+        settingsFile(dir, process.pid),
+        "--help",
+      ]);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "exit 0 passes through too",
     async () => {
       expect(await drive(["-p", "hi"], { env: { FAKE_CLAUDE_EXIT: "0" } })).toBe(0);
@@ -415,7 +440,7 @@ describe("run e2e: refusals before exec", () => {
   test("claude missing from PATH: exit 127, the message", async () => {
     const code = await drive(["-p", "hi"], { env: { PATH: "/nonexistent" } });
     expect(code).toBe(127);
-    expect(err.join("")).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n`);
+    expect(err.join("")).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n${CLAUDE_INSTALL_HINT}\n`);
     expect(existsSync(outFile)).toBe(false);
   });
 });

@@ -3,7 +3,12 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { settingsFile } from "../config/paths";
-import { CLAUDE_NOT_FOUND_MESSAGE, FORWARDED_SIGNALS, resolveExecutable } from "./run";
+import {
+  CLAUDE_INSTALL_HINT,
+  CLAUDE_NOT_FOUND_MESSAGE,
+  FORWARDED_SIGNALS,
+  resolveExecutable,
+} from "./run";
 import { cleanup, fakeWiring, type Harness, harness } from "./run-harness";
 
 let h: Harness;
@@ -24,7 +29,7 @@ describe("run: claude resolution and exit codes", () => {
   test("claude not on PATH: exit 127, the message, no spawn", async () => {
     const code = await h.drive(["-p", "hi"], { env: { HOME: h.home, PATH: "/nonexistent" } });
     expect(code).toBe(127);
-    expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n`);
+    expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n${CLAUDE_INSTALL_HINT}\n`);
     expect(h.spawnCalls).toEqual([]);
   });
 

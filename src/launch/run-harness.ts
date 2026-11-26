@@ -74,6 +74,7 @@ export interface DriveOptions {
   wiring?: SignalWiring;
   /** Defaults to false: stdin is not a TTY, so SIGINT is forwarded. */
   stdinIsTTY?: boolean;
+  scriptPath?: string;
   spawnScript?: (child: FakeChild) => void;
 }
 
@@ -107,7 +108,7 @@ export function harness(): Harness {
       fetch: options.fetch ?? healthyFetch,
       stderr: (text) => err.push(text),
       nodePath: NODE,
-      scriptPath: SCRIPT,
+      scriptPath: options.scriptPath ?? SCRIPT,
       stdinIsTTY: options.stdinIsTTY ?? false,
       spawn: spawnFn,
       signals: options.wiring ?? fakeWiring().wiring,

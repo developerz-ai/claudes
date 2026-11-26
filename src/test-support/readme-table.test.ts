@@ -33,10 +33,9 @@ import {
 const rows = readmeRefusalRows();
 
 describe("README refusals table", () => {
-  test("the table has the fifteen documented rows", () => {
-    expect(rows.length).toBe(15);
+  test("the table parses the documented exit codes", () => {
     expect(rows.map((row) => row.exit)).toEqual([
-      64, 64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1, 64, 64,
+      64, 64, 127, 64, 64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1, 64, 64,
     ]);
   });
 
@@ -63,8 +62,10 @@ describe("README refusals table", () => {
   test("the rerouting rows keep the <name> template", () => {
     // Both env-refusal rows quote the same message with a <name> template:
     // one for the variable refused on any non-empty value, one for the
-    // truthy-gated ones. Every row carrying the template must quote it.
-    const rerouting = rows.filter((candidate) => candidate.message?.includes("<name>") === true);
+    // truthy-gated ones.
+    const rerouting = rows.filter(
+      (candidate) => candidate.message?.startsWith("claudes: refusing: <name>") === true,
+    );
     expect(rerouting.length).toBe(2);
     for (const row of rerouting) {
       expect(row.exit).toBe(64);

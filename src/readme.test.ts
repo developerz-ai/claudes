@@ -10,6 +10,7 @@ import { dispatch, HELP_SCOPES, type HelpScope, VERSION_FLAGS } from "./dispatch
 import { HELP_FLAGS, HELP_SCOPE_FLAGS, HELP_TEXTS } from "./help";
 import { buildArgv } from "./launch/argv";
 import * as preflight from "./launch/preflight";
+import { classify } from "./launch/subcommands";
 import { UNSUPPORTED_FEATURES, type UnsupportedFeature } from "./launch/unsupported";
 import { KEY } from "./test-support/fixtures";
 import {
@@ -52,7 +53,7 @@ const UNDOCUMENTED_FLAGS: Readonly<Record<string, string>> = {};
  * too, so they also carry a parser check — the rewrite and the pass-through
  * are claudes' own behaviour.
  */
-const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "-p"]);
+const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "-p", "-h"]);
 
 /**
  * Flags claudes refuses outright. The exit code and the message come from
@@ -63,6 +64,13 @@ const CLAUDE_FLAGS: ReadonlySet<string> = new Set(["--model", "-p"]);
  * the refusal test below.
  */
 const REFUSED_FLAGS: ReadonlySet<string> = new Set(["--settings", "--key"]);
+const REFUSED_MODE_FLAGS: ReadonlySet<string> = new Set([
+  "--cloud",
+  "--environment",
+  "--desktop",
+  "--managed-settings",
+  "--managed-settings-in-initialize",
+]);
 
 /**
  * The README row that documents the refusal of `flag`: the one whose "When"
@@ -174,6 +182,10 @@ const CLAUDES_FLAG_CHECKS: Readonly<Record<string, () => Promise<void>>> = {
       ok: true,
       argv: ["--settings", "/tmp/settings.json", "-p", "hi"],
     });
+  },
+  "-h": async () => {
+    expect(dispatch(["-h"])).toEqual({ kind: "passthrough", args: ["-h"] });
+    expect(classify(["-h"])).toBe("manage");
   },
   "--url": async () => {
     expect(parseLoginArgs(["--url", LOGIN_URL]).ok).toBe(true);
@@ -300,6 +312,7 @@ describe("README flags", () => {
           !CLAUDE_FLAGS.has(flag) &&
           !OWNED_FLAGS.includes(flag) &&
           !REFUSED_FLAGS.has(flag) &&
+          !REFUSED_MODE_FLAGS.has(flag) &&
           !SHELL_FLAGS.has(flag),
       )
       .sort();
@@ -362,7 +375,7 @@ function assertHelpMatchesReadme(
   const documented = positiveReadmeFlags(source);
   const problems: string[] = [];
   for (const flag of documented) {
-    if (REFUSED_FLAGS.has(flag) || SHELL_FLAGS.has(flag)) {
+    if (REFUSED_FLAGS.has(flag) || REFUSED_MODE_FLAGS.has(flag) || SHELL_FLAGS.has(flag)) {
       continue;
     }
     // The applicable help output is the one whose scope owns the flag.
@@ -419,7 +432,7 @@ describe("README and help output contract", () => {
   test("the refusals table and the shell flags are outside the contract", () => {
     // --settings and --key are refusals, -g and -rf belong to npm and rm:
     // no help output may be asked to document them.
-    for (const flag of [...REFUSED_FLAGS, ...SHELL_FLAGS]) {
+    for (const flag of [...REFUSED_FLAGS, ...REFUSED_MODE_FLAGS, ...SHELL_FLAGS]) {
       const named = HELP_SCOPES.some((scope) => flagsIn(HELP_TEXTS[scope]).has(flag));
       expect(named).toBe(false);
     }
