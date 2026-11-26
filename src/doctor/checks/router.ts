@@ -1,6 +1,13 @@
 import { type Config, keyFragmentOffset } from "../../config/schema";
-import { errorName, type FetchLike, health, isRouterError, models } from "../../router/client";
-import { TIER_FAMILIES, type TierName } from "../../tiers";
+import {
+  errorName,
+  type FetchLike,
+  health,
+  isRouterError,
+  type ModelEntry,
+  models,
+} from "../../router/client";
+import { type ModelFamily, TIER_FAMILIES } from "../../tiers";
 import type { CheckResult } from "../results";
 
 /** The same budget login's probes get; a healthy router answers far faster. */
@@ -16,6 +23,7 @@ export interface RouterCheck {
   readonly results: CheckResult[];
   /** The ids /v1/models served, for the effective-model check; undefined on failure. */
   readonly modelIds: string[] | undefined;
+  readonly modelEntries?: readonly ModelEntry[];
 }
 
 export interface RouterDeps {
@@ -58,9 +66,9 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
     { status: "PASS", title: `router ${base} (version ${shownVersion})` },
   ];
 
-  let ids: string[];
+  let entries: ModelEntry[];
   try {
-    ids = (await models(base, key, deps.fetch, timeoutMs)).map(({ id }) => id);
+    entries = await models(base, key, deps.fetch, timeoutMs);
   } catch (err) {
     if (isRouterError(err) && (err.status === 401 || err.status === 403)) {
       results.push({
@@ -77,22 +85,26 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
     }
     return { results, modelIds: undefined };
   }
+  const ids = entries.map(({ id }) => id);
   results.push({ status: "PASS", title: `the key lists ${ids.length} models on /v1/models` });
-
   const served = new Set(ids);
-  const missing = TIER_FAMILIES.filter((family) => !served.has(deps.config.tiers[family]));
+  const pins = deps.config.pins ?? deps.config.tiers;
+  const missing = [...TIER_FAMILIES, "fable" as const].filter((family) => {
+    const pin = pins[family];
+    return pin !== undefined && !served.has(pin);
+  });
   if (missing.length > 0) {
     results.push({
       status: "WARN",
       title: `pinned ${pluralTiers(missing)} not served by the router: ${missing
-        .map((family) => `${family}=${deps.config.tiers[family]}`)
+        .map((family) => `${family}=${pins[family]}`)
         .join(", ")}`,
       fix: reloginFix,
     });
   } else {
     results.push({ status: "PASS", title: "every pinned tier is served by the router" });
   }
-  return { results, modelIds: ids };
+  return { results, modelIds: ids, modelEntries: entries };
 }
 
 /**
@@ -116,6 +128,6 @@ function describe(err: unknown, base: string, key: string): string {
   return carriesKeyMaterial(text, key) ? WITHHELD_DETAIL : text;
 }
 
-function pluralTiers(families: readonly TierName[]): string {
+function pluralTiers(families: readonly ModelFamily[]): string {
   return families.length === 1 ? "tier is" : "tiers are";
 }

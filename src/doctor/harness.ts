@@ -118,9 +118,10 @@ export function fakeClaudeProc(options: FakeClaudeOptions = {}): {
     } else if (settingsPath !== undefined && existsSync(settingsPath)) {
       const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
         readonly env: Record<string, string>;
+        readonly model?: string;
       };
       const base = settings.env.ANTHROPIC_BASE_URL;
-      const model = options.model ?? TIERS.sonnet;
+      const model = options.model ?? settings.model ?? TIERS.sonnet;
       await fetch(`${base}/v1/messages`, {
         method: "POST",
         headers: {

@@ -1,46 +1,39 @@
-import type { Config } from "../../config/schema";
+import { type Config, keyFragmentOffset } from "../../config/schema";
+import type { Catalog } from "../../launch/catalog";
+import type { SessionModel } from "../../launch/session-model";
 import { scrub } from "../../router/errors";
 import type { CheckResult } from "../results";
 
-export interface EffectiveModelDeps {
-  readonly config: Config;
-  readonly profile?: string;
-  /** What GET /v1/models served for this key; the router check's output. */
-  readonly modelIds: readonly string[];
-}
-
-/**
- * Check 7: the model and advisorModel Claude Code will actually use under the
- * generated settings. The settings pin one id per family, and Claude Code
- * starts sessions on the Sonnet family while the advisor (and other background
- * work) runs on the Haiku family — so those two pins are the effective models,
- * plus the configured subagent model when there is one. WARN when the key's
- * own /v1/models does not serve one: the request would 404 mid-session.
- */
-export function checkEffectiveModel(deps: EffectiveModelDeps): CheckResult[] {
-  const { config } = deps;
-  const served = new Set(deps.modelIds);
-  const effective: { readonly role: string; readonly id: string }[] = [
-    { role: "model", id: config.tiers.sonnet },
-    { role: "advisorModel", id: config.tiers.haiku },
-  ];
+export function checkEffectiveModel(
+  config: Config,
+  catalog: Catalog,
+  model: SessionModel,
+  profile = "default",
+): CheckResult[] {
+  const show = (value: string): string =>
+    keyFragmentOffset(value, config.key) === undefined ? scrub(value) : "(withheld)";
+  const parts = [`model=${show(model.launchId ?? catalog.tiers.opus)}`];
   if (config.subagentModel !== undefined) {
-    effective.push({ role: "subagentModel", id: config.subagentModel });
+    parts.push(`subagentModel=${show(config.subagentModel)}`);
   }
-  const missing = effective.filter((entry) => !served.has(entry.id));
-  if (missing.length > 0) {
-    return [
-      {
-        status: "WARN",
-        title: `the router does not serve ${missing.map((entry) => `${entry.role}=${scrub(entry.id)}`).join(", ")}`,
-        fix: `run \`claudes login --profile ${deps.profile ?? "default"}\` (or pass a --sonnet/--haiku override) so every effective model is served`,
-      },
-    ];
-  }
-  return [
-    {
-      status: "PASS",
-      title: `effective models: ${effective.map((entry) => `${entry.role}=${scrub(entry.id)}`).join(", ")}`,
-    },
+  parts.push(
+    model.window === undefined
+      ? "context window unknown"
+      : `context window ${model.window.tokens} tokens (${model.window.source})`,
+  );
+  const results: CheckResult[] = [
+    { status: "PASS", title: `effective models: ${parts.join(", ")}` },
   ];
+  if (
+    config.subagentModel !== undefined &&
+    catalog.entries.size > 0 &&
+    !catalog.entries.has(config.subagentModel)
+  ) {
+    results.push({
+      status: "WARN",
+      title: "the router does not list the configured subagent model",
+      fix: `check the available models for profile ${show(profile)} and update its subagent model`,
+    });
+  }
+  return results;
 }
