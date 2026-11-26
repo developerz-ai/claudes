@@ -2,14 +2,14 @@ plan: 101-wrap-profiles-dynamic-models
 title: Wrap correctly, profiles, dynamic models
 status: in_progress
 owner: unassigned
-percent: 66
-current_focus: 05-settings-file-lifetime
+percent: 83
+current_focus: 06-doctor
 slices:
   01-gate: done
   02-wrap-passthrough: done
   03-profiles: done
   04-dynamic-models: done
-  05-settings-file-lifetime: in_progress
+  05-settings-file-lifetime: done
   06-doctor: in_progress
 evidence:
   commits:
@@ -18,6 +18,7 @@ evidence:
       aa535caad4aa69ab11de7a580d4b96ef8d12f2a9,
       bcb4f9ca2db7efa69996758ca6a1a9ac4d311065,
       e538089fabe015b4c03c19d09dfbe9f78edc32d3,
+      56144cbbcff248f7515f1fe3ebb11d62f7fd3963,
     ]
-  prs: [118, 119, 120, 121]
+  prs: [118, 119, 120, 121, 122]
 last_updated: 2026-11-25
