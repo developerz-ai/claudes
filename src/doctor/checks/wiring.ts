@@ -38,7 +38,7 @@ export const WIRING_ARGS = [
  * interrupted doctor run must not strand that copy, so the handler deletes it
  * and then re-raises the signal.
  */
-export const PROBE_SIGNALS = ["SIGINT", "SIGTERM"] as const;
+export const PROBE_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 /** One of the signals the probe traps. */
 export type ProbeSignal = (typeof PROBE_SIGNALS)[number];
@@ -198,7 +198,7 @@ const PROBE_DIR_PATTERN = /^probe\.([1-9]\d*)$/;
  * directories) — `claudes key` can only serve it from a config — and that
  * copy's lifetime is the probe's own: it exists while the probe's child runs,
  * it is deleted the moment that child exits (on the PASS path and on the FAIL
- * path alike), and a SIGINT or SIGTERM deletes it before the process dies.
+ * path alike), and SIGINT, SIGTERM or SIGHUP deletes it before the process dies.
  * The tree around it lives under the config directory, so the documented
  * uninstall reaches what a crash left behind and the next doctor run sweeps a
  * tree whose pid is dead. A symlinked path is refused outright — the config
@@ -307,6 +307,7 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
     } else {
       const childEnv = buildChildEnv(deps.env);
       childEnv.HOME = probeHome;
+      delete childEnv.CLAUDE_CONFIG_DIR;
       childEnv.XDG_CONFIG_HOME = probeXdg;
 
       const proc = await deps.runProc(deps.claudePath, argv.argv, {

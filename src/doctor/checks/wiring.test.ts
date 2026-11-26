@@ -64,7 +64,12 @@ function deps(
   overrides: Overrides = {},
 ): Parameters<typeof checkWiring>[0] {
   return {
-    env: { HOME: s.home, PATH: "/usr/bin", ANTHROPIC_AUTH_TOKEN: "sk-ant-personal" },
+    env: {
+      HOME: s.home,
+      PATH: "/usr/bin",
+      ANTHROPIC_AUTH_TOKEN: "sk-ant-personal",
+      CLAUDE_CONFIG_DIR: join(s.home, "custom-claude"),
+    },
     nodePath: NODE,
     scriptPath: SCRIPT,
     claudePath: CLAUDE,
@@ -122,6 +127,7 @@ describe("checkWiring", () => {
       expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
       const probeRoot = dirname(env.XDG_CONFIG_HOME as string);
       expect(env.HOME).toBe(join(probeRoot, "home"));
+      expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
       expect(env.XDG_CONFIG_HOME).toBe(join(probeRoot, "xdg"));
       // The probe's tree is created under the config directory — not in the OS
       // temp directory — and it is gone once the check returns.
@@ -327,7 +333,7 @@ describe("checkWiring", () => {
     }
   });
 
-  for (const signal of PROBE_SIGNALS) {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     test(`a ${signal} during the probe deletes the key copy before the process dies`, async () => {
       const s = scratch();
       const trap = trapSignals();
@@ -337,7 +343,7 @@ describe("checkWiring", () => {
         const env = args[2].env ?? {};
         copy = join(env.XDG_CONFIG_HOME as string, "claudes", "config.json");
         expect(existsSync(copy)).toBe(true);
-        // Both signals are trapped while the copy is on disk.
+        // All supported signals are trapped while the copy is on disk.
         for (const trapped of PROBE_SIGNALS) {
           expect(trap.fired.has(trapped)).toBe(true);
         }

@@ -216,7 +216,19 @@ const root = path.join(__dirname, "..");
 const config = path.join(process.env.XDG_CONFIG_HOME || "", "claudes", "config.json");
 switch (process.argv[2]) {
   case "--version": console.log("0.0.0"); break;
-  case "login": console.error("usage"); process.exitCode = 64; break;
+  case "login": {
+    const loginConfig = path.join(
+      process.env.XDG_CONFIG_HOME || path.join(process.env.HOME, ".config"),
+      "claudes", "config.json",
+    );
+    if (fs.existsSync(loginConfig)) {
+      process.exitCode = 1;
+    } else {
+      console.error("usage");
+      process.exitCode = 64;
+    }
+    break;
+  }
   case "doctor": {
     if (fs.existsSync(config)) {
       const output = JSON.parse(fs.readFileSync(path.join(root, "doctor-output.json"), "utf8"));
@@ -243,6 +255,45 @@ const IMPORT_DIAGNOSTIC = "bin/check: dist/claudes.js retains a non-built-in run
 function withArtifactSource(fixture: Fixture, source: string): void {
   writeFileSync(join(fixture.root, "dist", "claudes.js"), `#!/usr/bin/env node\n${source}\n`);
 }
+
+test(
+  "bin/check isolates both login smokes from the caller's config",
+  () => {
+    const fixture = makeArtifactFixture("", "");
+    const configDir = join(fixture.cwd, ".config", "claudes");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.json"), "{}");
+    const result = runCheck(fixture);
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+);
+
+test(
+  "the biome stage ignores machine-local Claude settings",
+  () => {
+    const fixture = makeFixture();
+    const localDir = join(fixture.root, ".claude");
+    mkdirSync(localDir);
+    const localFile = join(localDir, "settings.local.json");
+    const unformatted = '{"permissions":{}}';
+    writeFileSync(localFile, unformatted);
+    copyFileSync(join(REPO, "biome.json"), join(fixture.root, "biome.json"));
+    rmSync(join(fixture.root, ".github"), { recursive: true });
+
+    const result = spawnSync(
+      join(REPO, "node_modules", ".bin", "biome"),
+      ["check", "--error-on-warnings", "."],
+      { cwd: fixture.root, encoding: "utf8", timeout: SPAWN_TEST_TIMEOUT_MS },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(readFileSync(localFile, "utf8")).toBe(unformatted);
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+);
 
 describe("bin/check artifact import audit", () => {
   for (const source of [

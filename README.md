@@ -239,8 +239,8 @@ The wiring probe is the one check that needs the real key on disk: the
 generated settings point Claude Code at the local recording stub, and the
 stub sees the key only when `claudes key` serves it. So the probe writes a
 throwaway copy of the config — the real key, 0600, inside 0700 directories
-— and points the child's `HOME` and `XDG_CONFIG_HOME` at it. The key never
-enters the child's environment: the probe proves the same helper path a real
+— and points the child's `HOME` and `XDG_CONFIG_HOME` at it. The probe clears
+`CLAUDE_CONFIG_DIR` so Claude Code uses the scratch home. The key never enters the child's environment: the probe proves the same helper path a real
 session uses.
 
 That copy lives inside the config directory
@@ -248,7 +248,7 @@ That copy lives inside the config directory
 documented uninstall reaches it, and the next doctor run sweeps a probe
 directory whose pid is dead. The probe deletes the copy when its child
 exits — on the PASS path and on the FAIL path — and a run interrupted with
-Ctrl-C or `SIGTERM` deletes it before the process dies. Cleanup deletes the
+Ctrl-C, `SIGTERM` or `SIGHUP` deletes it before the process dies. Cleanup deletes the
 copy first, before the signal traps come off and before the stub's socket is
 closed, so an interrupt during teardown finds nothing to strand.
 
