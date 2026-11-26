@@ -23,8 +23,8 @@ const MODEL_SUFFIX = "[1m]";
  */
 const KEY_ON_ARGV = new RegExp(`${ROUTER_KEY_PREFIX}[A-Za-z0-9_-]{8,}`);
 
-function looksLikeRouterKey(token: string | undefined): boolean {
-  return token !== undefined && KEY_ON_ARGV.test(token);
+export function hasRouterKey(args: readonly string[]): boolean {
+  return args.some((token) => KEY_ON_ARGV.test(token));
 }
 
 /** The alias table's own entry for `value`, ignoring the prototype chain. */
@@ -53,36 +53,37 @@ function mapModelValue(value: string): string {
 }
 
 /**
- * Builds the `claude` argv: the generated settings file first, then the user's
- * arguments. `--model claude-opus|claude-sonnet|claude-haiku` (with an optional
+ * Builds the `claude` argv with the generated settings first for a session
+ * or immediately after the word for a dispatch command. `--model claude-opus|claude-sonnet|claude-haiku` (with an optional
  * `[1m]`) normalises to the bare family name. A user `--settings` or `--key` is
  * refused, as is any argument containing a router key — and no refused value is
  * ever echoed back. Everything after a `--` terminator is positional prompt
  * text, so the rewriting stops there — but the key-shape refusal does not: a
  * router-key-shaped token after `--` is still refused.
  */
-export function buildArgv(userArgs: readonly string[], settingsPath: string): ArgvResult {
+export function buildArgv(
+  userArgs: readonly string[],
+  settingsPath: string,
+  launchClass: "session" | "dispatch" = "session",
+): ArgvResult {
+  if (hasRouterKey(userArgs)) return refusedKey();
   const argv: string[] = [];
-  for (let i = 0; i < userArgs.length; i++) {
+  const start = launchClass === "dispatch" ? 1 : 0;
+  if (start === 1 && userArgs[0] !== undefined) argv.push(userArgs[0]);
+  argv.push("--settings", settingsPath);
+  for (let i = start; i < userArgs.length; i++) {
     const arg = userArgs[i] ?? "";
     if (arg === "--") {
-      // Everything after the terminator is positional prompt text, so the
-      // rewriting stops — but a pasted key still leaks through shell history
-      // and process listings, so the key-shape refusal still runs there.
-      for (const rest of userArgs.slice(i + 1)) {
-        if (looksLikeRouterKey(rest)) {
-          return refusedKey();
-        }
-      }
       argv.push(...userArgs.slice(i));
-      return { ok: true, argv: ["--settings", settingsPath, ...argv] };
-    }
-    // The scan runs on the whole token, whatever position a pasted key lands in.
-    if (looksLikeRouterKey(arg)) {
-      return refusedKey();
+      break;
     }
     const equals = arg.startsWith("--") ? arg.indexOf("=") : -1;
     const name = equals === -1 ? arg : arg.slice(0, equals);
+    if (name === "--managed-settings" || name === "--managed-settings-in-initialize") {
+      return refused(
+        `claudes: ${name} is not supported — managed settings could override the router settings`,
+      );
+    }
     if (name === "--settings") {
       return refused(
         "claudes: --settings is not supported — claudes writes its own settings file to point claude at the router",
@@ -94,13 +95,16 @@ export function buildArgv(userArgs: readonly string[], settingsPath: string): Ar
       );
     }
     if (name === "--model") {
-      const value = equals === -1 ? userArgs[++i] : arg.slice(equals + 1);
-      // The value in the next position is argv too — scan it as well.
-      if (looksLikeRouterKey(value)) {
-        return refusedKey();
+      const next = userArgs[i + 1];
+      let value: string | undefined;
+      if (equals !== -1) {
+        value = arg.slice(equals + 1);
+      } else if (next !== undefined && !next.startsWith("--")) {
+        value = next;
+        i++;
       }
       if (value === undefined) {
-        argv.push("--model"); // dangling flag: claude reports it itself
+        argv.push("--model"); // missing value or another option: Claude Code handles it
       } else {
         argv.push("--model", mapModelValue(value));
       }
@@ -108,14 +112,14 @@ export function buildArgv(userArgs: readonly string[], settingsPath: string): Ar
     }
     argv.push(arg);
   }
-  return { ok: true, argv: ["--settings", settingsPath, ...argv] };
+  return { ok: true, argv };
 }
 
-function refused(message: string): ArgvResult {
+function refused(message: string): Extract<ArgvResult, { ok: false }> {
   return { ok: false, exitCode: 64, message };
 }
 
-function refusedKey(): ArgvResult {
+export function refusedKey(): Extract<ArgvResult, { ok: false }> {
   return refused(
     "claudes: refusing an argument that looks like a router key — a key on the command line leaks into shell history and process listings",
   );

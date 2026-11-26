@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { rmSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { type DoctorDeps, runDoctor } from "./commands/doctor";
 import { runKey } from "./commands/key";
 import { runLogin } from "./commands/login";
@@ -163,6 +164,43 @@ function scenarios(): Scenario[] {
         }
         return observed;
       },
+    },
+    {
+      when: "Managed settings were passed on argv",
+      run: async (h) => {
+        const results: Observed[] = [];
+        for (const name of ["--managed-settings", "--managed-settings-in-initialize"]) {
+          h.err.length = 0;
+          const code = await h.drive(["agents", `${name}=private`], { fetch: deadFetch });
+          results.push({ code, text: h.err.join(""), name, spawned: h.spawnCalls.length > 0 });
+        }
+        return results;
+      },
+    },
+    {
+      when: "A command or flag that runs outside the router",
+      run: async (h) => {
+        const results: Observed[] = [];
+        for (const name of ["ultrareview", "--cloud", "--environment", "--desktop"]) {
+          h.err.length = 0;
+          const args = name.startsWith("--") ? ["-p", "hi", `${name}=private`] : [name, "--help"];
+          const code = await h.drive(args, { fetch: deadFetch });
+          results.push({ code, text: h.err.join(""), name, spawned: h.spawnCalls.length > 0 });
+        }
+        return results;
+      },
+    },
+    {
+      when: "`claude` on `PATH` resolves to claudes",
+      run: async (h) => [
+        {
+          code: await h.drive(["mcp", "list"], {
+            scriptPath: realpathSync(join(h.binDir, "claude")),
+          }),
+          text: h.err.join(""),
+          spawned: h.spawnCalls.length > 0,
+        },
+      ],
     },
     {
       // The row covers an unknown CLAUDE_CODE_USE_* toggle and
@@ -512,7 +550,7 @@ describe("README refusals and exit codes table", () => {
     // The guard rejects the table and names the row no scenario ever
     // asserted against.
     await expect(assertRowsMatchScenarios(rows.concat(fragment), list)).rejects.toThrow(
-      /1 of 16 rows are not the row of exactly one scenario: exit 64, when "a router key"/,
+      `1 of ${rows.length + 1} rows are not the row of exactly one scenario: exit 64, when "a router key"`,
     );
   });
 });

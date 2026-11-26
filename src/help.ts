@@ -14,7 +14,7 @@ import { HELP_FLAG, type HelpScope, VERSION_FLAGS } from "./dispatch";
  * value and leaves -p alone. The top-level help names them, so they belong to
  * the help contract the README is checked against.
  */
-export const PASSTHROUGH_FLAGS = ["--model", "-p"] as const;
+export const PASSTHROUGH_FLAGS = ["--model", "-p", "-h"] as const;
 
 /** The flags the top-level help names: claudes' own, plus the passthrough ones. */
 export const HELP_FLAGS = [...VERSION_FLAGS, HELP_FLAG, ...PASSTHROUGH_FLAGS] as const;
@@ -29,11 +29,10 @@ export const HELP_SCOPE_FLAGS: Readonly<Record<HelpScope, readonly string[]>> = 
 const TOP_HELP = `usage: claudes [--version | --help] [claude arguments]
 
 claudes runs Claude Code against your team's router, using the router key
-stored by claudes login. Every argument claudes does not own is passed through
-to claude, with two exceptions: a --model value is normalised to the bare tier
-name when it is the long spelling of a tier (claude-opus becomes opus), and
-Claude Code's own settings-file and key flags are refused rather than passed
-on, as is any argument shaped like a router key.
+stored by claudes login. Local management commands run directly in Claude
+Code without checking the router. Session launches use generated settings
+and normalise long tier aliases such as claude-opus. Cloud and Desktop
+modes are refused, as are arguments shaped like a router key.
 
 Options:
   --version, -v    print claudes' version and exit
@@ -42,6 +41,7 @@ Options:
 Claude Code's own flags, passed through:
   --model <tier>   choose the tier: opus, sonnet or haiku
   -p <prompt>      run one prompt and print the answer
+  -h              show Claude Code help without checking the router
 
 Commands:
   login            store your router key and the router's model tiers
