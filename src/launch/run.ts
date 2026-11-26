@@ -5,14 +5,16 @@ import { delimiter, join, resolve } from "node:path";
 import { loadConfig } from "../config/load";
 import type { Env } from "../config/paths";
 import { writePrivateFile } from "../config/private-file";
+import { keyFragmentOffset } from "../config/schema";
 import { type FetchLike, RouterError } from "../router/client";
 import { errorName } from "../router/errors";
 import { buildArgv, hasRouterKey, refusedKey } from "./argv";
+import { resolveCatalog } from "./catalog";
 import { buildChildEnv } from "./env";
 import {
   PREFLIGHT_TIMEOUT_NOTE_MESSAGE,
   PROXY_NOTE_MESSAGE,
-  preflight,
+  preflightCatalog,
   preflightTimeoutMs,
   proxyNoteNeeded,
   ROUTER_INVALID_VERSION_MESSAGE,
@@ -24,6 +26,7 @@ import {
   firstUnknownReroutingUseToggle,
   isTruthyToggle,
 } from "./provider-switches";
+import { explicitModel, readSavedModel, sessionModel } from "./session-model";
 import { buildSettings } from "./settings";
 import { launchSettingsPath, settingsWriteError, sweepStaleLaunchSettings } from "./settings-file";
 
@@ -142,8 +145,9 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
   // launch never reaches its own write.
   sweepStaleLaunchSettings(loaded.dir);
 
+  let probe: Awaited<ReturnType<typeof preflightCatalog>>;
   try {
-    await preflight(loaded.config.baseUrl, deps.fetch, preflightTimeoutMs(deps.env));
+    probe = await preflightCatalog(loaded.config, deps.fetch, preflightTimeoutMs(deps.env));
   } catch (err) {
     const routerError = err instanceof RouterError ? err : undefined;
     if (routerError?.invalidVersion === true) {
@@ -151,6 +155,13 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
       // different refusal from an unreachable router, and the proxy, TLS and
       // timeout notes do not apply — the probe answered.
       return fail(deps, 69, ROUTER_INVALID_VERSION_MESSAGE);
+    }
+    if (routerError?.status !== undefined) {
+      return fail(
+        deps,
+        69,
+        `router health check returned HTTP ${routerError.status}: run \`claudes doctor\``,
+      );
     }
     const tlsNote = tlsVerifyNote(routerError?.tlsVerifyCode);
     return fail(deps, 69, ROUTER_UNREACHABLE_MESSAGE, [
@@ -160,19 +171,48 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
     ]);
   }
 
+  const profile = loaded.profile ?? "default";
+  if (probe.rejected) {
+    const remedy = `claudes login --profile ${profile}`;
+    return fail(
+      deps,
+      77,
+      keyFragmentOffset(remedy, loaded.config.key) === undefined
+        ? `the router rejected the key: run \`${remedy}\``
+        : "the router rejected the key: re-login to the selected profile",
+    );
+  }
+
   // Resolved before the write, so a missing `claude` leaves no settings file
   // behind for a session that never ran.
   const claudePath = resolveClaude(deps);
   if (typeof claudePath === "number") return claudePath;
 
-  const settings = buildSettings(loaded.config, deps, deps.env, loaded.profile);
+  const config = loaded.config;
+  const catalog = resolveCatalog(config, probe.rows);
+  const model = sessionModel(
+    config,
+    catalog,
+    deps.env,
+    readSavedModel(deps.env),
+    explicitModel(userArgs),
+  );
+  const settings = buildSettings(config, deps, deps.env, profile, { catalog, model });
+  const payload = `${JSON.stringify(settings, null, 2)}\n`;
+  if (keyFragmentOffset(payload, config.key) !== undefined) {
+    return fail(deps, 78, "generated settings contain router key material");
+  }
   try {
-    writePrivateFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
+    writePrivateFile(settingsPath, payload, {
       noun: "settings",
       remedy: 'remove it and re-run "claudes login"',
     });
   } catch (err) {
     return fail(deps, 1, settingsWriteError(err, settingsPath));
+  }
+
+  for (const note of [...catalog.notes, ...model.notes]) {
+    deps.stderr(`note: ${note}\n`);
   }
 
   // The settings file stays on disk after this launcher exits (see above), so

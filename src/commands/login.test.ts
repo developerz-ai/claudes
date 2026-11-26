@@ -6,7 +6,7 @@ import { configDir, profileFile } from "../config/paths";
 import { readConfig, writeConfig } from "../config/store";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { login } from "./login";
-import { configPath, harness, KEY, ROUTER } from "./login-harness";
+import { configPath, harness, KEY, ROUTER, stubFetch } from "./login-harness";
 import { InputTooLongError, StdinClosedError } from "./login-input";
 
 let home: string;
@@ -274,4 +274,22 @@ test("legacy migration reports no fragment of the replaced credential", async ()
   expect(output).toContain("(details withheld)");
   assertNoKeyFragment(output, previousKey);
   assertNoKeyFragment(output, KEY);
+});
+
+test("login refuses an empty catalog and warns about missing families in a usable one", async () => {
+  const empty = harness(home, { fetch: stubFetch({ modelsBody: '{"data":[]}' }) });
+  expect(await login(["--url", ROUTER], empty.deps)).toMatchObject({
+    ok: false,
+    message: "claudes login: the router listed no usable models",
+  });
+  expect(empty.writeConfigCalls).toHaveLength(0);
+
+  const custom = harness(home, {
+    fetch: stubFetch({ modelsBody: '{"data":[{"id":"provider/model"}]}' }),
+  });
+  expect((await login(["--url", ROUTER], custom.deps)).ok).toBe(true);
+  expect(
+    custom.stdout.filter((line) => line.includes("the stored snapshot uses a default")),
+  ).toHaveLength(3);
+  assertNoKeyFragment(custom.stdout.join("\n"), KEY);
 });

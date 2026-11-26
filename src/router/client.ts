@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { keyFragmentOffset, MODEL_ID_PATTERN, ROUTER_KEY_PREFIX } from "../config/schema";
 import { errorName, isRouterError, RouterError } from "./errors";
 
 /**
@@ -69,13 +70,48 @@ export async function health(
   return version;
 }
 
-/** GET `${baseUrl}/v1/models` with the key as a bearer token; resolves the model ids. */
+export interface ModelEntry {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly contextTokens?: number;
+  readonly maxOutputTokens?: number;
+  readonly resolvedModel?: string;
+}
+
+function safeId(value: unknown, key: string): value is string {
+  return (
+    typeof value === "string" &&
+    MODEL_ID_PATTERN.test(value) &&
+    !value.includes(ROUTER_KEY_PREFIX) &&
+    keyFragmentOffset(value, key) === undefined
+  );
+}
+
+function positiveSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function displayLabel(value: unknown, key: string): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.includes(ROUTER_KEY_PREFIX) ||
+    keyFragmentOffset(value, key) !== undefined
+  )
+    return undefined;
+  const label = value
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .trim()
+    .slice(0, 100);
+  return label.length > 0 && keyFragmentOffset(label, key) === undefined ? label : undefined;
+}
+
+/** GET `${baseUrl}/v1/models` with the key as a bearer token; resolves safe model entries. */
 export async function models(
   baseUrl: string,
   key: string,
   fetchImpl: FetchLike,
   timeoutMs: number = TIMEOUT_MS,
-): Promise<string[]> {
+): Promise<ModelEntry[]> {
   const endpoint = `${baseUrl}/v1/models`;
   const res = await request(endpoint, { Authorization: `Bearer ${key}` }, fetchImpl, timeoutMs);
   if (res.status !== 200) {
@@ -90,18 +126,26 @@ export async function models(
   ) {
     throw new RouterError(`GET ${endpoint} returned JSON without a "data" array`);
   }
-  const ids: string[] = [];
-  for (const entry of (body as { data: unknown[] }).data) {
+  const entries = new Map<string, ModelEntry>();
+  for (const raw of (body as { data: unknown[] }).data) {
     if (
-      typeof entry !== "object" ||
-      entry === null ||
-      typeof (entry as { id?: unknown }).id !== "string"
+      typeof raw !== "object" ||
+      raw === null ||
+      typeof (raw as { id?: unknown }).id !== "string"
     ) {
       throw new RouterError(`GET ${endpoint} returned a malformed model entry`);
     }
-    ids.push((entry as { id: string }).id);
+    const row = raw as Record<string, unknown>;
+    if (!safeId(row.id, key) || entries.has(row.id)) continue;
+    entries.set(row.id, {
+      id: row.id,
+      displayName: displayLabel(row.display_name, key),
+      contextTokens: positiveSize(row.max_input_tokens) ?? positiveSize(row.context_length),
+      maxOutputTokens: positiveSize(row.max_tokens) ?? positiveSize(row.max_completion_tokens),
+      resolvedModel: safeId(row.resolved_model, key) ? row.resolved_model : undefined,
+    });
   }
-  return ids;
+  return [...entries.values()];
 }
 
 async function request(

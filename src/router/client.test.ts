@@ -475,9 +475,9 @@ describe("models", () => {
   test("returns data[].id with the key only in the Authorization header", async () => {
     const { fetchImpl, calls } = stubFetch();
     await expect(models(BASE, KEY, fetchImpl)).resolves.toEqual([
-      "claude-opus-4-1",
-      "claude-sonnet-4-5",
-      "claude-haiku-4-5",
+      { id: "claude-opus-4-1" },
+      { id: "claude-sonnet-4-5" },
+      { id: "claude-haiku-4-5" },
     ]);
     const call = calls[0];
     expect(call?.url).toBe(`${BASE}/v1/models`);
@@ -728,4 +728,42 @@ describe("errorName", () => {
       assertNoKeyFragment(message, KEY);
     }
   });
+});
+
+test("models parses both size dialects and withholds hostile catalog fields", async () => {
+  const fragment = KEY.slice(-8);
+  const { fetchImpl } = stubFetch({
+    modelsBody: JSON.stringify({
+      data: [
+        {
+          id: "fixture/model",
+          display_name: "Fixture\nmodel",
+          max_input_tokens: 0,
+          context_length: 128000,
+          max_tokens: "16000",
+          max_completion_tokens: 16000,
+        },
+        { id: "anthropic", max_input_tokens: 200000, max_tokens: 32000 },
+        { id: "alias", resolved_model: "anthropic", context_length: -1, max_tokens: "32000" },
+        { id: "fixture/model", display_name: "Duplicate" },
+        { id: "unsafe\nmodel" },
+        { id: "a".repeat(10000) },
+        { id: `name-${fragment}` },
+        { id: "safe", display_name: fragment, resolved_model: fragment },
+      ],
+    }),
+  });
+  const rows = await models(BASE, KEY, fetchImpl);
+  expect(rows).toEqual([
+    {
+      id: "fixture/model",
+      displayName: "Fixture model",
+      contextTokens: 128000,
+      maxOutputTokens: 16000,
+    },
+    { id: "anthropic", contextTokens: 200000, maxOutputTokens: 32000 },
+    { id: "alias", resolvedModel: "anthropic" },
+    { id: "safe" },
+  ]);
+  assertNoKeyFragment(JSON.stringify(rows), KEY);
 });

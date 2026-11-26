@@ -12,7 +12,7 @@ import {
   TLS_NOT_YET_VALID_NOTE_MESSAGE,
   TLS_VERIFY_NOTE_MESSAGE,
 } from "./preflight";
-import { cleanup, deadFetch, type Harness, harness, KEY } from "./run-harness";
+import { cleanup, deadFetch, type Harness, harness, healthyFetch, KEY } from "./run-harness";
 
 let h: Harness;
 
@@ -26,6 +26,11 @@ afterEach(() => {
 
 function errText(): string {
   return h.err.join("");
+}
+
+/** These retry cases measure only health; model preflight has separate tests. */
+function healthOnly(fetch: FetchLike): FetchLike {
+  return (url, init) => (url.endsWith("/healthz") ? fetch(url, init) : healthyFetch(url, init));
 }
 
 describe("run: router pre-flight", () => {
@@ -46,7 +51,7 @@ describe("run: router pre-flight", () => {
       calls += 1;
       return new Response(JSON.stringify({ version: rawVersion }), { status: 200 });
     };
-    const code = await h.drive(["-p", "hi"], { fetch: invalidVersionFetch });
+    const code = await h.drive(["-p", "hi"], { fetch: healthOnly(invalidVersionFetch) });
     expect(code).toBe(69);
     expect(errText()).toBe(`${ROUTER_INVALID_VERSION_MESSAGE}\n`);
     // The probe answered, so none of the unreachable hints apply.
@@ -68,7 +73,7 @@ describe("run: router pre-flight", () => {
       calls += 1;
       return new Response("<html>not json</html>", { status: 200 });
     };
-    const code = await h.drive(["-p", "hi"], { fetch: nonJsonFetch });
+    const code = await h.drive(["-p", "hi"], { fetch: healthOnly(nonJsonFetch) });
     expect(code).toBe(69);
     expect(errText()).toBe(`${ROUTER_INVALID_VERSION_MESSAGE}\n`);
     expect(errText()).not.toContain(ROUTER_UNREACHABLE_MESSAGE);
@@ -97,7 +102,7 @@ describe("run: router pre-flight", () => {
 
   test("a timed-out probe is retried once, and a healthy second attempt launches", async () => {
     const code = await h.drive(["-p", "hi"], {
-      fetch: timeoutFetch((call) => (call === 1 ? "timeout" : "healthy")),
+      fetch: healthOnly(timeoutFetch((call) => (call === 1 ? "timeout" : "healthy"))),
       spawnScript: (child) => child.emit("exit", 0, null),
     });
     expect(code).toBe(0);
@@ -112,7 +117,7 @@ describe("run: router pre-flight", () => {
       err.name = "TimeoutError";
       throw err;
     };
-    expect(await h.drive(["-p", "hi"], { fetch: alwaysTimeout })).toBe(69);
+    expect(await h.drive(["-p", "hi"], { fetch: healthOnly(alwaysTimeout) })).toBe(69);
     expect(calls).toBe(2);
     expect(h.spawnCalls).toEqual([]);
     expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
@@ -139,7 +144,7 @@ describe("run: router pre-flight", () => {
     expect(
       await h.drive(["-p", "hi"], {
         env: { HOME: h.home, PATH: h.binDir, CLAUDES_PREFLIGHT_TIMEOUT_MS: "5" },
-        fetch: hangingFetch,
+        fetch: healthOnly(hangingFetch),
       }),
     ).toBe(69);
     expect(signals.length).toBe(2); // the retry ran, and was aborted too
@@ -178,10 +183,12 @@ describe("run: router pre-flight", () => {
   test("a body stalling after the headers is retried like a timeout, and a healthy retry launches", async () => {
     let attempts = 0;
     const code = await h.drive(["-p", "hi"], {
-      fetch: stalledBodyFetch((call) => {
-        attempts = call;
-        return call === 1 ? "stall" : "healthy";
-      }),
+      fetch: healthOnly(
+        stalledBodyFetch((call) => {
+          attempts = call;
+          return call === 1 ? "stall" : "healthy";
+        }),
+      ),
       spawnScript: (child) => child.emit("exit", 0, null),
     });
     expect(code).toBe(0);
@@ -196,7 +203,7 @@ describe("run: router pre-flight", () => {
       calls += 1;
       return "stall";
     });
-    expect(await h.drive(["-p", "hi"], { fetch: alwaysStall })).toBe(69);
+    expect(await h.drive(["-p", "hi"], { fetch: healthOnly(alwaysStall) })).toBe(69);
     expect(calls).toBe(2);
     expect(h.spawnCalls).toEqual([]);
     expect(errText()).toBe(`${ROUTER_UNREACHABLE_MESSAGE}\n${PREFLIGHT_TIMEOUT_NOTE_MESSAGE}\n`);
@@ -212,7 +219,7 @@ describe("run: router pre-flight", () => {
     expect(
       await h.drive(["-p", "hi"], {
         env: { HOME: h.home, PATH: h.binDir, HTTPS_PROXY: "http://proxy.corp.test:3128" },
-        fetch: alwaysTimeout,
+        fetch: healthOnly(alwaysTimeout),
       }),
     ).toBe(69);
     expect(errText()).toBe(
@@ -226,7 +233,7 @@ describe("run: router pre-flight", () => {
       calls += 1;
       throw new TypeError("fetch failed");
     };
-    expect(await h.drive(["-p", "hi"], { fetch: deadOnce })).toBe(69);
+    expect(await h.drive(["-p", "hi"], { fetch: healthOnly(deadOnce) })).toBe(69);
     expect(calls).toBe(1);
   });
 
@@ -367,4 +374,57 @@ describe("preflightTimeoutMs", () => {
       expect(preflightTimeoutMs({ CLAUDES_PREFLIGHT_TIMEOUT_MS: invalid })).toBe(1500);
     }
   });
+});
+
+describe("launch catalog preflight", () => {
+  for (const status of [401, 403]) {
+    test(`catalog HTTP ${status} refuses before spawning`, async () => {
+      const fetch: FetchLike = async (url, init) => {
+        if (url.endsWith("/healthz")) return healthyFetch(url, init);
+        expect(init.headers.Authorization === `Bearer ${KEY}`).toBe(true);
+        return new Response(null, { status });
+      };
+      expect(await h.drive(["-p", "hi"], { fetch })).toBe(77);
+      expect(errText()).toContain(
+        "the router rejected the key: run `claudes login --profile default`",
+      );
+      assertNoKeyFragment(errText(), KEY);
+      expect(h.spawnCalls).toHaveLength(0);
+    });
+  }
+
+  for (const issue of ["500", "malformed", "timeout"]) {
+    test(`catalog ${issue} uses the snapshot and still starts`, async () => {
+      const fetch: FetchLike = async (url, init) => {
+        if (url.endsWith("/healthz")) return healthyFetch(url, init);
+        if (issue === "500") return new Response(null, { status: 500 });
+        if (issue === "malformed") return new Response('{"data":false}');
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        });
+      };
+      expect(
+        await h.drive(["-p", "hi"], {
+          env: { HOME: h.home, PATH: h.binDir, CLAUDES_PREFLIGHT_TIMEOUT_MS: "25" },
+          fetch,
+          spawnScript: (child) => child.emit("exit", 0, null),
+        }),
+      ).toBe(0);
+      expect(errText()).toBe("note: the model list is not live; using the stored tier snapshot\n");
+      expect(h.spawnCalls).toHaveLength(1);
+    });
+  }
+});
+
+test("health failure prevents any authenticated catalog request", async () => {
+  const requestPaths: string[] = [];
+  const fetch: FetchLike = async (url, init) => {
+    requestPaths.push(new URL(url).pathname);
+    expect(init.headers.Authorization === undefined).toBe(true);
+    return new Response(null, { status: 404 });
+  };
+  expect(await h.drive(["-p", "hello"], { fetch })).toBe(69);
+  expect(requestPaths).toEqual(["/healthz"]);
+  expect(h.spawnCalls).toEqual([]);
+  assertNoKeyFragment(errText(), KEY);
 });

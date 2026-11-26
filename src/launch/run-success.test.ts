@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
+import { join } from "node:path";
+import type { FetchLike } from "../router/client";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { isStripped } from "./env";
 import { BENIGN_USE_TOGGLES, PROVIDER_SWITCHES } from "./provider-switches";
@@ -10,12 +12,13 @@ import {
   fakeWiring,
   type Harness,
   harness,
+  healthyFetch,
   KEY,
   NODE,
   SCRIPT,
   sampleConfig,
 } from "./run-harness";
-import { PARENT_ONLY_TRANSPORT_ENV, PINNED_TRANSPORT_ENV } from "./settings";
+import { PARENT_ONLY_TRANSPORT_ENV, PINNED_TRANSPORT_ENV, type Settings } from "./settings";
 import { denyRules, disabledEnv } from "./unsupported";
 
 /**
@@ -89,6 +92,9 @@ function expectedEnvKeys(parentOnly: readonly string[]): string[] {
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_MODEL",
+    "CLAUDES_GENERATED_WINDOWS",
     ...Object.keys(disabledEnv()),
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
@@ -327,4 +333,44 @@ describe("run success path: the signal lifecycle", () => {
       expect(code).toBe(expected);
     }
   });
+});
+
+test("launch installs the current picker and replaces a retired saved model without re-login", async () => {
+  const userDir = join(h.home, "custom-claude");
+  mkdirSync(userDir);
+  const userSettings = join(userDir, "settings.json");
+  const saved = '{"model":"claude-opus-5-5"}';
+  writeFileSync(userSettings, saved);
+
+  let liveId = "claude-opus-5-5";
+  const fetch: FetchLike = async (url, init) =>
+    url.endsWith("/healthz")
+      ? healthyFetch(url, init)
+      : Response.json({
+          data: [{ id: liveId, max_input_tokens: 128000 }],
+        });
+  const launch = async (): Promise<Settings> => {
+    h.spawnCalls.length = 0;
+    expect(
+      await h.drive(["-p", "hello"], {
+        env: { HOME: h.home, PATH: h.binDir, CLAUDE_CONFIG_DIR: userDir },
+        fetch,
+        spawnScript: (child) => child.emit("exit", 0, null),
+      }),
+    ).toBe(0);
+    const text = readFileSync(settingsPath(h), "utf8");
+    assertNoKeyFragment(text, KEY);
+    return JSON.parse(text) as Settings;
+  };
+  expect((await launch()).model).toBeUndefined();
+
+  liveId = "claude-sonnet-4-6";
+  const next = await launch();
+  expect(next.model).toBe("opus");
+  expect(next.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(liveId);
+  expect(next.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("128000");
+  expect(next.modelPicker?.options).toEqual([
+    { model: liveId, label: liveId, description: "128K context" },
+  ]);
+  expect(readFileSync(userSettings, "utf8")).toBe(saved);
 });

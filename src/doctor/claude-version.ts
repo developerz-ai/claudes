@@ -9,11 +9,10 @@ export interface VersionTriple {
 }
 
 /**
- * The minimum `claude` version doctor accepts: the version tested in the
- * spike behind issue #4 (the launcher's live verification of the helper-only
- * credential path ran against this line).
+ * The minimum Claude Code version supports a configured context window for
+ * unrecognized claude-prefixed model IDs.
  */
-export const MIN_CLAUDE_VERSION = "2.1.299";
+export const MIN_CLAUDE_VERSION = "2.1.325";
 
 /** Parses the first `major.minor.patch` triple in `text`; undefined for none. */
 export function parseVersionTriple(text: string): VersionTriple | undefined {

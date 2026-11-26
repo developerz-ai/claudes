@@ -65,7 +65,7 @@ function deps(
       scriptPath: SCRIPT,
       fetch: healthyRouter,
       postFetch,
-      runProc: overrides.runProc ?? versionProc("2.1.300 (Claude Code)\n"),
+      runProc: overrides.runProc ?? versionProc("2.1.331 (Claude Code)\n"),
       resolveExecutable: () => CLAUDE,
       load: overrides.load ?? loadConfig,
       readFile: overrides.readFile ?? (() => undefined),
@@ -219,7 +219,7 @@ describe("runDoctor", () => {
       expect(code).toBe(0);
       const text = out.join("");
       expect(text).toContain("[PASS] node 24.6.0");
-      expect(text).toContain("[PASS] claude 2.1.300");
+      expect(text).toContain("[PASS] claude 2.1.331");
       expect(text).toContain("[PASS] config ");
       expect(text).toContain("mar_live_…");
       expect(text).toContain("[PASS] router https://router.example.test (version 1.4.2)");

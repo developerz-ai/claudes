@@ -60,7 +60,7 @@ export interface FakeClaudeOptions {
   readonly removeSettings?: boolean;
   /** The fake claude's exit code; defaults to 0. */
   readonly exitCode?: number;
-  /** The fake's answer to `claude --version`; defaults to a healthy 2.1.300. */
+  /** The fake's answer to `claude --version`; defaults to a healthy 2.1.331. */
   readonly version?: string;
 }
 
@@ -107,7 +107,7 @@ export function fakeClaudeProc(options: FakeClaudeOptions = {}): {
         code,
         signal: null,
         timedOut: false,
-        stdout: options.version ?? "2.1.300 (Claude Code)\n",
+        stdout: options.version ?? "2.1.331 (Claude Code)\n",
       };
     }
     let ran = false;

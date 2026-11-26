@@ -35,7 +35,7 @@ const rows = readmeRefusalRows();
 describe("README refusals table", () => {
   test("the table parses the documented exit codes", () => {
     expect(rows.map((row) => row.exit)).toEqual([
-      64, 64, 127, 64, 64, 64, 64, 64, 64, 64, 64, 69, 69, 78, 127, 1, 64, 64,
+      64, 64, 127, 64, 64, 64, 64, 64, 64, 64, 64, 69, 69, 69, 77, 78, 127, 1, 64, 64,
     ]);
   });
 
@@ -541,6 +541,26 @@ const ENV_NAMES_OUTSIDE_THE_LISTS: ReadonlyArray<{
   { name: "HOME", file: "src/config/paths.ts", owned: /env\.HOME\b/ },
   { name: "XDG_CONFIG_HOME", file: "src/config/paths.ts", owned: /env\.XDG_CONFIG_HOME\b/ },
   { name: "PATH", file: "src/launch/run.ts", owned: /env\.PATH\b/ },
+  {
+    name: "CLAUDE_CONFIG_DIR",
+    file: "src/launch/session-model.ts",
+    owned: /env\.CLAUDE_CONFIG_DIR\b/,
+  },
+  {
+    name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    file: "src/launch/env.ts",
+    owned: /"CLAUDE_CODE_AUTO_COMPACT_WINDOW"/,
+  },
+  {
+    name: "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    file: "src/launch/env.ts",
+    owned: /"CLAUDE_CODE_MAX_CONTEXT_TOKENS"/,
+  },
+  {
+    name: "CLAUDES_GENERATED_WINDOWS",
+    file: "src/launch/env.ts",
+    owned: /"CLAUDES_GENERATED_WINDOWS"/,
+  },
   { name: "CLAUDES_PROFILE", file: "src/config/profile.ts", owned: /env\.CLAUDES_PROFILE\b/ },
   {
     name: "CLAUDES_PREFLIGHT_TIMEOUT_MS",

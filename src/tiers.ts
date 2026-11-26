@@ -7,6 +7,8 @@
  */
 export type TierName = "opus" | "sonnet" | "haiku";
 
+export type ModelFamily = TierName | "fable";
+
 export const TIER_FAMILIES: readonly TierName[] = ["opus", "sonnet", "haiku"];
 
 /** Used when the router lists no recognisable id for a family. */
@@ -24,10 +26,10 @@ export const DEFAULT_TIERS: Readonly<Record<TierName, string>> = Object.freeze({
  * the anchored match and is ignored.
  */
 const TIER_ID_PATTERN =
-  /^claude-(?<family>opus|sonnet|haiku)-(?<major>\d{1,2})(?:-(?<minor>\d{1,2}))?(?:-(?<date>\d{8}))?$/;
+  /^claude-(?<family>opus|sonnet|haiku|fable)-(?<major>\d{1,2})(?:-(?<minor>\d{1,2}))?(?:-(?<date>\d{8}))?$/;
 
 interface ParsedTierId {
-  family: TierName;
+  family: ModelFamily;
   major: number;
   minor: number;
   date: number;
@@ -42,7 +44,7 @@ export function parseTierId(id: string): ParsedTierId | undefined {
   }
   return {
     // The pattern only admits the three family names.
-    family: groups.family as TierName,
+    family: groups.family as ModelFamily,
     major: Number(groups.major),
     // `claude-opus-5` and `claude-opus-5-0` are the same version.
     minor: groups.minor === undefined ? 0 : Number(groups.minor),
@@ -67,9 +69,9 @@ function isNewer(candidate: ParsedTierId, incumbent: ParsedTierId): boolean {
  */
 export function resolveTiers(
   modelIds: readonly string[],
-  overrides: Partial<Record<TierName, string>> = {},
-): Record<TierName, string> {
-  const newest = new Map<TierName, ParsedTierId>();
+  overrides: Partial<Record<ModelFamily, string>> = {},
+): Record<TierName, string> & { fable?: string } {
+  const newest = new Map<ModelFamily, ParsedTierId>();
   for (const id of modelIds) {
     const parsed = parseTierId(id);
     if (parsed === undefined) {
@@ -88,5 +90,6 @@ export function resolveTiers(
         ? override
         : (newest.get(family)?.id ?? DEFAULT_TIERS[family]);
   }
-  return tiers;
+  const fable = overrides.fable ?? newest.get("fable")?.id;
+  return fable === undefined ? tiers : { ...tiers, fable };
 }

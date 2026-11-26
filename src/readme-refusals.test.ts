@@ -7,7 +7,17 @@ import { runKey } from "./commands/key";
 import { runLogin } from "./commands/login";
 import type { StdinLike } from "./commands/login-input";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
-import { cleanup, deadFetch, type Harness, harness, KEY } from "./launch/run-harness";
+import { profileFile } from "./config/paths";
+import { writeConfig } from "./config/store";
+import {
+  cleanup,
+  deadFetch,
+  type Harness,
+  harness,
+  healthyFetch,
+  KEY,
+  sampleConfig,
+} from "./launch/run-harness";
 import type { FetchLike } from "./router/client";
 import { type RefusalRow, readmeRefusalRows } from "./test-support/readme-table";
 
@@ -292,6 +302,37 @@ function scenarios(): Scenario[] {
           spawned: h.spawnCalls.length > 0,
         },
       ],
+    },
+    {
+      when: "returned a health HTTP error",
+      run: async (h) => [
+        {
+          code: await h.drive(["-p", "hi"], {
+            fetch: (url, init) =>
+              url.endsWith("/healthz")
+                ? Promise.resolve(new Response(null, { status: 503 }))
+                : healthyFetch(url, init),
+          }),
+          text: h.err.join(""),
+          name: "503",
+          spawned: h.spawnCalls.length > 0,
+        },
+      ],
+    },
+    {
+      when: "rejected the key during launch",
+      run: async (h) => {
+        const name = "work";
+        writeConfig(profileFile(h.dir, name), sampleConfig());
+        const code = await h.drive(["-p", "hi"], {
+          env: { HOME: h.home, PATH: h.binDir, CLAUDES_PROFILE: name },
+          fetch: (url, init) =>
+            url.endsWith("/v1/models")
+              ? Promise.resolve(new Response(null, { status: 401 }))
+              : healthyFetch(url, init),
+        });
+        return [{ code, name, text: h.err.join(""), spawned: h.spawnCalls.length > 0 }];
+      },
     },
     {
       when: "No config",
