@@ -18,7 +18,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
-import { configDir, profileFile } from "./config/paths";
+import { configDir, profileFile, settingsFile } from "./config/paths";
 import { writeConfig } from "./config/store";
 import { credentialHash } from "./doctor/stub-server";
 import { helpText } from "./help";
@@ -123,7 +123,16 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     expect(listed.stdout).toContain("* work https://work.invalid");
     assertNoKeyFragment(listed.stdout + listed.stderr, KEY);
     expect(runMain(["profile", "remove", "work"]).status).toBe(64);
+    const defaultSettings = settingsFile(dir, "default", "0123456789abcdef");
+    const workSettings = settingsFile(dir, "work", "0123456789abcdef");
+    const oldSettings = join(dir, "settings.12345.json");
+    for (const path of [defaultSettings, workSettings, oldSettings]) {
+      writeFileSync(path, "{}\n", { mode: 0o600 });
+    }
     expect(runMain(["profile", "remove", "default"]).status).toBe(0);
+    expect(existsSync(defaultSettings)).toBe(false);
+    expect(existsSync(workSettings)).toBe(true);
+    expect(existsSync(oldSettings)).toBe(true);
     expect(existsSync(profileFile(dir, "default"))).toBe(false);
     expect(existsSync(profileFile(dir, "work"))).toBe(true);
     const missing = runMain(["--profile", "missing", "-p", "hello"]);

@@ -1,69 +1,110 @@
-import { lstatSync, readdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { ConfigError } from "../config/errors";
 import { settingsFile } from "../config/paths";
+import { writePrivateFile } from "../config/private-file";
 import { errorName } from "../router/errors";
 
-/**
- * The lifetime of the generated Claude Code settings file. Its env can carry
- * the shell's proxy URL — userinfo included — and it is 0600 inside the 0700
- * config dir that already holds the router key in config.json, so the file
- * lives until a later launch sweeps it after the launching process has exited.
- * It is deliberately NOT removed when the direct child exits: Claude Code
- * hands the --settings path to processes it starts later (/restart, the inner
- * claude of a --tmux session, background agents), which read the file fresh
- * from disk, possibly after the launcher has exited. A descendant still
- * running from a dead launcher's session loses the file at that sweep and
- * fails closed ("Settings file not found").
- */
+const TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const GENERATED_NAME = /^settings\.([a-z0-9][a-z0-9-]{0,31})\.[0-9a-f]{16}\.json(?:\.tmp-.+)?$/;
+const TEMP_NAME =
+  /^(?:settings\.[1-9]\d*|settings\.[a-z0-9][a-z0-9-]{0,31}\.[0-9a-f]{16})\.json\.tmp-.+$/;
 
-/**
- * Per-launch settings files: settings.<pid>.json (a positive pid), plus the
- * stranded temp sibling settings.<pid>.json.tmp-* a SIGKILL can leave between
- * the temp-open and the rename of an atomic write.
- */
-const LAUNCH_SETTINGS_PATTERN = /^settings\.([1-9]\d*)\.json(\.tmp-.+)?$/;
-
-/** The fixed name an older build wrote on every launch; removed when found. */
-const LEGACY_SETTINGS_NAME = "settings.json";
-
-/** The settings path of this launch: `${dir}/settings.<process.pid>.json`. */
-export function launchSettingsPath(dir: string): string {
-  return settingsFile(dir, process.pid);
+export function launchSettingsPath(dir: string, profile: string, payload: string): string {
+  const digest = createHash("sha256").update(payload).digest("hex").slice(0, 16);
+  return settingsFile(dir, profile, digest);
 }
 
-/**
- * Removes the settings files of launches that can no longer be running: every
- * settings.<pid>.json — and its stranded settings.<pid>.json.tmp-* sibling —
- * whose pid is dead, and the fixed settings.json an older build left behind.
- * A file whose pid is alive is never touched — including a pid this process
- * may not signal (the liveness probe answers EPERM), which is treated as
- * alive. Anything else in the dir (config.json, another user's files) is not
- * the launcher's to remove. A symlinked config dir is not swept at all: the
- * settings writer refuses one, so nothing in its target is this launcher's.
- *
- * Liveness is judged in this process's pid namespace, so a config dir shared
- * across containers can see another namespace's live launcher as dead; the
- * session keeps running, and only processes it starts later lose the file.
- */
-export function sweepStaleLaunchSettings(dir: string): void {
-  let names: readonly string[];
+function privateSettingsMatch(path: string, payload: string): boolean {
+  const uid = process.getuid?.();
+  let fd: number | undefined;
   try {
-    if (lstatSync(dir).isSymbolicLink()) {
+    const directory = lstatSync(dirname(path));
+    if (
+      !directory.isDirectory() ||
+      (directory.mode & 0o777) !== 0o700 ||
+      (uid !== undefined && directory.uid !== uid)
+    )
+      return false;
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const file = fstatSync(fd);
+    return (
+      file.isFile() &&
+      (file.mode & 0o777) === 0o600 &&
+      (uid === undefined || file.uid === uid) &&
+      file.size === Buffer.byteLength(payload) &&
+      readFileSync(fd, "utf8") === payload
+    );
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function writeLaunchSettings(path: string, payload: string): void {
+  if (privateSettingsMatch(path, payload)) return;
+  writePrivateFile(path, payload, {
+    noun: "settings",
+    remedy: 'remove it and re-run "claudes login"',
+  });
+}
+
+/** Detached sessions may need any completed settings file. Sweep only old atomic-write leftovers. */
+export function sweepStaleLaunchSettings(dir: string, now = Date.now()): void {
+  let names: string[];
+  const uid = process.getuid?.();
+  try {
+    const directory = lstatSync(dir);
+    if (
+      !directory.isDirectory() ||
+      (directory.mode & 0o077) !== 0 ||
+      (uid !== undefined && directory.uid !== uid)
+    )
       return;
-    }
     names = readdirSync(dir);
   } catch {
-    return; // no config dir yet: nothing stale to sweep
+    return;
   }
   for (const name of names) {
-    if (name === LEGACY_SETTINGS_NAME) {
-      remove(join(dir, name));
-      continue;
+    if (!TEMP_NAME.test(name)) continue;
+    const path = join(dir, name);
+    try {
+      const stat = lstatSync(path);
+      if (
+        stat.isFile() &&
+        (uid === undefined || stat.uid === uid) &&
+        now - stat.mtimeMs > TEMP_MAX_AGE_MS
+      ) {
+        unlinkSync(path);
+      }
+    } catch {
+      // A later launch can retry, unless another process has already removed it.
     }
-    const pid = LAUNCH_SETTINGS_PATTERN.exec(name)?.[1];
-    if (pid !== undefined && !pidIsAlive(Number(pid))) {
-      remove(join(dir, name));
+  }
+}
+
+/** Called only inside the profile mutation lock and a verified private directory. */
+export function removeProfileSettings(dir: string, profile: string): void {
+  const uid = process.getuid?.();
+  for (const name of readdirSync(dir)) {
+    if (GENERATED_NAME.exec(name)?.[1] !== profile) continue;
+    const path = join(dir, name);
+    try {
+      const stat = lstatSync(path);
+      if (stat.isFile() && (uid === undefined || stat.uid === uid)) unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
 }
@@ -91,33 +132,4 @@ function errnoOf(err: unknown): string {
     // a throwing getter has no printable code
   }
   return errorName(err);
-}
-
-function remove(path: string): void {
-  try {
-    unlinkSync(path);
-  } catch {
-    // already gone, or unremovable now: a later launch's sweep covers it
-  }
-}
-
-/** True when `pid` names a process this one can probe (EPERM still means alive). */
-function pidIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return errCodeOf(err) !== "ESRCH";
-  }
-}
-
-/** The errno-shaped `err.code`, when the thrown value carries a string one. */
-function errCodeOf(err: unknown): string | undefined {
-  if (typeof err === "object" && err !== null) {
-    const code = (err as { readonly code?: unknown }).code;
-    if (typeof code === "string") {
-      return code;
-    }
-  }
-  return undefined;
 }

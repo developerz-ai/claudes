@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { settingsFile } from "../config/paths";
 import {
   CLAUDE_INSTALL_HINT,
   CLAUDE_NOT_FOUND_MESSAGE,
@@ -66,7 +65,7 @@ describe("run: claude resolution and exit codes", () => {
     expect(h.spawnCalls[0]?.command).toBe(join(h.binDir, "claude"));
     expect(h.spawnCalls[0]?.argv).toEqual([
       "--settings",
-      settingsFile(h.dir, process.pid),
+      expect.stringMatching(/settings\.default\.[0-9a-f]{16}\.json$/),
       "--model",
       "opus",
       "-p",
