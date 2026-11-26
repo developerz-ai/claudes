@@ -50,7 +50,7 @@ function launchSettings(): string {
 }
 
 function generatedSettings(): string[] {
-  return readdirSync(h.dir).filter((name) => name.startsWith("settings.default."));
+  return readdirSync(h.dir).filter((name) => name.startsWith("settings."));
 }
 
 test("a management command works without config and forwards its own settings argument", async () => {

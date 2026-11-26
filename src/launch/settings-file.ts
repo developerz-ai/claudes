@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -9,7 +9,7 @@ import {
   readFileSync,
   unlinkSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { ConfigError } from "../config/errors";
 import { settingsFile } from "../config/paths";
 import { writePrivateFile } from "../config/private-file";
@@ -20,8 +20,17 @@ const GENERATED_NAME = /^settings\.([a-z0-9][a-z0-9-]{0,31})\.[0-9a-f]{16}\.json
 const TEMP_NAME =
   /^(?:settings\.[1-9]\d*|settings\.[a-z0-9][a-z0-9-]{0,31}\.[0-9a-f]{16})\.json\.tmp-.+$/;
 
-export function launchSettingsPath(dir: string, profile: string, payload: string): string {
-  const digest = createHash("sha256").update(payload).digest("hex").slice(0, 16);
+export function launchSettingsPath(
+  dir: string,
+  profile: string,
+  payload: string,
+  key: string,
+): string {
+  const digest = createHmac("sha256", key)
+    .update("claudes settings filename\0")
+    .update(payload)
+    .digest("hex")
+    .slice(0, 16);
   return settingsFile(dir, profile, digest);
 }
 
@@ -78,7 +87,7 @@ export function sweepStaleLaunchSettings(dir: string, now = Date.now()): void {
   }
   for (const name of names) {
     if (!TEMP_NAME.test(name)) continue;
-    const path = join(dir, name);
+    const path = `${dir}/${name}`;
     try {
       const stat = lstatSync(path);
       if (
@@ -99,7 +108,7 @@ export function removeProfileSettings(dir: string, profile: string): void {
   const uid = process.getuid?.();
   for (const name of readdirSync(dir)) {
     if (GENERATED_NAME.exec(name)?.[1] !== profile) continue;
-    const path = join(dir, name);
+    const path = `${dir}/${name}`;
     try {
       const stat = lstatSync(path);
       if (stat.isFile() && (uid === undefined || stat.uid === uid)) unlinkSync(path);

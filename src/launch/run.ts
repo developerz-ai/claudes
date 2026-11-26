@@ -205,7 +205,7 @@ export async function run(userArgs: readonly string[], deps: RunDeps): Promise<n
   if (keyFragmentOffset(payload, config.key) !== undefined) {
     return fail(deps, 78, "generated settings contain router key material");
   }
-  const settingsPath = launchSettingsPath(loaded.dir, profile, payload);
+  const settingsPath = launchSettingsPath(loaded.dir, profile, payload, config.key);
   argv.argv[launchClass === "dispatch" ? 2 : 1] = settingsPath;
   try {
     writeLaunchSettings(settingsPath, payload);

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +13,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchSettingsPath, sweepStaleLaunchSettings, writeLaunchSettings } from "./settings-file";
+import { KEY } from "../test-support/fixtures";
+import {
+  launchSettingsPath,
+  removeProfileSettings,
+  sweepStaleLaunchSettings,
+  writeLaunchSettings,
+} from "./settings-file";
 
 function withDir(run: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "claudes-settings-"));
@@ -28,14 +35,15 @@ describe("launch settings files", () => {
     withDir((dir) => {
       const initial = '{"env":{"HTTPS_PROXY":"http://proxy"}}\n';
       const changed = '{"env":{"HTTPS_PROXY":"http://new-proxy"}}\n';
-      const oldPath = launchSettingsPath(dir, "work", initial);
-      const newPath = launchSettingsPath(dir, "work", changed);
+      const oldPath = launchSettingsPath(dir, "work", initial, KEY);
+      const newPath = launchSettingsPath(dir, "work", changed, KEY);
       expect(oldPath).toMatch(/settings\.work\.[0-9a-f]{16}\.json$/);
       expect(oldPath).not.toBe(newPath);
-      expect(oldPath).not.toBe(launchSettingsPath(dir, "personal", initial));
+      expect(oldPath).not.toBe(launchSettingsPath(dir, "personal", initial, KEY));
+      expect(oldPath).not.toBe(launchSettingsPath(dir, "work", initial, "rotated-key"));
       writeLaunchSettings(oldPath, initial);
       const original = statSync(oldPath);
-      writeLaunchSettings(launchSettingsPath(dir, "work", initial), initial);
+      writeLaunchSettings(launchSettingsPath(dir, "work", initial, KEY), initial);
       expect(statSync(oldPath).ino).toBe(original.ino);
       expect(statSync(oldPath).mode & 0o777).toBe(0o600);
       writeLaunchSettings(newPath, changed);
@@ -48,7 +56,7 @@ describe("launch settings files", () => {
     withDir((dir) => {
       const now = Date.now();
       const hour = 60 * 60 * 1000;
-      const named = launchSettingsPath(dir, "work", "{}\n");
+      const named = launchSettingsPath(dir, "work", "{}\n", KEY);
       const legacy = join(dir, "settings.999999999.json");
       const preserved = [
         named,
@@ -87,5 +95,49 @@ describe("launch settings files", () => {
       sweepStaleLaunchSettings(link);
       expect(existsSync(oldTemp)).toBe(true);
     });
+  });
+});
+
+test("a symlink to matching settings is replaced without changing its target", () => {
+  withDir((dir) => {
+    const target = join(dir, "private-target");
+    const payload = "{}\n";
+    const path = launchSettingsPath(dir, "work", payload, KEY);
+    writeFileSync(target, payload, { mode: 0o600 });
+    const before = statSync(target);
+    symlinkSync(target, path);
+    writeLaunchSettings(path, payload);
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    expect(statSync(target).ino).toBe(before.ino);
+    expect(readFileSync(target, "utf8")).toBe(payload);
+  });
+});
+
+test("cleanup preserves filesystem traversal through a symlink followed by dot-dot", () => {
+  withDir((dir) => {
+    const actualParent = join(dir, "actual");
+    const nested = join(actualParent, "nested");
+    mkdirSync(nested, { recursive: true });
+    const actual = join(actualParent, "claudes");
+    const decoy = join(dir, "claudes");
+    for (const path of [actual, decoy]) mkdirSync(path, { mode: 0o700 });
+    const link = join(dir, "link");
+    symlinkSync(nested, link);
+    const traversed = `${link}/../claudes`;
+    const name = "settings.work.0123456789abcdef.json";
+    const temporary = `${name}.tmp-old`;
+    for (const directory of [actual, decoy]) {
+      writeFileSync(join(directory, name), "{}\n");
+      const temp = join(directory, temporary);
+      writeFileSync(temp, "{}\n");
+      utimesSync(temp, new Date(0), new Date(0));
+    }
+
+    sweepStaleLaunchSettings(traversed);
+    expect(existsSync(join(actual, temporary))).toBe(false);
+    expect(existsSync(join(decoy, temporary))).toBe(true);
+    removeProfileSettings(traversed, "work");
+    expect(existsSync(join(actual, name))).toBe(false);
+    expect(existsSync(join(decoy, name))).toBe(true);
   });
 });

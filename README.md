@@ -344,16 +344,17 @@ are prepended to the merged `NO_PROXY`, so no proxy ever sees the plaintext
 loopback hop.
 
 Generated settings use the name `settings.<profile>.<digest>.json` inside
-the private config directory. The digest is derived from the file contents,
-so identical launches reuse the file and a changed model or proxy gets a
-new one. A settings file can contain credentials embedded in a proxy URL.
+the private config directory. A keyed SHA-256 digest covers the contents,
+so launches with the same settings and key reuse the file. A changed model,
+proxy, or profile key gets a new file. A settings file can contain credentials embedded in a proxy URL.
 Files are 0600 inside the 0700 directory.
 
 Completed settings files, including older PID-named files, survive later
 launches so `/restart`, tmux and detached sessions can still read them.
 The launcher removes only temporary write siblings older than 24 hours.
-`claudes profile remove` removes the selected profile's generated files.
-Uninstalling and removing the config directory removes them all.
+`claudes profile remove` removes only settings named for that profile.
+Older PID-named files can also contain proxy credentials. Removing the
+config directory during uninstall removes every form.
 
 Before launching, `claudes` checks the router's `/healthz`. The check is
 bounded by `CLAUDES_PREFLIGHT_TIMEOUT_MS` (integer milliseconds, 1 to
