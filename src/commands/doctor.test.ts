@@ -227,7 +227,7 @@ describe("runDoctor", () => {
       expect(text).toContain("[PASS] user, project and local settings set no conflicting keys");
       expect(text).toContain("[PASS] wiring probe: claude sent the router key to the stub");
       expect(text).toContain("[PASS] effective models:");
-      expect(text).toContain(`model=${TIERS.sonnet}`);
+      expect(text).toContain(`model=${TIERS.opus}`);
       expect(text).not.toContain("[FAIL]");
       // The config path is the temp XDG one.
       expect(text).toContain(configFile(configDir(d.env)));
@@ -459,6 +459,29 @@ test("doctor's explicit profile wins and its re-login remedy targets that profil
     const output = h.out.join("") + h.err.join("");
     expect(output).toContain("claudes login --profile work");
     assertNoKeyFragment(output, KEY);
+  } finally {
+    rmSync(d.home, { recursive: true, force: true });
+  }
+});
+
+test("doctor names each refused launcher environment and skips wiring", async () => {
+  const d = drive();
+  try {
+    for (const name of [
+      "CLAUDE_CODE_USE_UNKNOWN_PROVIDER",
+      "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+      "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+    ]) {
+      const fake = fakeClaudeProc();
+      const h = deps(d, { runProc: fake.runProc });
+      const code = await runDoctor([], { ...h.deps, env: { ...d.env, [name]: "1" } });
+      expect(code).toBe(1);
+      const output = h.out.join("");
+      expect(output).toContain(`[FAIL] launcher refuses ${name}`);
+      expect(output).toContain("[INFO] wiring probe skipped");
+      expect(h.probeDirs).toHaveLength(0);
+      assertNoKeyFragment(output, KEY);
+    }
   } finally {
     rmSync(d.home, { recursive: true, force: true });
   }

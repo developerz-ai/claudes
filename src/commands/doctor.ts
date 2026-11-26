@@ -209,7 +209,12 @@ export async function runDoctor(argv: readonly string[], deps: DoctorDeps): Prom
     ]);
   }
   if (live) {
-    report([await checkLive({ config: configCheck.config, fetch: deps.postFetch })]);
+    report([
+      await checkLive({
+        config: { ...configCheck.config, tiers: catalog.tiers },
+        fetch: deps.postFetch,
+      }),
+    ]);
   }
   report(checkEffectiveModel(configCheck.config, catalog, model, configCheck.profile));
   return anyFailed(results) ? 1 : 0;

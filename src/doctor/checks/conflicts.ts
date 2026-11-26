@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Env } from "../../config/paths";
 import { isStripped } from "../../launch/env";
@@ -44,14 +44,19 @@ function managedSettingsPath(platform: string): string | undefined {
  * never pass for a missing one.
  */
 export const defaultReadFile: ReadText = (path) => {
+  let fd: number | undefined;
   try {
-    return readFileSync(path, "utf8");
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    if (!fstatSync(fd).isFile()) throw new Error("settings path is not a regular file");
+    return readFileSync(fd, "utf8");
   } catch (err) {
     const code = (err as { readonly code?: unknown }).code;
     if (code === "ENOENT" || code === "ENOTDIR") {
       return undefined;
     }
     throw err;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 };
 
@@ -76,7 +81,7 @@ export function checkConflicts(deps: ConflictsDeps): CheckResult[] {
 
 function claudeConfigDir(env: Env): string | undefined {
   if (env.CLAUDE_CONFIG_DIR?.startsWith("/")) return env.CLAUDE_CONFIG_DIR;
-  return env.HOME?.startsWith("/") ? join(env.HOME, ".claude") : undefined;
+  return env.HOME?.startsWith("/") ? `${env.HOME}/.claude` : undefined;
 }
 
 /** Shell env, presence only: claudes strips these; plain `claude` would use them. */
@@ -108,7 +113,7 @@ function settingsSources(home: string | undefined, cwd: string): SettingsSource[
 }
 
 function under(base: string | undefined, relative: string): string | undefined {
-  return base === undefined ? undefined : join(base, relative);
+  return base === undefined ? undefined : `${base}/${relative}`;
 }
 
 function settingsResult(home: string | undefined, cwd: string, readFile: ReadText): CheckResult {

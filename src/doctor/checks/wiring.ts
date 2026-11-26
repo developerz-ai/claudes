@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { configDir, type Env } from "../../config/paths";
+import { ConfigError } from "../../config/errors";
+import { configDir, type Env, profileFile } from "../../config/paths";
 import { writePrivateFile } from "../../config/private-file";
 import { type Config, keyFragmentOffset } from "../../config/schema";
 import { writeConfig } from "../../config/store";
@@ -286,7 +287,8 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
             catalog: deps.launch.catalog,
             model: { ...deps.launch.model, model: deps.launch.model.launchId },
           };
-    const settings = buildSettings(probeConfig, deps, deps.env, "default", launch);
+    const profile = deps.profile ?? "default";
+    const settings = buildSettings(probeConfig, deps, deps.env, profile, launch);
     const payload = `${JSON.stringify(settings, null, 2)}\n`;
     if (keyFragmentOffset(payload, config.key) !== undefined) {
       throw new ConfigError("generated wiring probe settings contain router key material");
@@ -301,7 +303,7 @@ export async function checkWiring(deps: WiringDeps, config: Config): Promise<Che
     // tree, holding the key's only disk copy.
     const probeXdg = join(probeRoot, "xdg");
     createPrivateDir(probeXdg, "probe directory");
-    keyCopy = join(probeXdg, "claudes", "config.json");
+    keyCopy = profileFile(join(probeXdg, "claudes"), profile);
     writeConfig(keyCopy, probeConfig);
     const probeHome = join(probeRoot, "home");
     createPrivateDir(probeHome, "probe directory");
@@ -520,7 +522,10 @@ function evaluate(
     }
     return {
       status: "FAIL",
-      title: `wiring probe: the request's model (${model ?? "unreadable"}) is not a configured tier`,
+      title:
+        selected === undefined
+          ? `wiring probe: the request's model (${model ?? "unreadable"}) is not a configured tier`
+          : "wiring probe: the request used a different model than the launcher resolved",
       fix: `run \`claudes login --profile ${profile}\` so the pinned tiers match what the router serves`,
     };
   }

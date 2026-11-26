@@ -96,7 +96,10 @@ export function sessionModel(
     notes.push("the saved model is not served; starting on the opus tier");
   if (explicit !== undefined && live && explicitId === undefined)
     notes.push("the requested --model is not in the live catalog; passing it through");
-  const launchId = explicit !== undefined ? explicitId : (savedId ?? catalog.tiers.opus);
+  const launchId =
+    explicit !== undefined
+      ? (explicitId ?? explicit)
+      : (savedId ?? (live ? undefined : saved) ?? catalog.tiers.opus);
   const entry = launchId === undefined ? undefined : catalog.entries.get(launchId);
   const target =
     entry?.resolvedModel === undefined ? undefined : catalog.entries.get(entry.resolvedModel);
