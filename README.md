@@ -144,8 +144,8 @@ recognized model cannot be enforced by these settings.
 ## What it does and doesn't do
 
 - It never writes `~/.claude`. Everything `claudes` writes lives under
-  `~/.config/claudes` (`$XDG_CONFIG_HOME/claudes`): the config, one small
-  settings file per launch (see "Network, proxies and certificates"), and
+  `~/.config/claudes` (`$XDG_CONFIG_HOME/claudes`): the config, small
+  settings files addressed by profile and content (see "Network, proxies and certificates"), and
   the throwaway directory `claudes doctor`'s wiring probe works in (see
   "`claudes doctor`"). Claude Code itself does write there, as it does under
   plain `claude`: its `/model` command saves the chosen model to
@@ -318,11 +318,9 @@ copy cannot be deleted at all, the probe keeps its signal traps armed — so
 an interrupt during teardown still takes it — and fails with the copy's path
 instead of claiming a clean run.
 
-Pid liveness is judged in the prober's pid namespace, the same rule the
-per-launch settings sweep uses (see "Network, proxies and certificates"), so
-a config directory shared across containers can make another namespace's
-live doctor run look dead: that run's probe directory is swept, and the key
-copy under it is deleted while its probe is still running.
+Doctor still judges probe directory liveness in its own PID namespace.
+Sharing the config directory across containers can make a live doctor probe
+look stale to another container.
 
 ## Network, proxies and certificates
 
@@ -345,20 +343,18 @@ When the router is on loopback, its hostname plus `127.0.0.1,localhost,::1`
 are prepended to the merged `NO_PROXY`, so no proxy ever sees the plaintext
 loopback hop.
 
-The generated per-launch settings file
-(`~/.config/claudes/settings.<pid>.json`, 0600 inside the 0700 config
-directory) can contain your shell's proxy URL, including any credentials
-embedded in it. It deliberately outlives the launcher — Claude Code hands its
-path to processes started later (`/restart`, tmux sessions, background
-agents) — and a later `claudes` launch sweeps it once the launching pid is
-dead.
+Generated settings use the name `settings.<profile>.<digest>.json` inside
+the private config directory. A keyed SHA-256 digest covers the contents,
+so launches with the same settings and key reuse the file. A changed model,
+proxy, or profile key gets a new file. A settings file can contain credentials embedded in a proxy URL.
+Files are 0600 inside the 0700 directory.
 
-Two caveats follow from that sweep. A descendant still running from a dead
-launcher's session loses the file at the next launch's sweep and fails closed
-with "Settings file not found". And pid liveness is judged in the prober's
-pid namespace, so a config directory shared across containers can make
-another namespace's live launcher look dead: the session keeps running, but
-only the processes it starts later lose the file.
+Completed settings files, including older PID-named files, survive later
+launches so `/restart`, tmux and detached sessions can still read them.
+The launcher removes only temporary write siblings older than 24 hours.
+`claudes profile remove` removes only settings named for that profile.
+Older PID-named files can also contain proxy credentials. Removing the
+config directory during uninstall removes every form.
 
 Before launching, `claudes` checks the router's `/healthz`. The check is
 bounded by `CLAUDES_PREFLIGHT_TIMEOUT_MS` (integer milliseconds, 1 to

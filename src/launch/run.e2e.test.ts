@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -14,7 +15,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { MISSING_CONFIG_MESSAGE } from "../config/load";
-import { configDir, configFile, settingsFile } from "../config/paths";
+import { configDir, configFile } from "../config/paths";
 import type { Config } from "../config/schema";
 import { writeConfig } from "../config/store";
 import type { FetchLike } from "../router/client";
@@ -269,7 +270,7 @@ describe("run e2e: the happy path", () => {
       const record = await readRecord();
       expect(record.argv.slice(2)).toEqual([
         "--settings",
-        settingsFile(dir, process.pid),
+        expect.stringMatching(/settings\.default\.[0-9a-f]{16}\.json$/),
         "--model",
         "opus",
         "-p",
@@ -303,13 +304,13 @@ describe("run e2e: the happy path", () => {
     async () => {
       expect(await drive(["mcp", "list"])).toBe(7);
       expect((await readRecord()).argv.slice(2)).toEqual(["mcp", "list"]);
-      expect(existsSync(settingsFile(dir, process.pid))).toBe(false);
+      expect(readdirSync(dir).filter((name) => name.startsWith("settings."))).toEqual([]);
 
       expect(await drive(["agents", "--help"])).toBe(7);
       expect((await readRecord()).argv.slice(2)).toEqual([
         "agents",
         "--settings",
-        settingsFile(dir, process.pid),
+        expect.stringMatching(/settings\.default\.[0-9a-f]{16}\.json$/),
         "--help",
       ]);
     },
@@ -343,10 +344,10 @@ describe("run e2e: the happy path", () => {
   );
 
   test(
-    "the settings file exists while claude runs, outlives the launcher, and is swept by a later launch",
+    "the settings file exists while claude runs, outlives the launcher, and survives a later launch",
     async () => {
       // Launch 1 runs in a REAL launcher process, so its pid can die while
-      // its settings file lives — the lifetime the sweep is keyed on. The
+      // its settings file lives. The
       // script drives the same run() this file imports, with only the fetch
       // seam stubbed (the router is synthetic).
       const launcherScript = join(home, "launcher.mjs");
@@ -370,7 +371,10 @@ describe("run e2e: the happy path", () => {
       });
       children.push(launcher);
       const record = await readRecord();
-      const stranded = settingsFile(dir, launcher.pid as number);
+      const stranded = record.argv[3];
+      if (stranded === undefined || record.settings.text === undefined) {
+        throw new Error("missing launch settings path or payload");
+      }
       // While the child runs, its --settings file is on disk under 0600…
       expect(record.settings.exists).toBe(true);
       expect(statSync(stranded).mode & 0o777).toBe(0o600);
@@ -383,12 +387,14 @@ describe("run e2e: the happy path", () => {
       // …but the launcher does NOT remove the file on its way out: Claude
       // Code hands the --settings path to processes it starts later.
       expect(existsSync(stranded)).toBe(true);
-      // A second launch — after the first launcher's pid is dead — sweeps it.
+      // A second launch keeps the original payload and writes its own.
       expect(await drive(["-p", "hi"])).toBe(7);
-      expect(existsSync(stranded)).toBe(false);
-      // The second launch's own file outlives it too: its pid (this test
-      // process's) is alive, so its own sweep never touches it.
-      expect(existsSync(settingsFile(dir, process.pid))).toBe(true);
+      expect(existsSync(stranded)).toBe(true);
+      expect(readFileSync(stranded, "utf8")).toBe(record.settings.text);
+      const later = (await readRecord()).argv[3];
+      if (later === undefined) throw new Error("missing second launch settings path");
+      expect(later).not.toBe(stranded);
+      expect(existsSync(later)).toBe(true);
     },
     SPAWN_TEST_TIMEOUT_MS,
   );

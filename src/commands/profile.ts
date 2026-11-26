@@ -4,6 +4,7 @@ import { activeProfileFile, configDir, type Env, profileFile } from "../config/p
 import { writePrivateFile } from "../config/private-file";
 import { activeProfile, profileNames, validProfileName } from "../config/profile";
 import { keyFragmentOffset } from "../config/schema";
+import { removeProfileSettings } from "../launch/settings-file";
 import { scrub } from "../router/errors";
 
 const USAGE = "usage: claudes profile list | use <name> | remove <name>";
@@ -81,6 +82,7 @@ export function runProfile(
       if (!file.isFile() || (uid !== undefined && file.uid !== uid)) {
         return fail(78, "refusing to remove a profile that is not a caller-owned regular file");
       }
+      removeProfileSettings(dir, name);
       unlinkSync(path);
       out("profile removed");
       return 0;

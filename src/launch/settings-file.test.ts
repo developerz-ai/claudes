@@ -1,13 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { settingsFile } from "../config/paths";
-import { launchSettingsPath, sweepStaleLaunchSettings } from "./settings-file";
-
-/** A pid no kernel will hand out (above every pid_max, below kill()'s range). */
-const DEAD_PID = 999_999_999;
+import { KEY } from "../test-support/fixtures";
+import {
+  launchSettingsPath,
+  removeProfileSettings,
+  sweepStaleLaunchSettings,
+  writeLaunchSettings,
+} from "./settings-file";
 
 function withDir(run: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "claudes-settings-"));
@@ -18,122 +30,114 @@ function withDir(run: (dir: string) => void): void {
   }
 }
 
-describe("launchSettingsPath", () => {
-  test("names this launch's settings file by the launcher's own pid", () => {
-    expect(launchSettingsPath("/home/u/.config/claudes")).toBe(
-      settingsFile("/home/u/.config/claudes", process.pid),
-    );
-    expect(launchSettingsPath("/home/u/.config/claudes")).toBe(
-      `/home/u/.config/claudes/settings.${process.pid}.json`,
-    );
-  });
-});
-
-describe("sweepStaleLaunchSettings", () => {
-  test("removes a dead pid's settings file and its stranded temp sibling", () => {
+describe("launch settings files", () => {
+  test("digest and profile distinguish payloads while identical content reuses the inode", () => {
     withDir((dir) => {
-      const stale = settingsFile(dir, DEAD_PID);
-      writeFileSync(stale, "{}\n", "utf8");
-      // What a SIGKILL between the temp-open and the rename of an atomic
-      // write leaves behind, under the same dead pid.
-      const staleTemp = `${stale}.tmp-m3z1gx-lx2ab1`;
-      writeFileSync(staleTemp, "{}\n", "utf8");
-      sweepStaleLaunchSettings(dir);
-      expect(existsSync(stale)).toBe(false);
-      expect(existsSync(staleTemp)).toBe(false);
+      const initial = '{"env":{"HTTPS_PROXY":"http://proxy"}}\n';
+      const changed = '{"env":{"HTTPS_PROXY":"http://new-proxy"}}\n';
+      const oldPath = launchSettingsPath(dir, "work", initial, KEY);
+      const newPath = launchSettingsPath(dir, "work", changed, KEY);
+      expect(oldPath).toMatch(/settings\.work\.[0-9a-f]{16}\.json$/);
+      expect(oldPath).not.toBe(newPath);
+      expect(oldPath).not.toBe(launchSettingsPath(dir, "personal", initial, KEY));
+      expect(oldPath).not.toBe(launchSettingsPath(dir, "work", initial, "rotated-key"));
+      writeLaunchSettings(oldPath, initial);
+      const original = statSync(oldPath);
+      writeLaunchSettings(launchSettingsPath(dir, "work", initial, KEY), initial);
+      expect(statSync(oldPath).ino).toBe(original.ino);
+      expect(statSync(oldPath).mode & 0o777).toBe(0o600);
+      writeLaunchSettings(newPath, changed);
+      expect(readFileSync(oldPath, "utf8")).toBe(initial);
+      expect(readFileSync(newPath, "utf8")).toBe(changed);
     });
   });
 
-  test("does not sweep through a symlinked config dir", () => {
+  test("sweep removes only old, recognized temporary siblings", () => {
     withDir((dir) => {
-      // A stow-style link: the settings writer refuses it, so nothing in its
-      // target is the launcher's to delete.
-      const target = join(dir, "real");
-      mkdirSync(target);
-      const stale = settingsFile(target, DEAD_PID);
-      const legacy = join(target, "settings.json");
-      writeFileSync(stale, "{}\n", "utf8");
-      writeFileSync(legacy, "{}\n", "utf8");
+      const now = Date.now();
+      const hour = 60 * 60 * 1000;
+      const named = launchSettingsPath(dir, "work", "{}\n", KEY);
+      const legacy = join(dir, "settings.999999999.json");
+      const preserved = [
+        named,
+        legacy,
+        join(dir, "settings.json"),
+        join(dir, "foreign.json.tmp-abcd"),
+      ];
+      const stale = [`${named}.tmp-abcd`, `${legacy}.tmp-abcd`];
+      for (const file of [...preserved, ...stale]) {
+        writeFileSync(file, "{}\n");
+        const old = new Date(now - 60 * 24 * hour);
+        utimesSync(file, old, old);
+      }
+      const recent = `${named}.tmp-recent`;
+      writeFileSync(recent, "{}\n");
+      const young = new Date(now - 23 * hour);
+      utimesSync(recent, young, young);
+      const old = new Date(now - 25 * hour);
+      utimesSync(stale[0] as string, old, old);
+      sweepStaleLaunchSettings(dir, now);
+      expect([...preserved, recent].every(existsSync)).toBe(true);
+      expect(stale.some(existsSync)).toBe(false);
+    });
+  });
+
+  test("does not sweep through a symlinked config directory", () => {
+    withDir((dir) => {
+      const target = join(dir, "target");
+      mkdirSync(target, { mode: 0o700 });
+      const oldTemp = join(target, "settings.12345.json.tmp-old");
+      writeFileSync(oldTemp, "{}\n");
+      const old = new Date(0);
+      utimesSync(oldTemp, old, old);
       const link = join(dir, "link");
       symlinkSync(target, link);
       sweepStaleLaunchSettings(link);
-      expect(existsSync(stale)).toBe(true);
-      expect(existsSync(legacy)).toBe(true);
+      expect(existsSync(oldTemp)).toBe(true);
     });
   });
+});
 
-  test("removes the fixed settings.json an older build left behind", () => {
-    withDir((dir) => {
-      const legacy = join(dir, "settings.json");
-      writeFileSync(legacy, "{}\n", "utf8");
-      sweepStaleLaunchSettings(dir);
-      expect(existsSync(legacy)).toBe(false);
-    });
+test("a symlink to matching settings is replaced without changing its target", () => {
+  withDir((dir) => {
+    const target = join(dir, "private-target");
+    const payload = "{}\n";
+    const path = launchSettingsPath(dir, "work", payload, KEY);
+    writeFileSync(target, payload, { mode: 0o600 });
+    const before = statSync(target);
+    symlinkSync(target, path);
+    writeLaunchSettings(path, payload);
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    expect(statSync(target).ino).toBe(before.ino);
+    expect(readFileSync(target, "utf8")).toBe(payload);
   });
+});
 
-  test("never removes a live pid's settings file, and leaves everything else alone", () => {
-    withDir((dir) => {
-      // A real child process holds the pid for the sweep's liveness probe.
-      const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 500)"]);
-      try {
-        expect(holder.pid).toBeDefined();
-        const live = settingsFile(dir, holder.pid as number);
-        writeFileSync(live, "{}\n", "utf8");
-        const liveTemp = `${live}.tmp-m3z1gx-lx2ab1`;
-        writeFileSync(liveTemp, "{}\n", "utf8");
-        const config = join(dir, "config.json");
-        writeFileSync(config, "{}\n", "utf8");
-        const temp = join(dir, "settings.json.tmp-abc123");
-        writeFileSync(temp, "{}\n", "utf8");
-        sweepStaleLaunchSettings(dir);
-        expect(existsSync(live)).toBe(true);
-        expect(existsSync(liveTemp)).toBe(true);
-        expect(existsSync(config)).toBe(true);
-        expect(existsSync(temp)).toBe(true); // a stranger's file, not ours to judge
-      } finally {
-        holder.kill("SIGKILL");
-      }
-    });
-  });
+test("cleanup preserves filesystem traversal through a symlink followed by dot-dot", () => {
+  withDir((dir) => {
+    const actualParent = join(dir, "actual");
+    const nested = join(actualParent, "nested");
+    mkdirSync(nested, { recursive: true });
+    const actual = join(actualParent, "claudes");
+    const decoy = join(dir, "claudes");
+    for (const path of [actual, decoy]) mkdirSync(path, { mode: 0o700 });
+    const link = join(dir, "link");
+    symlinkSync(nested, link);
+    const traversed = `${link}/../claudes`;
+    const name = "settings.work.0123456789abcdef.json";
+    const temporary = `${name}.tmp-old`;
+    for (const directory of [actual, decoy]) {
+      writeFileSync(join(directory, name), "{}\n");
+      const temp = join(directory, temporary);
+      writeFileSync(temp, "{}\n");
+      utimesSync(temp, new Date(0), new Date(0));
+    }
 
-  test("keeps settings.1.json: the liveness probe's EPERM means pid 1 is alive", () => {
-    withDir((dir) => {
-      const init = settingsFile(dir, 1);
-      writeFileSync(init, "{}\n", "utf8");
-      sweepStaleLaunchSettings(dir);
-      // For a non-root prober process.kill(1, 0) throws EPERM, which counts
-      // as alive; under root pid 1 genuinely exists. Either way: kept.
-      expect(existsSync(init)).toBe(true);
-    });
-  });
-
-  test("tolerates a missing config dir", () => {
-    expect(() => sweepStaleLaunchSettings(join(tmpdir(), "claudes-no-such-dir-xyz"))).not.toThrow();
-  });
-
-  test("ignores settings-shaped names that are not per-launch files", () => {
-    withDir((dir) => {
-      for (const name of [
-        "settings.json5",
-        "settings.abc.json",
-        "settings.0.json",
-        "settings..json",
-        "settings.0.json.tmp-abc123",
-        "settings.5.json.tmp-",
-      ]) {
-        writeFileSync(join(dir, name), "{}\n", "utf8");
-      }
-      sweepStaleLaunchSettings(dir);
-      for (const name of [
-        "settings.json5",
-        "settings.abc.json",
-        "settings.0.json",
-        "settings..json",
-        "settings.0.json.tmp-abc123",
-        "settings.5.json.tmp-",
-      ]) {
-        expect(existsSync(join(dir, name))).toBe(true);
-      }
-    });
+    sweepStaleLaunchSettings(traversed);
+    expect(existsSync(join(actual, temporary))).toBe(false);
+    expect(existsSync(join(decoy, temporary))).toBe(true);
+    removeProfileSettings(traversed, "work");
+    expect(existsSync(join(actual, name))).toBe(false);
+    expect(existsSync(join(decoy, name))).toBe(true);
   });
 });

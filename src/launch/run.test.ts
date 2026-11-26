@@ -3,15 +3,17 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "../config/load";
-import { configFile, settingsFile } from "../config/paths";
+import { configFile } from "../config/paths";
 import { writeConfig } from "../config/store";
 import { assertNoKeyFragment } from "../test-support/redact";
 import { CLAUDE_INSTALL_HINT, CLAUDE_NOT_FOUND_MESSAGE } from "./run";
@@ -40,9 +42,15 @@ function errText(): string {
   return h.err.join("");
 }
 
-/** This launch's settings path, as run() computes it (the test runs in-process). */
 function launchSettings(): string {
-  return settingsFile(h.dir, process.pid);
+  const args = h.spawnCalls.at(-1)?.argv;
+  const path = args?.[(args.indexOf("--settings") ?? -1) + 1];
+  if (path === undefined) throw new Error("no routed spawn recorded");
+  return path;
+}
+
+function generatedSettings(): string[] {
+  return readdirSync(h.dir).filter((name) => name.startsWith("settings."));
 }
 
 test("a management command works without config and forwards its own settings argument", async () => {
@@ -58,7 +66,7 @@ test("a management command works without config and forwards its own settings ar
   expect(h.spawnCalls).toHaveLength(1);
   expect(h.spawnCalls[0]?.argv).toEqual(args);
   expect(h.spawnCalls[0]?.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-  expect(existsSync(launchSettings())).toBe(false);
+  expect(generatedSettings()).toEqual([]);
 });
 
 test("dispatch commands get settings after the command word", async () => {
@@ -312,7 +320,7 @@ describe("run: settings file", () => {
     expect(errText()).toBe(`${CLAUDE_NOT_FOUND_MESSAGE}\n${CLAUDE_INSTALL_HINT}\n`);
     // `claude` is resolved before the write, so a launch that can never run a
     // session leaves no file (and no proxy credentials) behind.
-    expect(existsSync(launchSettings())).toBe(false);
+    expect(generatedSettings()).toEqual([]);
   });
 
   test("the settings file stays behind when the spawn itself fails", async () => {
@@ -323,22 +331,27 @@ describe("run: settings file", () => {
     expect(existsSync(launchSettings())).toBe(true);
   });
 
-  test("dead launches' files, their temp siblings, and a legacy settings.json are swept", async () => {
-    writeFileSync(join(h.dir, "settings.999999999.json"), "{}\n", "utf8");
-    writeFileSync(join(h.dir, "settings.999999999.json.tmp-m3z1gx"), "{}\n", "utf8");
-    writeFileSync(join(h.dir, "settings.json"), "{}\n", "utf8");
+  test("a later launch preserves legacy files and sweeps only old temp siblings", async () => {
+    const old = join(h.dir, "settings.999999999.json");
+    const legacy = join(h.dir, "settings.json");
+    const temp = `${old}.tmp-old`;
+    for (const path of [old, legacy, temp]) {
+      writeFileSync(path, "{}\n");
+      utimesSync(path, new Date(0), new Date(0));
+    }
     const code = await h.drive(["-p", "hi"], {
       spawnScript: (child) => child.emit("exit", 0, null),
     });
     expect(code).toBe(0);
-    expect(existsSync(join(h.dir, "settings.999999999.json"))).toBe(false);
-    expect(existsSync(join(h.dir, "settings.999999999.json.tmp-m3z1gx"))).toBe(false);
-    expect(existsSync(join(h.dir, "settings.json"))).toBe(false);
+    expect(existsSync(old)).toBe(true);
+    expect(existsSync(legacy)).toBe(true);
+    expect(existsSync(temp)).toBe(false);
   });
 
-  test("the sweep runs before the router pre-flight: it cleans even when the router is down", async () => {
-    const stale = join(h.dir, "settings.999999999.json");
-    writeFileSync(stale, "{}\n", "utf8");
+  test("the sweep cleans old temporary siblings even when the router is down", async () => {
+    const stale = join(h.dir, "settings.999999999.json.tmp-old");
+    writeFileSync(stale, "{}\n");
+    utimesSync(stale, new Date(0), new Date(0));
     const code = await h.drive(["-p", "hi"], { fetch: deadFetch });
     expect(code).toBe(69);
     expect(existsSync(stale)).toBe(false);
@@ -347,7 +360,7 @@ describe("run: settings file", () => {
   test("an unreachable router leaves no settings file behind", async () => {
     const code = await h.drive(["-p", "hi"], { fetch: deadFetch });
     expect(code).toBe(69);
-    expect(statSync(launchSettings(), { throwIfNoEntry: false })).toBeUndefined();
+    expect(generatedSettings()).toEqual([]);
   });
 
   test("a symlinked config dir: the ConfigError's own message, exit 1, no spawn", async () => {
@@ -377,7 +390,11 @@ describe("run: settings file", () => {
   test("a non-Config write failure names the errno code", async () => {
     // A directory at the settings path makes the final rename fail with an
     // errno (EISDIR/ENOTDIR), which is all the message may carry.
-    mkdirSync(launchSettings());
+    await h.drive(["-p", "hi"], { spawnScript: (child) => child.emit("exit", 0, null) });
+    const path = launchSettings();
+    rmSync(path);
+    mkdirSync(path);
+    h.spawnCalls.length = 0;
     const code = await h.drive(["-p", "hi"], {
       spawnScript: (child) => child.emit("exit", 0, null),
     });

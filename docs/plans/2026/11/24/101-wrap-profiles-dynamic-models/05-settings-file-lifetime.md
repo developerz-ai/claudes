@@ -11,7 +11,9 @@ Depends on: 04. Fixes B13.
 
 ## Design
 
-Name: `settings.<profile>.<first 16 hex of SHA-256 of the payload>.json`. Equal content is the same file, so
+Name: `settings.<profile>.<first 16 hex of HMAC-SHA-256 of the payload>.json`. The profile key protects
+credential-bearing proxy settings from offline guesses against the filename. Equal content under the
+same key is the same file, so
 a second launch reuses it and never changes it under a running session. Different content is a different
 file, so pid namespaces cannot collide. `writePrivateFile` already replaces atomically.
 

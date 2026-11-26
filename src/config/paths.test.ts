@@ -40,9 +40,9 @@ describe("configFile", () => {
 });
 
 describe("settingsFile", () => {
-  test("names the per-launch settings file by its pid", () => {
-    expect(settingsFile("/home/u/.config/claudes", 4242)).toBe(
-      "/home/u/.config/claudes/settings.4242.json",
+  test("names the settings file by profile and digest", () => {
+    expect(settingsFile("/home/u/.config/claudes", "work", "0123456789abcdef")).toBe(
+      "/home/u/.config/claudes/settings.work.0123456789abcdef.json",
     );
   });
 });
