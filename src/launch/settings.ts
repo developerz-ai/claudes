@@ -1,7 +1,9 @@
 import type { Env } from "../config/paths";
 import { DEFAULT_PROFILE } from "../config/profile";
 import type { Config } from "../config/schema";
+import type { Catalog, PickerOption } from "./catalog";
 import { PROVIDER_SWITCHES } from "./provider-switches";
+import type { SessionModel } from "./session-model";
 import { denyRules, disabledEnv } from "./unsupported";
 
 /** Where the running claudes lives, so apiKeyHelper can call back into it. */
@@ -11,6 +13,11 @@ export interface SelfPaths {
 }
 
 export interface Settings {
+  readonly model?: string;
+  readonly modelPicker?: {
+    readonly replaceBuiltInOptions: true;
+    readonly options: readonly PickerOption[];
+  };
   readonly apiKeyHelper: string;
   readonly permissions: { readonly deny: readonly string[] };
   readonly env: Readonly<Record<string, string>>;
@@ -201,13 +208,15 @@ export function buildSettings(
   self: SelfPaths,
   parentEnv: Env,
   profile = DEFAULT_PROFILE,
+  launch?: { readonly catalog: Catalog; readonly model: SessionModel },
 ): Settings {
   const loopbackHost = loopbackHostname(config.baseUrl);
+  const tiers = launch?.catalog.tiers ?? config.tiers;
   const env: Record<string, string> = {
     ANTHROPIC_BASE_URL: config.baseUrl,
-    ANTHROPIC_DEFAULT_OPUS_MODEL: config.tiers.opus,
-    ANTHROPIC_DEFAULT_SONNET_MODEL: config.tiers.sonnet,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: config.tiers.haiku,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: tiers.opus,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: tiers.sonnet,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: tiers.haiku,
     ...disabledEnv(),
     ANTHROPIC_AUTH_TOKEN: "",
     ANTHROPIC_API_KEY: "",
@@ -238,7 +247,18 @@ export function buildSettings(
   if (config.maxContextTokens !== undefined) {
     env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
   }
+  const picker = launch?.catalog.picker;
+  if (launch !== undefined) {
+    env.ANTHROPIC_DEFAULT_FABLE_MODEL = tiers.fable ?? "";
+    Object.assign(env, launch.model.env);
+  }
   return {
+    ...(launch?.model.model === undefined ? {} : { model: launch.model.model }),
+    ...(picker === undefined || picker.length === 0
+      ? {}
+      : {
+          modelPicker: { replaceBuiltInOptions: true, options: picker },
+        }),
     apiKeyHelper: buildKeyHelper(self, profile),
     permissions: { deny: denyRules() },
     env,

@@ -1,5 +1,13 @@
 import type { Env } from "../config/paths";
-import { type FetchLike, health, RouterError, TLS_VERIFY_CODES } from "../router/client";
+import type { Config } from "../config/schema";
+import {
+  type FetchLike,
+  health,
+  type ModelEntry,
+  models,
+  RouterError,
+  TLS_VERIFY_CODES,
+} from "../router/client";
 
 export const ROUTER_UNREACHABLE_MESSAGE =
   "router unreachable: run `claudes doctor`, or use plain `claude` with your own login (usage won't be attributed)";
@@ -101,4 +109,19 @@ export function proxyNoteNeeded(env: Env): boolean {
 
 function isSet(value: string | undefined): boolean {
   return value !== undefined && value !== "";
+}
+
+export async function preflightCatalog(
+  config: Config,
+  fetchImpl: FetchLike,
+  timeoutMs: number,
+): Promise<{ readonly rows?: readonly ModelEntry[]; readonly rejected: boolean }> {
+  const catalog = models(config.baseUrl, config.key, fetchImpl, timeoutMs).then(
+    (rows) => ({ rows, rejected: false }),
+    (error: unknown) => ({
+      rejected: error instanceof RouterError && (error.status === 401 || error.status === 403),
+    }),
+  );
+  await preflight(config.baseUrl, fetchImpl, timeoutMs);
+  return await catalog;
 }

@@ -36,10 +36,30 @@ export function isStripped(name: string): boolean {
  * adds a token — the key travels only through `apiKeyHelper` reading `claudes
  * key`, never through the session env.
  */
+export const WINDOW_MARKER = "CLAUDES_GENERATED_WINDOWS";
+export const WINDOW_VARS = [
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+] as const;
+
+export function inheritedWindow(
+  parentEnv: Env,
+  name: (typeof WINDOW_VARS)[number],
+): string | undefined {
+  return parentEnv[WINDOW_MARKER]?.split(",").includes(name) ? undefined : parentEnv[name];
+}
+
 export function buildChildEnv(parentEnv: Env): Env {
   const child: Env = {};
   for (const [name, value] of Object.entries(parentEnv)) {
-    if (value === undefined || isStripped(name)) {
+    if (
+      value === undefined ||
+      isStripped(name) ||
+      name === WINDOW_MARKER ||
+      WINDOW_VARS.some(
+        (window) => window === name && inheritedWindow(parentEnv, window) === undefined,
+      )
+    ) {
       continue;
     }
     child[name] = value;

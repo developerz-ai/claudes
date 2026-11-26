@@ -12,7 +12,7 @@ function deps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     nodeVersion: "24.6.0",
     env: ENV,
     claudePath: CLAUDE,
-    runProc: versionProc("2.1.300 (Claude Code)\n"),
+    runProc: versionProc("2.1.331 (Claude Code)\n"),
     ...overrides,
   };
 }
@@ -23,7 +23,7 @@ describe("checkRuntime", () => {
     expect(results).toHaveLength(2);
     expect(results[0]).toEqual({ status: "PASS", title: "node 24.6.0" });
     expect(results[1]?.status).toBe("PASS");
-    expect(results[1]?.title).toContain("claude 2.1.300");
+    expect(results[1]?.title).toContain("claude 2.1.331");
     expect(results[1]?.title).toContain(CLAUDE);
   });
 
@@ -55,12 +55,12 @@ describe("checkRuntime", () => {
     const results = await checkRuntime(deps({ runProc: versionProc("2.1.100 (Claude Code)") }));
     expect(results[1]?.status).toBe("FAIL");
     expect(results[1]?.title).toContain("2.1.100");
-    expect(results[1]?.title).toContain("2.1.299");
+    expect(results[1]?.title).toContain("2.1.325");
     expect(results[1]?.fix).toContain("update Claude Code");
   });
 
   test("the exact tested version passes", async () => {
-    const results = await checkRuntime(deps({ runProc: versionProc("2.1.299 (Claude Code)") }));
+    const results = await checkRuntime(deps({ runProc: versionProc("2.1.325 (Claude Code)") }));
     expect(results[1]?.status).toBe("PASS");
   });
 
@@ -71,7 +71,7 @@ describe("checkRuntime", () => {
 
   test("a --version that exits non-zero yet prints a version line fails", async () => {
     const results = await checkRuntime(
-      deps({ runProc: versionProc("2.1.300 (Claude Code)\n", 1) }),
+      deps({ runProc: versionProc("2.1.331 (Claude Code)\n", 1) }),
     );
     expect(results[1]?.status).toBe("FAIL");
     expect(results[1]?.title).toContain("exit 1");
@@ -82,7 +82,7 @@ describe("checkRuntime", () => {
     let seen: ProcOptions["env"];
     const runProc: RunProc = async (_command, _argv, options) => {
       seen = options.env;
-      return { ok: true, code: 0, signal: null, timedOut: false, stdout: "2.1.300\n" };
+      return { ok: true, code: 0, signal: null, timedOut: false, stdout: "2.1.331\n" };
     };
     await checkRuntime(deps({ runProc }));
     expect(seen).toBe(ENV);

@@ -60,7 +60,7 @@ export async function checkRouter(deps: RouterDeps): Promise<RouterCheck> {
 
   let ids: string[];
   try {
-    ids = await models(base, key, deps.fetch, timeoutMs);
+    ids = (await models(base, key, deps.fetch, timeoutMs)).map(({ id }) => id);
   } catch (err) {
     if (isRouterError(err) && (err.status === 401 || err.status === 403)) {
       results.push({

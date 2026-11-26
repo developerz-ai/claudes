@@ -140,7 +140,10 @@ let err: string[];
 /** Every child this file spawned, so afterEach can kill any survivor by PID. */
 let children: ChildProcess[];
 
-const healthyFetch: FetchLike = async () => routerResponse(`${ROUTER}/healthz`);
+const healthyFetch: FetchLike = async (url) =>
+  routerResponse(url, {
+    modelsBody: JSON.stringify({ data: Object.values(sampleConfig().tiers).map((id) => ({ id })) }),
+  });
 
 const deadFetch: FetchLike = async () => {
   throw new TypeError("fetch failed");
@@ -151,6 +154,7 @@ function sampleConfig(overrides: Partial<Config> = {}): Config {
     version: 1,
     baseUrl: ROUTER,
     key: KEY,
+    pins: {},
     tiers: { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5" },
     ...overrides,
   };

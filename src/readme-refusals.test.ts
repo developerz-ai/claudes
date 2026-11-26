@@ -7,7 +7,7 @@ import { runKey } from "./commands/key";
 import { runLogin } from "./commands/login";
 import type { StdinLike } from "./commands/login-input";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
-import { cleanup, deadFetch, type Harness, harness, KEY } from "./launch/run-harness";
+import { cleanup, deadFetch, type Harness, harness, healthyFetch, KEY } from "./launch/run-harness";
 import type { FetchLike } from "./router/client";
 import { type RefusalRow, readmeRefusalRows } from "./test-support/readme-table";
 
@@ -288,6 +288,37 @@ function scenarios(): Scenario[] {
       run: async (h) => [
         {
           code: await h.drive(["-p", "hi"], { fetch: unusableVersionFetch }),
+          text: h.err.join(""),
+          spawned: h.spawnCalls.length > 0,
+        },
+      ],
+    },
+    {
+      when: "returned a health HTTP error",
+      run: async (h) => [
+        {
+          code: await h.drive(["-p", "hi"], {
+            fetch: (url, init) =>
+              url.endsWith("/healthz")
+                ? Promise.resolve(new Response(null, { status: 503 }))
+                : healthyFetch(url, init),
+          }),
+          text: h.err.join(""),
+          name: "503",
+          spawned: h.spawnCalls.length > 0,
+        },
+      ],
+    },
+    {
+      when: "rejected the key during launch",
+      run: async (h) => [
+        {
+          code: await h.drive(["-p", "hi"], {
+            fetch: (url, init) =>
+              url.endsWith("/v1/models")
+                ? Promise.resolve(new Response(null, { status: 401 }))
+                : healthyFetch(url, init),
+          }),
           text: h.err.join(""),
           spawned: h.spawnCalls.length > 0,
         },

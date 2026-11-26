@@ -11,7 +11,7 @@ import {
 import { readConfig, writeConfig } from "../config/store";
 import { isTruthyToggle } from "../launch/provider-switches";
 import { errorName, type FetchLike, health, isRouterError, models, scrub } from "../router/client";
-import { resolveTiers, type TierName } from "../tiers";
+import { parseTierId, resolveTiers, TIER_FAMILIES, type TierName } from "../tiers";
 import { parseLoginArgs, USAGE } from "./login-args";
 import {
   InputTooLongError,
@@ -149,13 +149,15 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
 
   let modelIds: string[];
   try {
-    modelIds = await models(url, key, deps.fetch);
+    modelIds = (await models(url, key, deps.fetch)).map(({ id }) => id);
   } catch (err) {
     if (isRouterError(err) && (err.status === 401 || err.status === 403)) {
       return failure(1, `claudes login: router rejected the key (HTTP ${err.status})`);
     }
     return failure(1, `claudes login: could not list models: ${describeRouterError(err, url)}`);
   }
+
+  if (modelIds.length === 0) return failure(1, "claudes login: the router listed no usable models");
 
   const pins = { ...prior?.pins };
   for (const [name, value] of Object.entries(parsed.args.overrides)) {
@@ -190,13 +192,19 @@ export async function login(argv: readonly string[], deps: LoginDeps): Promise<L
   report(`opus   ${tiers.opus}`);
   report(`sonnet ${tiers.sonnet}`);
   report(`haiku  ${tiers.haiku}`);
+  if (tiers.fable !== undefined) report(`fable  ${tiers.fable}`);
   if (prior !== undefined && prior.pins === undefined) {
-    for (const tier of Object.keys(tiers) as TierName[]) {
+    for (const tier of TIER_FAMILIES) {
       if (tiers[tier] !== prior.tiers[tier]) {
         report(
           `${tier} changed from ${prior.tiers[tier]} to ${tiers[tier]}; keep the previous tier with --${tier} <model-id>`,
         );
       }
+    }
+  }
+  for (const family of TIER_FAMILIES) {
+    if (pins[family] === undefined && !modelIds.some((id) => parseTierId(id)?.family === family)) {
+      report(`the router lists no ${family} tier; the stored snapshot uses a default`);
     }
   }
   report(`config saved to ${path}`);

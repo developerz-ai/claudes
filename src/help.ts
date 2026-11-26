@@ -31,7 +31,7 @@ const TOP_HELP = `usage: claudes [--version | --help] [claude arguments]
 claudes runs Claude Code against your team's router, using the router key
 stored by claudes login. Local management commands run directly in Claude
 Code without checking the router. Session launches use generated settings
-and normalise long tier aliases such as claude-opus. Cloud and Desktop
+and read the current model list and context sizes from the router. Cloud and Desktop
 modes are refused, as are arguments shaped like a router key.
 
 Options:
@@ -40,7 +40,7 @@ Options:
   --profile <name> select a router profile for the session
 
 Claude Code's own flags, passed through:
-  --model <tier>   choose the tier: opus, sonnet or haiku
+  --model <tier>   choose opus, sonnet, haiku, fable (when served) or a model ID
   -p <prompt>      run one prompt and print the answer
   -h              show Claude Code help without checking the router
 

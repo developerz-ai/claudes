@@ -1,5 +1,5 @@
 import { validProfileName } from "../config/profile";
-import { ROUTER_KEY_PREFIX } from "../config/schema";
+import { MODEL_ID_PATTERN, ROUTER_KEY_PREFIX } from "../config/schema";
 import { parseTierId, type TierName } from "../tiers";
 
 /** The one usage text: every usage error ends with it, and the help output reuses it. */
@@ -15,12 +15,6 @@ export interface ParsedArgs {
   profile?: string;
   overrides: Partial<Record<TierName, string>>;
 }
-
-/**
- * Bound input to printable, shell-safe characters before applying the shared
- * Claude tier-id contract: undecorated ids only, not aliases or variants.
- */
-const MODEL_ID_PATTERN = /^[A-Za-z0-9._:[\]-]{1,100}$/;
 
 export type ArgsResult =
   | { readonly ok: true; readonly args: ParsedArgs }

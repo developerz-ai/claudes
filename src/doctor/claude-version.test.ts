@@ -40,11 +40,11 @@ describe("isAtLeast", () => {
 
 describe("isSupportedClaude", () => {
   test("the minimum itself passes, one patch below fails", () => {
-    expect(isSupportedClaude({ major: 2, minor: 1, patch: 299 })).toBe(true);
-    expect(isSupportedClaude({ major: 2, minor: 1, patch: 298 })).toBe(false);
+    expect(isSupportedClaude({ major: 2, minor: 1, patch: 325 })).toBe(true);
+    expect(isSupportedClaude({ major: 2, minor: 1, patch: 324 })).toBe(false);
   });
 
-  test("the constant is the spike's version", () => {
-    expect(MIN_CLAUDE_VERSION).toBe("2.1.299");
+  test("the constant is the first version with the required window support", () => {
+    expect(MIN_CLAUDE_VERSION).toBe("2.1.325");
   });
 });

@@ -76,6 +76,9 @@ export const baseUrlSchema = z.string().superRefine((value, ctx) => {
   }
 });
 
+/** Bounded printable identifiers accepted from the router and tier options. */
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9._:/[\]-]{1,100}$/;
+
 /** Per-person router key: `mar_live_` plus exactly 32 `[A-Za-z0-9_-]` characters. */
 export const keySchema = z
   .string()
@@ -89,12 +92,14 @@ export const configSchema = z.object({
     opus: z.string().min(1),
     sonnet: z.string().min(1),
     haiku: z.string().min(1),
+    fable: z.string().min(1).optional(),
   }),
   pins: z
     .object({
       opus: z.string().min(1).optional(),
       sonnet: z.string().min(1).optional(),
       haiku: z.string().min(1).optional(),
+      fable: z.string().min(1).optional(),
     })
     .optional(),
   subagentModel: z.string().min(1).optional(),

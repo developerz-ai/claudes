@@ -9,6 +9,7 @@ const MODEL_ALIASES: Readonly<Record<string, string>> = {
   "claude-opus": "opus",
   "claude-sonnet": "sonnet",
   "claude-haiku": "haiku",
+  "claude-fable": "fable",
 };
 
 /** The `[1m]` context-window suffix Claude Code accepts on a model name. */
