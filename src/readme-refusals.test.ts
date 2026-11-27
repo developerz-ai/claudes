@@ -267,7 +267,7 @@ function scenarios(): Scenario[] {
       // `claudes key` takes no arguments: the refusal fires before the
       // config is read, so a home without a config serves as well — the exit
       // code proves the argument was refused, not the missing config.
-      when: "`claudes key` got an argument",
+      when: "`claudes key` got a first argument other than `--profile`",
       run: () => {
         const err: string[] = [];
         const writes: string[] = [];

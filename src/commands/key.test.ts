@@ -60,7 +60,9 @@ describe("runKey", () => {
       writes = [];
       const code = drive([arg], false);
       expect(code).toBe(64);
-      expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+      expect(err).toEqual([
+        "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+      ]);
       expect(writes).toEqual([]);
       // The offending token is never named: a token may be a pasted key.
       expect(err.join("")).not.toContain(arg);
@@ -70,14 +72,18 @@ describe("runKey", () => {
   test("the refusal names the first unsupported argument's position", () => {
     const code = drive(["first", "second"], false);
     expect(code).toBe(64);
-    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(err).toEqual([
+      "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+    ]);
     expect(writes).toEqual([]);
   });
 
   test("the argument refusal fires before the TTY check", () => {
     const code = drive(["--help"], true);
     expect(code).toBe(64);
-    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(err).toEqual([
+      "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+    ]);
     expect(writes).toEqual([]);
   });
 
@@ -85,7 +91,9 @@ describe("runKey", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
     const code = drive(["--help"], false, { CLAUDE_CODE_USE_BEDROCK: "1" });
     expect(code).toBe(64);
-    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(err).toEqual([
+      "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+    ]);
     expect(writes).toEqual([]);
   });
 
@@ -93,7 +101,9 @@ describe("runKey", () => {
     writeConfig(configFile(configDir({ HOME: home })), config());
     const code = drive(["--help"], false);
     expect(code).toBe(64);
-    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(err).toEqual([
+      "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+    ]);
     // No credential write happened.
     expect(writes).toEqual([]);
   });
@@ -101,7 +111,9 @@ describe("runKey", () => {
   test("a key-shaped argument is refused without leaking it", () => {
     const code = drive([KEY], false);
     expect(code).toBe(64);
-    expect(err).toEqual(["claudes key: unknown argument #1\nusage: claudes key\n"]);
+    expect(err).toEqual([
+      "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+    ]);
     expect(writes).toEqual([]);
     assertNoKeyFragment(err.join(""), KEY);
   });

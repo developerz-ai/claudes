@@ -266,7 +266,9 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     const res = runMain(["key", "--help"]);
     expect(res.status).toBe(64);
     expect(res.stdout).toBe("");
-    expect(res.stderr).toBe("claudes key: unknown argument #1\nusage: claudes key\n");
+    expect(res.stderr).toBe(
+      "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+    );
     expectNoKeyMaterial(res.stderr);
   });
 

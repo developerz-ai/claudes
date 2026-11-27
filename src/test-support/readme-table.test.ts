@@ -40,10 +40,14 @@ describe("README refusals table", () => {
   });
 
   test("the key usage row parses its escaped newline back into two lines", () => {
-    const row = rows.find((candidate) => candidate.when.includes("`claudes key` got an argument"));
+    const row = rows.find((candidate) =>
+      candidate.when.includes("`claudes key` got a first argument other than `--profile`"),
+    );
     expect(row).toBeDefined();
     expect(row?.exit).toBe(64);
-    expect(row?.message).toBe("claudes key: unknown argument #1\nusage: claudes key");
+    expect(row?.message).toBe(
+      "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]",
+    );
   });
 
   test("the --key row unescapes its backticks", () => {
