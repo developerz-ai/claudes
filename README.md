@@ -70,7 +70,7 @@ claudes --version
 
 `bin/setup` installs the pinned dependencies; `bin/check` checks the project
 and builds the executable before the local global install. The final command
-exits 0 and prints the version in `package.json` (currently 0.1.0).
+exits 0 and prints the version in `package.json` (currently 0.2.0).
 Then run `claudes login --url <your router URL>` as described above; Claude
 Code (`claude`) must also be installed and on `PATH` to launch sessions.
 
@@ -679,11 +679,11 @@ repository builds instead of the published package, and log in against the
 stack's own URL:
 
 ```sh
-# 2. install: the published package is not on npm yet, so install the tarball
-#    this repository builds (the file name carries package.json's version)
+# 2. install the tarball this repository builds, so the drill tests this
+#    checkout (the file name carries package.json's version)
 bun run build
 npm pack
-npm i -g ./developerz.ai-claudes-0.1.0.tgz
+npm i -g ./developerz.ai-claudes-0.2.0.tgz
 
 # 3. login against the local stack; at the prompt paste the SAME throwaway
 #    key the stack was started with — the router's shape, `mar_live_` followed
