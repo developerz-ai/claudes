@@ -17,8 +17,14 @@ import { errorName } from "../router/errors";
 
 const TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const GENERATED_NAME = /^settings\.([a-z0-9][a-z0-9-]{0,31})\.[0-9a-f]{16}\.json(?:\.tmp-.+)?$/;
+/**
+ * writePrivateFile's `<path>.tmp-…` siblings: generated settings (per-pid and
+ * per-digest), the config files (default and named profiles) and the active
+ * profile marker. A crash between the temp write and the rename strands one;
+ * the config ones hold the router key.
+ */
 const TEMP_NAME =
-  /^(?:settings\.[1-9]\d*|settings\.[a-z0-9][a-z0-9-]{0,31}\.[0-9a-f]{16})\.json\.tmp-.+$/;
+  /^(?:(?:settings\.[1-9]\d*|settings\.[a-z0-9][a-z0-9-]{0,31}\.[0-9a-f]{16}|config(?:\.[a-z0-9][a-z0-9-]{0,31})?)\.json|active-profile)\.tmp-.+$/;
 
 export function launchSettingsPath(
   dir: string,
@@ -69,7 +75,10 @@ export function writeLaunchSettings(path: string, payload: string): void {
   });
 }
 
-/** Detached sessions may need any completed settings file. Sweep only old atomic-write leftovers. */
+/**
+ * Detached sessions may need any completed settings file. Sweep only old
+ * atomic-write leftovers — of settings, config and active-profile writes.
+ */
 export function sweepStaleLaunchSettings(dir: string, now = Date.now()): void {
   let names: string[];
   const uid = process.getuid?.();
