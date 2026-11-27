@@ -41,7 +41,7 @@ describe("README refusals table", () => {
 
   test("the key usage row parses its escaped newline back into two lines", () => {
     const row = rows.find((candidate) =>
-      candidate.when.includes("`claudes key` got an argument other than `--profile <name>`"),
+      candidate.when.includes("`claudes key` got a first argument other than `--profile`"),
     );
     expect(row).toBeDefined();
     expect(row?.exit).toBe(64);
