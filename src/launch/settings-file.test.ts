@@ -82,6 +82,33 @@ describe("launch settings files", () => {
     });
   });
 
+  test("sweep also removes stranded config and active-profile temporaries", () => {
+    withDir((dir) => {
+      const now = Date.now();
+      const old = new Date(now - 25 * 60 * 60 * 1000);
+      // A crash between writePrivateFile's temp write and its rename strands
+      // these; the config ones hold the router key.
+      const stale = [
+        join(dir, "config.json.tmp-1a-2b-3c"),
+        join(dir, "config.work.json.tmp-1a-2b-3c"),
+        join(dir, "active-profile.tmp-1a-2b-3c"),
+      ];
+      const preserved = [
+        join(dir, "config.json"),
+        join(dir, "config.work.json"),
+        join(dir, "active-profile"),
+        join(dir, "config.Bad.json.tmp-1a"),
+      ];
+      for (const file of [...stale, ...preserved]) {
+        writeFileSync(file, "{}\n");
+        utimesSync(file, old, old);
+      }
+      sweepStaleLaunchSettings(dir, now);
+      expect(preserved.every(existsSync)).toBe(true);
+      expect(stale.some(existsSync)).toBe(false);
+    });
+  });
+
   test("does not sweep through a symlinked config directory", () => {
     withDir((dir) => {
       const target = join(dir, "target");

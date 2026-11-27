@@ -371,7 +371,9 @@ Files are 0600 inside the 0700 directory.
 
 Completed settings files, including older PID-named files, survive later
 launches so `/restart`, tmux and detached sessions can still read them.
-The launcher removes only temporary write siblings older than 24 hours.
+The launcher removes only temporary write siblings older than 24 hours —
+of settings files, config files and the active-profile marker, which a crash
+mid-write can strand (a config temporary holds the key).
 `claudes profile remove` removes only settings named for that profile.
 Older PID-named files can also contain proxy credentials. Removing the
 config directory during uninstall removes every form.
