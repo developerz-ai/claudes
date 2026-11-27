@@ -4,7 +4,7 @@ import { DEFAULT_PROFILE, validProfileName } from "../config/profile";
 import { firstReroutingUseToggle } from "../launch/provider-switches";
 
 const TTY_REFUSAL = "claudes key is for apiKeyHelper only";
-const USAGE = "usage: claudes key";
+const USAGE = "usage: claudes key [--profile <name>]";
 
 export interface KeyDeps {
   readonly env: Env;
@@ -18,8 +18,8 @@ export interface KeyDeps {
  * `claudes key`: prints the router key on stdout with no trailing newline.
  * Only apiKeyHelper is meant to call it — a terminal would just paste the key
  * into the scrollback, so a TTY stdout is refused with exit 64. The command
- * takes no arguments: any argument is refused with exit 64 before the TTY
- * check, the provider-switch check and the config read, so an unsupported
+ * takes nothing but `--profile <name>`: anything else is refused with exit 64
+ * before the TTY check, the provider-switch check and the config read, so an unsupported
  * argument can never reach a credential write. The config is read through the
  * store, so insecure permissions are refused here exactly as they are at
  * launch time.

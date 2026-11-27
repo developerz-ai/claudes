@@ -117,7 +117,9 @@ describe("claudes key through a real process (bun src/main.ts key)", () => {
           // Nothing on stdout: the key never leaves the process.
           expect(res.stdout.length).toBe(0);
           const errText = res.stderr.toString("utf8");
-          expect(errText).toBe("claudes key: unknown argument #1\nusage: claudes key\n");
+          expect(errText).toBe(
+            "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+          );
           // The offending token is never named.
           expect(errText).not.toContain(arg);
           assertNoKeyFragment(errText, KEY);
@@ -143,7 +145,9 @@ describe("claudes key through a real process (bun src/main.ts key)", () => {
         expect(res.status).toBe(64);
         expect(res.stdout.length).toBe(0);
         const errText = res.stderr.toString("utf8");
-        expect(errText).toBe("claudes key: unknown argument #1\nusage: claudes key\n");
+        expect(errText).toBe(
+          "claudes key: unknown argument #1\nusage: claudes key [--profile <name>]\n",
+        );
         assertNoKeyFragment(errText, KEY);
         assertNoKeyFragment(res.stdout.toString("utf8"), KEY);
       } finally {

@@ -1,5 +1,5 @@
-import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
-import { loadConfig } from "../config/load";
+import { lstatSync, mkdirSync, rmdirSync, type Stats, unlinkSync } from "node:fs";
+import { loadConfig, MISSING_CONFIG_MESSAGE } from "../config/load";
 import { activeProfileFile, configDir, type Env, profileFile } from "../config/paths";
 import { writePrivateFile } from "../config/private-file";
 import { activeProfile, profileNames, validProfileName } from "../config/profile";
@@ -43,7 +43,8 @@ export function runProfile(
       return 0;
     }
     if (name === undefined) return fail(64, USAGE);
-    const directory = lstatSync(dir);
+    const directory = lstatOrUndefined(dir);
+    if (directory === undefined) return fail(78, MISSING_CONFIG_MESSAGE);
     const uid = process.getuid?.();
     if (
       !directory.isDirectory() ||
@@ -78,7 +79,10 @@ export function runProfile(
       }
       if (activeProfile(dir) === name) return fail(64, "cannot remove the active profile");
       const path = profileFile(dir, name);
-      const file = lstatSync(path);
+      const file = lstatOrUndefined(path);
+      if (file === undefined) {
+        return fail(78, "that profile has no config; run `claudes profile list`");
+      }
       if (!file.isFile() || (uid !== undefined && file.uid !== uid)) {
         return fail(78, "refusing to remove a profile that is not a caller-owned regular file");
       }
@@ -91,5 +95,15 @@ export function runProfile(
     }
   } catch {
     return fail(78, "could not access or update the profile; check the private config directory");
+  }
+}
+
+/** The entry's lstat, or undefined when nothing is there; other failures throw. */
+function lstatOrUndefined(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
 }
