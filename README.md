@@ -22,9 +22,9 @@ of quietly sending traffic somewhere else.
 
 ## Install
 
-The registry install below is available once v0.1.0 is published
-([#7](https://github.com/developerz-ai/claudes/issues/7)). To install from a
-checkout instead, see [Build from source](#build-from-source).
+The package is published on npm as
+[`@developerz.ai/claudes`](https://www.npmjs.com/package/@developerz.ai/claudes).
+To install from a checkout instead, see [Build from source](#build-from-source).
 
 ```sh
 npm i -g @developerz.ai/claudes
