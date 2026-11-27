@@ -806,10 +806,11 @@ const INSTALL_REQUIREMENTS = [
 ];
 
 function installSection(source: string, heading: string): string {
-  const body = section(source, heading);
-  if (heading !== TITLE) return body;
-  // The intro is the first paragraph after the centred badge block.
-  const afterBadges = body.split(/^<\/div>$/m)[1];
+  if (heading !== TITLE) return section(source, heading);
+  // The title block is the README's preamble: everything before its first
+  // "## " heading. The intro is the first paragraph after the badge block.
+  const preamble = source.split(/^## /m)[0] ?? "";
+  const afterBadges = section(preamble, heading).split(/^<\/div>$/m)[1];
   if (afterBadges === undefined) throw new Error("the title block has no closing </div>");
   return afterBadges.trim().split(/\n\s*\n/)[0] ?? "";
 }
@@ -860,6 +861,14 @@ describe("README installation guide", () => {
       const swapped = body.replace(SOURCE_COMMANDS.join("\n"), reordered.join("\n"));
       expect(() => assertInstallationGuide(readmeSource.replace(body, swapped))).toThrow();
     }
+  });
+
+  test("rejects a title block moved below the first section", () => {
+    const install = readmeSource.indexOf("## Install\n");
+    const daily = readmeSource.indexOf("## Daily use\n");
+    const preamble = readmeSource.slice(0, install);
+    const moved = `${readmeSource.slice(install, daily)}${preamble}${readmeSource.slice(daily)}`;
+    expect(() => assertInstallationGuide(moved)).toThrow();
   });
 
   test("rejects a source guide moved away from Install", () => {

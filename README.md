@@ -719,14 +719,14 @@ WSL.
 agent, under the policy committed in
 [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml):
 
-| What                                    | What happens                                                                                                                                          |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| an issue                                | triaged; the reporter is asked for a reproduction when one is missing; a qualified issue goes straight to the developerz.ai coding fleet              |
-| a pull request                          | reviewed by CodeRabbit and the developerz.ai reviewer (comments only: it never approves and never blocks); merged once CI is green and a review is in |
-| a pull request over 500 changed lines   | waits for a human                                                                                                                                     |
-| a hostile thread, or a direct mention   | goes to a human                                                                                                                                       |
-| a branch with no new commit for 60 days | tagged `archive/<branch>/<date>` at its last commit, then deleted                                                                                     |
-| a daily survey                          | files only what is already broken: red CI, failing tests, a security advisory, a broken build or link                                                 |
+| What                                    | What happens                                                                                                                                                                              |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| an issue                                | triaged; the reporter is asked for a reproduction when one is missing; a qualified issue goes straight to the developerz.ai coding fleet                                                  |
+| a pull request                          | reviewed by CodeRabbit and the developerz.ai reviewer, which comments but never approves; merged automatically only when CI is green, the review verdict passes and branch rules allow it |
+| a pull request over 500 changed lines   | waits for a human                                                                                                                                                                         |
+| a hostile thread, or a direct mention   | goes to a human                                                                                                                                                                           |
+| a branch with no new commit for 60 days | tagged `archive/<branch>/<date>` at its last commit, then deleted                                                                                                                         |
+| a daily survey                          | files only what is already broken: red CI, failing tests, a security advisory, a broken build or link                                                                                     |
 
 The agent does not cut releases here: a release is a GitHub release of a
 `v<version>` tag, published to npm by [`release.yml`](.github/workflows/release.yml).
