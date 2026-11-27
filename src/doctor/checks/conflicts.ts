@@ -1,5 +1,5 @@
 import { closeSync, constants, fstatSync, openSync, readdirSync, readSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Env } from "../../config/paths";
 import { isStripped } from "../../launch/env";
 import type { CheckResult } from "../results";
@@ -93,7 +93,7 @@ export const defaultReadFile: ReadText = (path) => {
  */
 export function checkConflicts(deps: ConflictsDeps): CheckResult[] {
   const readFile = deps.readFile ?? defaultReadFile;
-  const userDir = claudeConfigDir(deps.env);
+  const userDir = claudeConfigDir(deps.env, deps.cwd);
   return [
     shellEnvResult(deps.env),
     settingsResult(userDir, deps.cwd, readFile),
@@ -102,8 +102,14 @@ export function checkConflicts(deps: ConflictsDeps): CheckResult[] {
   ];
 }
 
-function claudeConfigDir(env: Env): string | undefined {
-  if (env.CLAUDE_CONFIG_DIR?.startsWith("/")) return env.CLAUDE_CONFIG_DIR;
+/**
+ * Claude Code's settings directory: a non-empty CLAUDE_CONFIG_DIR, resolved
+ * against the working directory when relative (Claude Code does the same, and
+ * so does the launcher's saved-model read), else `~/.claude`.
+ */
+function claudeConfigDir(env: Env, cwd: string): string | undefined {
+  const custom = env.CLAUDE_CONFIG_DIR;
+  if (custom !== undefined && custom !== "") return resolve(cwd, custom);
   return env.HOME?.startsWith("/") ? `${env.HOME}/.claude` : undefined;
 }
 

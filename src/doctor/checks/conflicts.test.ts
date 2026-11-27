@@ -254,6 +254,26 @@ test("doctor reads the custom Claude settings and credentials directory", () => 
   ).toBe(true);
 });
 
+test("a relative CLAUDE_CONFIG_DIR is read under the working directory, as Claude Code does", () => {
+  // Claude Code 2.1.332 resolves a relative CLAUDE_CONFIG_DIR against its cwd,
+  // and the launcher's saved-model read does the same; doctor must not fall
+  // back to ~/.claude and check a file the session never reads.
+  const results = checkConflicts(
+    deps({
+      env: { HOME, CLAUDE_CONFIG_DIR: "rel/claude" },
+      cwd: "/work",
+      readFile: files({
+        "/work/rel/claude/settings.json": '{"env":{"ANTHROPIC_AUTH_TOKEN":"redacted-fixture"}}',
+      }),
+    }),
+  );
+  expect(
+    results.some(
+      ({ status, title }) => status === "WARN" && title.includes("/work/rel/claude/settings.json"),
+    ),
+  ).toBe(true);
+});
+
 test("managed drop-ins are checked in order and hidden files are ignored", () => {
   const dir = "/etc/claude-code/managed-settings.d";
   const seen: string[] = [];
