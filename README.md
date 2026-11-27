@@ -1,4 +1,17 @@
-# claudes
+<h1 align="center">claudes</h1>
+
+<p align="center"><strong>Claude Code against your team's own router.</strong> <em>Per-person key, no silent fallback.</em></p>
+
+<div align="center">
+
+[![CI](https://github.com/developerz-ai/claudes/actions/workflows/ci.yml/badge.svg)](https://github.com/developerz-ai/claudes/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@developerz.ai/claudes.svg)](https://www.npmjs.com/package/@developerz.ai/claudes)
+[![AI-maintained](https://img.shields.io/badge/maintained%20by-developerz.ai-8a2be2.svg)](#ai-maintained)
+[![Node](https://img.shields.io/badge/node-%E2%89%A5%2022-339933.svg?logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/typescript-strict-3178C6.svg?logo=typescript&logoColor=white)](tsconfig.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+</div>
 
 `claudes` is a thin launcher that runs Claude Code (`claude`) against your
 team's self-hosted, Anthropic-compatible router. It requires
@@ -699,3 +712,23 @@ Linux, macOS and WSL. Node 22 or newer, plus Claude Code at or above the
 version `claudes doctor` tests against (2.1.325 today). Native Windows is not
 supported: there `claudes doctor` FAILs with the instruction to run inside
 WSL.
+
+## AI-maintained
+
+`claudes` is maintained by the [developerz.ai](https://developerz.ai) maintainer
+agent, under the policy committed in
+[`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml):
+
+| What                                    | What happens                                                                                                                                                                              |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| an issue                                | triaged; the reporter is asked for a reproduction when one is missing; a qualified issue goes straight to the developerz.ai coding fleet                                                  |
+| a pull request                          | reviewed by CodeRabbit and the developerz.ai reviewer, which comments but never approves; merged automatically only when CI is green, the review verdict passes and branch rules allow it |
+| a pull request over 500 changed lines   | waits for a human                                                                                                                                                                         |
+| a hostile thread, or a direct mention   | goes to a human                                                                                                                                                                           |
+| a branch with no new commit for 60 days | tagged `archive/<branch>/<date>` at its last commit, then deleted                                                                                                                         |
+| a daily survey                          | files only what is already broken: red CI, failing tests, a security advisory, a broken build or link                                                                                     |
+
+The agent does not cut releases here: a release is a GitHub release of a
+`v<version>` tag, published to npm by [`release.yml`](.github/workflows/release.yml).
+The reviewer's repo-specific rules live in
+[`.dz/maintainer/reviewer.md`](.dz/maintainer/reviewer.md).
