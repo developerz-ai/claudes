@@ -770,9 +770,11 @@ const SOURCE_COMMANDS = [
   "npm i -g .",
   "claudes --version",
 ];
+/** The README's centred title, the anchor of its intro paragraph. */
+const TITLE = '<h1 align="center">claudes</h1>';
 const INSTALL_REQUIREMENTS = [
   {
-    heading: "# claudes",
+    heading: TITLE,
     patterns: [
       /requires/,
       /\[multi-ai-router\]\(https:\/\/github\.com\/developerz-ai\/multi-ai-router\)/,
@@ -805,7 +807,11 @@ const INSTALL_REQUIREMENTS = [
 
 function installSection(source: string, heading: string): string {
   const body = section(source, heading);
-  return heading === "# claudes" ? (body.trim().split(/\n\s*\n/)[0] ?? "") : body;
+  if (heading !== TITLE) return body;
+  // The intro is the first paragraph after the centred badge block.
+  const afterBadges = body.split(/^<\/div>$/m)[1];
+  if (afterBadges === undefined) throw new Error("the title block has no closing </div>");
+  return afterBadges.trim().split(/\n\s*\n/)[0] ?? "";
 }
 
 function assertInstallationGuide(source: string): void {
