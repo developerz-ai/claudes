@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/developerz-ai/claudes/main/docs/assets/logo.png" alt="claudes — a dwarf operator patching cables on a router switchboard" width="240">
+</p>
+
 <h1 align="center">claudes</h1>
 
 <p align="center"><strong>Claude Code against your team's own router.</strong> <em>Per-person key, no silent fallback.</em></p>
