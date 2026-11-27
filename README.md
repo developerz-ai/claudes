@@ -118,8 +118,10 @@ replace its key. Existing pins and context overrides survive. Use
 A leading `claudes --profile work` selects that router for one session.
 It applies only to a session: in front of `login`, `doctor`, `key`,
 `profile`, `--version` or `--help` it is refused with exit 64 instead of
-sending the word to Claude Code as a prompt — give those commands their own
-`--profile` (`claudes doctor --profile work`, `claudes profile use work`).
+sending the word to Claude Code as a prompt. Move the flag after `login`,
+`doctor` or `key` (`claudes doctor --profile work`), switch the active
+profile with `claudes profile use work`, and drop it for `--help` and
+`--version`, which select no profile.
 Without the flag, selection is `CLAUDES_PROFILE`, the profile picked with
 `claudes profile use work`, and then `default`. An unknown profile fails
 with exit 78. Existing installations use `config.json` for `default`.
