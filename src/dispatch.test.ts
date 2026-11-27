@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { dispatch } from "./dispatch";
+import {
+  dispatch,
+  INVALID_PROFILE_MESSAGE,
+  MISPLACED_PROFILE_MESSAGE,
+  REPEATED_PROFILE_MESSAGE,
+} from "./dispatch";
 
 describe("dispatch", () => {
   test("--version and -v request the version", () => {
@@ -57,6 +62,58 @@ describe("dispatch", () => {
     expect(dispatch(["-p", "fix the bug"])).toEqual({
       kind: "passthrough",
       args: ["-p", "fix the bug"],
+    });
+  });
+
+  test("a leading --profile selects the session's profile for the passthrough", () => {
+    expect(dispatch(["--profile", "work"])).toEqual({
+      kind: "passthrough",
+      args: [],
+      profile: "work",
+    });
+    expect(dispatch(["--profile=work", "-p", "hi"])).toEqual({
+      kind: "passthrough",
+      args: ["-p", "hi"],
+      profile: "work",
+    });
+    // A manage command keeps its own handling; the profile is simply unused.
+    expect(dispatch(["--profile", "work", "mcp"])).toEqual({
+      kind: "passthrough",
+      args: ["mcp"],
+      profile: "work",
+    });
+  });
+
+  test("an invalid leading --profile name is a usage error that never echoes it", () => {
+    for (const argv of [["--profile"], ["--profile="], ["--profile", "Bad"], ["--profile", "-p"]]) {
+      expect(dispatch(argv)).toEqual({ kind: "usage", message: INVALID_PROFILE_MESSAGE });
+    }
+  });
+
+  test("a leading --profile before a claudes command is refused, never launched", () => {
+    // Without this, `claudes --profile work doctor` started a routed session
+    // with "doctor" as the prompt, spending router quota.
+    for (const rest of [
+      ["login"],
+      ["doctor"],
+      ["key"],
+      ["profile", "list"],
+      ["--help"],
+      ["--version"],
+      ["-v"],
+      ["doctor", "--help"],
+    ]) {
+      expect(dispatch(["--profile", "work", ...rest])).toEqual({
+        kind: "usage",
+        message: MISPLACED_PROFILE_MESSAGE,
+      });
+    }
+  });
+
+  test("a second leading --profile is refused", () => {
+    expect(dispatch(["--profile", "a", "--profile", "b"])).toEqual({
+      kind: "usage",
+      message: REPEATED_PROFILE_MESSAGE,
     });
   });
 });

@@ -90,8 +90,8 @@ claudes --help           # what claudes itself accepts
 `claude-opus`, `claude-sonnet` and `claude-haiku` (with or without a `[1m]`
 suffix) are normalised to them.
 
-`claudes` itself owns six first arguments: `login`, `doctor`, `key`, `profile`,
-`--version` (`-v`) and `--help`.
+`claudes` itself owns seven first arguments: `login`, `doctor`, `key`,
+`profile`, `--version` (`-v`), `--help` and `--profile <name>`.
 
 Management commands such as `logs`, `attach`, `mcp`, `plugin`, `auth` and `-h`
 run directly in Claude Code and work even when the router is down.
@@ -100,7 +100,7 @@ word. `ultrareview`, `--cloud`, `--environment` and `--desktop` are refused
 because they can run outside the router.
 
 `claudes --help` prints a help text on stdout and exits 0. It names the flags
-`claudes` owns itself — `--version`, `-v` and `--help` — and the Claude
+`claudes` owns itself — `--version`, `-v`, `--help` and `--profile` — and the Claude
 Code flags `--model`, `-p` and `-h`.
 
 `claudes key` is the internal helper Claude Code calls to fetch the router
@@ -116,6 +116,12 @@ replace its key. Existing pins and context overrides survive. Use
 `--opus auto`, `--sonnet auto` or `--haiku auto` to clear a pin.
 
 A leading `claudes --profile work` selects that router for one session.
+It applies only to a session: in front of `login`, `doctor`, `key`,
+`profile`, `--version` or `--help` it is refused with exit 64 instead of
+sending the word to Claude Code as a prompt. Move the flag after `login`,
+`doctor` or `key` (`claudes doctor --profile work`), switch the active
+profile with `claudes profile use work`, and drop it for `--help` and
+`--version`, which select no profile.
 Without the flag, selection is `CLAUDES_PROFILE`, the profile picked with
 `claudes profile use work`, and then `default`. An unknown profile fails
 with exit 78. Existing installations use `config.json` for `default`.

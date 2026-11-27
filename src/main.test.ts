@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { MISSING_CONFIG_MESSAGE } from "./config/load";
 import { configDir, profileFile, settingsFile } from "./config/paths";
 import { writeConfig } from "./config/store";
+import { MISPLACED_PROFILE_MESSAGE } from "./dispatch";
 import { credentialHash } from "./doctor/stub-server";
 import { helpText } from "./help";
 import { shellQuote } from "./launch/settings";
@@ -138,6 +139,15 @@ describe("claudes main through a real process (bun src/main.ts)", () => {
     const missing = runMain(["--profile", "missing", "-p", "hello"]);
     expect(missing.status).toBe(78);
     expect(missing.stderr).toContain("available profiles: work");
+  });
+
+  test("a leading --profile before a claudes command is refused, never launched", () => {
+    for (const rest of [["doctor"], ["login"], ["key"], ["profile", "list"], ["--help"], ["-v"]]) {
+      const result = runMain(["--profile", "work", ...rest]);
+      expect(result.status).toBe(64);
+      expect(result.stderr).toBe(`${MISPLACED_PROFILE_MESSAGE}\n`);
+      expect(result.stdout).toBe("");
+    }
   });
 
   test("a profile lock failure leaves paths out of diagnostics", () => {
