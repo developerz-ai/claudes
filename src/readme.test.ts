@@ -786,7 +786,7 @@ const INSTALL_REQUIREMENTS = [
     heading: "## Install",
     patterns: [
       /published on npm/,
-      /\(https:\/\/www\.npmjs\.com\/package\/@developerz\.ai\/claudes\)/,
+      /\[`@developerz\.ai\/claudes`\]\(https:\/\/www\.npmjs\.com\/package\/@developerz\.ai\/claudes\)/,
       /npm i -g @developerz\.ai\/claudes/,
     ],
   },
