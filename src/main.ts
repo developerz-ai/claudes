@@ -2,7 +2,6 @@ import { realDoctorDeps, runDoctor } from "./commands/doctor";
 import { realKeyDeps, runKey } from "./commands/key";
 import { runLogin } from "./commands/login";
 import { runProfile } from "./commands/profile";
-import { validProfileName } from "./config/profile";
 import { dispatch } from "./dispatch";
 import { helpText } from "./help";
 import { realRunDeps, run } from "./launch/run";
@@ -35,16 +34,17 @@ async function main(argv: string[]): Promise<void> {
     const unhandled: never = result.word;
     throw new Error(`claudes: unhandled subcommand: ${unhandled}`);
   }
-  if (result.args[0] === "--profile" || result.args[0]?.startsWith("--profile=")) {
-    const name = result.args[0] === "--profile" ? result.args[1] : result.args[0].slice(10);
-    if (!validProfileName(name)) {
-      process.stderr.write("claudes: invalid --profile name\n");
-      process.exit(64);
-    }
-    const start = result.args[0] === "--profile" ? 2 : 1;
-    process.exit(await run(result.args.slice(start), { ...realRunDeps(), profile: name }));
+  if (result.kind === "usage") {
+    process.stderr.write(`${result.message}\n`);
+    process.exit(64);
   }
-  process.exit(await run(result.args, realRunDeps()));
+  const deps = realRunDeps();
+  process.exit(
+    await run(
+      result.args,
+      result.profile === undefined ? deps : { ...deps, profile: result.profile },
+    ),
+  );
 }
 
 await main(process.argv.slice(2));
