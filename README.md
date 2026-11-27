@@ -22,9 +22,9 @@ of quietly sending traffic somewhere else.
 
 ## Install
 
-The registry install below is available once v0.1.0 is published
-([#7](https://github.com/developerz-ai/claudes/issues/7)). To install from a
-checkout instead, see [Build from source](#build-from-source).
+The package is published on npm as
+[`@developerz.ai/claudes`](https://www.npmjs.com/package/@developerz.ai/claudes).
+To install from a checkout instead, see [Build from source](#build-from-source).
 
 ```sh
 npm i -g @developerz.ai/claudes
@@ -524,11 +524,10 @@ repository's [`CLAUDE.md`](CLAUDE.md).
 
 ### The same drill against a local router stack
 
-The drill above needs two things a newcomer does not have: the published
-package ([#7](https://github.com/developerz-ai/claudes/issues/7)) and the
-team's router. Neither is needed to run the whole drill. A local stack
-answers the endpoints `claudes` itself talks to, and the package can be
-installed from the tarball this repository builds.
+The drill above needs the team's router, which a newcomer may not have. It
+is not needed to run the whole drill: a local stack answers the endpoints
+`claudes` itself talks to. The package can come from npm or from the tarball
+this repository builds.
 
 Save this as `router.mjs`:
 
