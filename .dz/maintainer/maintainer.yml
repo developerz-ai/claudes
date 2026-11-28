@@ -82,3 +82,14 @@ branches:
 # improvement idea. `full` lets it file ideas too; `off` stops the survey.
 scout:
   survey: broken_only
+
+# devops: advisories (decision of record 2026-11-28): claudes ships to npm users, so the platform
+# watches published advisories itself; Dependabot still groups the dependency bumps.
+devops:
+  watch: advisories
+
+# care: docs_drift off (47 tasks -> 8 docs-only merges, 33 failed over 30 days, both accounts). This
+# file has no schedules, so the docs(...) and test-guard PRs of 2026-10-29 (35 dz-bot PRs, most
+# titled "correct X in CLAUDE.md" or "guard README claim against drift") came from that lane.
+care:
+  docs_drift: "off"
